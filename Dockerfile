@@ -20,6 +20,18 @@
 # deploy time. Forcing the platform makes a local build byte-comparable with the
 # deployed one; the cost is that building on ARM goes through emulation and is
 # slow. That is the right trade for a verification build.
+# ------------------------------------------------------------ frontend build
+# The SEALv platform (frontend/) is a Next.js static export. Built in its own
+# stage so the runtime image carries the ~2 MB `out/` directory and not node,
+# node_modules, or the build cache. Alpine is fine here: the stage only runs
+# the exporter, nothing links against musl at runtime.
+FROM --platform=linux/amd64 node:20-alpine AS platform
+WORKDIR /fe
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY frontend/ ./
+RUN npm run build
+
 FROM --platform=linux/amd64 python:3.12-slim
 
 # ---------------------------------------------------------------- system deps
@@ -194,6 +206,9 @@ COPY vendor/CountGD/ /app/vendor/CountGD/
 COPY la_studio/ /app/la_studio/
 COPY service/ /app/service/
 COPY webapp/ /app/webapp/
+# The platform export lands where api.py's PLATFORM constant expects it; when
+# it is missing the service falls back to the operator webapp at /.
+COPY --from=platform /fe/out/ /app/frontend/out/
 
 # ----------------------------------------------------------------- runtime env
 # /data is the Railway volume mount: the SQLite file and the uploaded media /

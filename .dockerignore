@@ -94,3 +94,11 @@ start.sh
 *.mkv
 *.avi
 *.srt
+
+# --- frontend build artifacts: the image builds its own -----------------------
+# node_modules is 400+ MB of host-platform binaries; out/ and .next are
+# rebuilt inside the node stage from source. Shipping any of them through the
+# context would slow every `railway up` upload for zero benefit.
+frontend/node_modules
+frontend/.next
+frontend/out
