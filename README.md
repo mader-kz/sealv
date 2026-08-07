@@ -1,21 +1,73 @@
-# LocateAnything Studio
+# Tulen
 
-A local web app for NVIDIA's **LocateAnything-3B** visual-grounding model, running
-on Apple Silicon via MLX. Drop in an image or a video, describe what you want
-found in plain language, and get boxes back.
+Aerial survey counting for Caspian seals. Drop in a drone still or a video and
+get back a count you can defend: a **low / best / high band**, every detection
+placed on the frame for an operator to correct, and a record of which weights
+produced it.
 
-![stack](https://img.shields.io/badge/runtime-MLX%20%C2%B7%20Apple%20Silicon-black)
+![detector](https://img.shields.io/badge/detector-CountGD-black)
+![inference](https://img.shields.io/badge/inference-Modal%20T4%20%C2%B7%20scale--to--zero-black)
+![ui](https://img.shields.io/badge/ui-en%20%C2%B7%20ru%20%C2%B7%20kk-black)
 
 ## What it does
 
-- **Images and video.** Video is sampled into frames with ffmpeg; every frame can
-  be grounded individually or the whole strip streamed in one run.
-- **Open-vocabulary grounding.** No fixed class list — `person`, `the red mug on
-  the left`, `all text`, `the submit button`, whatever the prompt says.
-- **Live overlay.** Boxes render as scalable SVG over the frame, colour-coded per
-  class, click to isolate, toggle classes from the legend.
-- **Export.** Detections as JSON (pixel + normalised coords), current frame as an
-  annotated PNG.
+- **Counts dense colonies.** 389 animals on the reference aerial still, whole
+  frame, no tiling, **0 false positives** on hand-verified empty ground.
+- **Reports a band, never a bare integer.** Dense overlapping animals have no
+  single true count that a person could reproduce, so the answer is
+  `low ≤ best ≤ high` with the basis recorded alongside it.
+- **Tiles by ground sample distance, not by guesswork.** Altitude and sensor
+  optics give cm/pixel; tile size follows from target size. Whole-frame above
+  40 px targets, tiled below.
+- **Survives drone drift.** Multi-frame runs are registered with ORB + RANSAC
+  affine before detections are clustered across frames.
+- **Puts a human in the loop.** Verify mode lets an operator add, delete and
+  confirm points; every edit is written to an append-only audit log.
+- **Georeferences.** DJI SRT and EXIF are parsed into per-point lat/lng.
+- **Speaks three languages.** English, Russian and Kazakh, checked for parity
+  in CI.
+
+What it does **not** claim is recall. Precision was verified by rendering every
+detection over hand-checked ground; how many animals were *missed* is unmeasured
+because there is no ground-truth count for these frames. See
+[Getting to an exact count](#getting-to-an-exact-count).
+
+## Run it
+
+**Deployed** — the service runs on Railway with inference offloaded to a GPU on
+Modal that scales to zero between sorties. Setup in [docs/CI.md](docs/CI.md),
+[docs/DEPLOY.md](docs/DEPLOY.md) and [docs/DEPLOY_MODAL.md](docs/DEPLOY_MODAL.md).
+Push a tag and CI deploys it.
+
+**Locally**, in a container:
+
+```bash
+docker build -t tulen .
+docker run -p 8090:8090 -v tulen-data:/data tulen
+```
+
+The UI is at <http://127.0.0.1:8090>. Weights are baked in at build time, so the
+container runs with no network. Set `TULEN_MODAL_APP` plus the two Modal token
+variables to offload inference to a GPU instead of running it on CPU.
+
+## What's in here
+
+`service/` is the API, database and worker; `webapp/` is the operator UI;
+`la_studio/` is the detection engine plus the MLX prototype this grew out of;
+`modal_app.py` is the GPU side; `vendor/CountGD/` is the vendored detector.
+
+---
+
+# The MLX prototype
+
+Everything below is the working notes from the prototype that preceded the
+service above — a local Apple Silicon app for NVIDIA's **LocateAnything-3B**,
+launched with `./run.sh`. It is kept because the measurements in it are what
+chose the detector, and because open-vocabulary grounding still does one thing
+CountGD cannot: find things nobody trained a counter for.
+
+It is **not** what the deployed service runs. That is CountGD — see
+[Which engine to use](#which-engine-to-use--countgd-measured).
 
 ## Requirements
 
@@ -461,7 +513,10 @@ animal in one tile is a whole animal in its neighbour.
 Frames are extracted at up to 2048px on the long edge, because tiling crops from
 those files and resolution thrown away at extraction cannot be recovered.
 
-## Layout
+## Layout of the prototype
+
+The service has its own tree — see [What's in here](#whats-in-here) at the top.
+This is the `./run.sh` app only.
 
 ```
 la_studio/

@@ -25,7 +25,7 @@ network boundary changes the transport, not the design.
 pip install modal
 modal token new                      # once, opens a browser
 
-cd locateanything-studio
+cd tulen
 modal run modal_app.py::fetch_weights # once, ~1.6 GB into a Volume
 modal deploy modal_app.py
 ```

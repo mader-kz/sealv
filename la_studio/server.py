@@ -28,6 +28,11 @@ from .model_worker import WORKER, _point_radius
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB = ROOT / "web"
+# Still the old project name, deliberately. The repo is `tulen` now and the
+# service writes to ~/.tulen, but this prototype's uploads already live here on
+# every machine that has run it - renaming the path for tidiness would orphan
+# them silently rather than migrate them. The service is the thing whose naming
+# has to be coherent; this is a local scratch dir with existing contents.
 WORKSPACE = Path.home() / ".locateanything-studio" / "workspace"
 WORKSPACE.mkdir(parents=True, exist_ok=True)
 
