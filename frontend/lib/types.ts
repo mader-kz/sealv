@@ -35,6 +35,9 @@ export type Footage = {
      that produced it. Absent on test data - the mock never had one, and
      inventing a range for synthetic sorties would defeat its point. */
   band?: { low: number | null; best: number | null; high: number | null; basis: string };
+  /* The run behind this footage, when the real engine produced it. Absent on
+     test data. It is what lets an operator edit persist to the service. */
+  runId?: string;
   /* Animals the engine found but could not georeference (no flight track).
      They are in the count; they are not on the map. The UI must say so. */
   unplaced?: number;

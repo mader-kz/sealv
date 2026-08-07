@@ -89,7 +89,7 @@ export default function Dropzone(){
           count: best, confidence: 1, status: "auto" as const,
         }];
       }
-      completeFootage(id, { status: "ready", detections, band: result.count, unplaced });
+      completeFootage(id, { status: "ready", detections, band: result.count, unplaced, runId: result.run_id });
       const bandTxt = result.count && result.count.low !== result.count.high
         ? ` (range ${result.count.low}–${result.count.high})` : "";
       toast.success(`${footage.filename}: ${best ?? "?"} seals${bandTxt}`);

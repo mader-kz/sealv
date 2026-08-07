@@ -2,7 +2,7 @@
 import { create } from "zustand";
 import type { Footage, Detection, TrackPoint, MapLayerState } from "@/lib/types";
 import { mockDetections, generateSeedTrack, KZ_SITES } from "@/lib/mock/detections";
-import { fetchStats, fetchRunPoints, fetchTrack, pointsToDetections, mediaFileUrl } from "@/lib/api";
+import { fetchStats, fetchRunPoints, fetchTrack, pointsToDetections, mediaFileUrl, editPoint } from "@/lib/api";
 
 type Store = {
   footages: Footage[];
@@ -54,16 +54,38 @@ export const useFootageStore = create<Store>((set, get) => ({
         : s.detections,
     };
   }),
-  updateDetection: (id, patch) => set(s=> ({
-    detections: s.detections.map(d=> d.id===id ? { ...d, ...patch } : d),
-    footages: s.footages.map(f=> ({ ...f, detections: f.detections.map(d=> d.id===id ? { ...d, ...patch } : d) })),
-  })),
+  /* A verdict that only lives in browser memory is not a verdict. When the
+     detection belongs to a real run (footage.runId set, backend point id in
+     the detection id), a status change also lands in the service's edit log.
+     Fire-and-forget with a console trail: blocking the reviewer's flow on a
+     network round-trip per click would make verification miserable, and the
+     local state is already what they decided. */
+  _persistStatus: ((id: string, status: Detection["status"] | undefined) => {
+    const s = (useFootageStore as any).getState?.() ?? null;
+    const det = s?.detections.find((d: Detection) => d.id === id);
+    const f = s?.footages.find((x: Footage) => x.id === det?.footageId);
+    const m = /-p(\d+)$/.exec(id);
+    if (!det || !f?.runId || !m) return;
+    const op = status === "false_positive" ? "remove"
+             : status === "validated" ? "reinstate" : null;
+    if (!op) return;
+    editPoint(f.runId, op, Number(m[1])).catch(e =>
+      console.warn(`edit did not persist for ${id}:`, e));
+  }) as any,
+  updateDetection: (id, patch) => {
+    set(s=> ({
+      detections: s.detections.map(d=> d.id===id ? { ...d, ...patch } : d),
+      footages: s.footages.map(f=> ({ ...f, detections: f.detections.map(d=> d.id===id ? { ...d, ...patch } : d) })),
+    }));
+    if (patch.status) (get() as any)._persistStatus(id, patch.status);
+  },
   bulkUpdateDetections: (ids, patch) => {
     const setIds = new Set(ids);
     set(s=> ({
       detections: s.detections.map(d=> setIds.has(d.id) ? { ...d, ...patch } : d),
       footages: s.footages.map(f=> ({ ...f, detections: f.detections.map(d=> setIds.has(d.id) ? { ...d, ...patch } : d) })),
     }));
+    if (patch.status) for (const id of ids) (get() as any)._persistStatus(id, patch.status);
   },
   clearAll: () => set({ footages: [], detections: [], selectedId: null, pinPoints: [] }),
   /* Reload yesterday's counts from the service. The store is browser memory;
@@ -122,6 +144,7 @@ export const useFootageStore = create<Store>((set, get) => ({
           region: center.lat > 44.5 ? "KZ-East" : center.lat > 43.4 ? "KZ-South" : "KZ-North",
           status: "ready",
           source: "archive",
+          runId: r.run_id,
           videoUrl: r.kind === "video" && r.media_id ? mediaFileUrl(r.media_id) : undefined,
           band: { low: r.low ?? null, best, high: r.high ?? null, basis: r.basis ?? "" },
           unplaced,

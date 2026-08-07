@@ -222,3 +222,21 @@ export async function fetchTrack(
 }
 
 export const mediaFileUrl = (mediaId: string) => `${API}/media/${mediaId}/file`;
+
+/* Operator verdicts persist through the same append-only edit log the
+   operator webapp writes: remove -> false_positive, reinstate -> validated.
+   Never a DELETE - rejected detections are survey evidence, and the only
+   recall data this system will ever have. */
+export async function editPoint(
+  runId: string,
+  op: "remove" | "reinstate",
+  pointId: number,
+): Promise<void> {
+  await jsonOrThrow(
+    await fetch(`${API}/v1/runs/${runId}/points`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ op, point_id: pointId, operator: "platform" }),
+    }),
+  );
+}
