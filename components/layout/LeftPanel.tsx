@@ -35,7 +35,7 @@ export default function LeftPanel(){
     const rows = ["id,filename,region,uploadedAt,centerLat,centerLng,trackPts,detections,seals,source"];
     for(const f of filtered){ const seals=f.detections.reduce((s,d)=>s+d.count,0); rows.push(`${f.id},${f.filename},${f.region},${f.uploadedAt},${f.center.lat},${f.center.lng},${f.track.length},${f.detections.length},${seals},${f.source}`); }
     const blob=new Blob([rows.join("\n")],{type:"text/csv"}); const url=URL.createObjectURL(blob);
-    const a=document.createElement("a"); a.href=url; a.download=`tulen-footage-${new Date().toISOString().slice(0,10)}.csv`; a.click(); URL.revokeObjectURL(url);
+    const a=document.createElement("a"); a.href=url; a.download=`sealv-footage-${new Date().toISOString().slice(0,10)}.csv`; a.click(); URL.revokeObjectURL(url);
   };
 
   return (
@@ -75,7 +75,7 @@ export default function LeftPanel(){
               key={f.id}
               onClick={()=>{
                 select(f.id);
-                const m=(window as any).__tulenMap;
+                const m=(window as any).__sealvMap;
                 if(m){ try{ m.stop(); }catch{} m.easeTo({ center:[f.center.lng, f.center.lat], zoom: 10, duration: 300 }); }
               }}
               className={`group relative px-3 py-2.5 cursor-pointer border-b border-line-soft transition-colors ${active?"bg-surface2":"hover:bg-surface2/60"}`}

@@ -4,7 +4,7 @@
 @tailwind utilities;
 
 /* ---------------------------------------------------------------
-   TULEN design tokens — one neutral ramp, one accent. Nothing else.
+   SEALv design tokens — one neutral ramp, one accent. Nothing else.
    Chrome stays quiet so the data on the map is the only loud thing.
    --------------------------------------------------------------- */
 :root {

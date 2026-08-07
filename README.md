@@ -1,8 +1,8 @@
-# Tulen — Caspian Seal Survey Platform
+# SEALv — Caspian Seal Survey Platform
 
 > Drone footage ingest, seal counts, and population analytics for the Kazakh Caspian sector.
 
-**Tulen** (kaz. «тюлень» — seal) is a Next.js platform for processing UAV survey footage of Caspian seals. It reads the flight track from video sidecars (SRT / JSON) or embedded MP4 GPS, counts seals per sortie, and plots every observation on an interactive Caspian Sea chart with analytics, forecasting, and reporting.
+**SEALv** is a Next.js platform for processing UAV survey footage of the Caspian seal (kaz. «тюлень»). It reads the flight track from video sidecars (SRT / JSON) or embedded MP4 GPS, counts seals per sortie, and plots every observation on an interactive Caspian Sea chart with analytics, forecasting, and reporting.
 
 ![Next.js 14](https://img.shields.io/badge/Next.js-14.2-black)
 ![React 18](https://img.shields.io/badge/React-18-61DAFB)
@@ -37,7 +37,7 @@ Either way you'll see a line like:
 FIELD_0001.MP4 · location read from video at 44.8500, 50.3500 · 40 track points · 9 seals counted
 ```
 
-That's the whole idea: **Tulen reads where the video was shot, counts the seals in it, and puts that number on the map at that spot.**
+That's the whole idea: **SEALv reads where the video was shot, counts the seals in it, and puts that number on the map at that spot.**
 
 ### 2. Read the map
 
@@ -122,7 +122,6 @@ If you have more than one sortie, a **timeline** appears along the bottom. Drag 
 | Framework | [Next.js 14](https://nextjs.org) (App Router, `reactStrictMode`) |
 | UI | React 18, Tailwind CSS 3.4, custom design tokens (`--bg`, `--surface`, `--accent` etc.) |
 | Map | [MapLibre GL 6.2](https://maplibre.org) + Carto Dark raster + Esri Satellite toggle |
-| Charts | [Recharts 3.10](https://recharts.org) |
 | State | [Zustand 5](https://zustand-demo.pmnd.rs) (`store/useFootageStore.ts`) |
 | PDF | [jsPDF 4.2](https://github.com/parallax/jsPDF) |
 | Language | TypeScript 5.4 (`strict: true`) |
@@ -141,7 +140,7 @@ project_hack2/
 ├── components/
 │   ├── dashboard/
 │   │   ├── Dashboard.tsx       # Analytics panel (KPIs, trend, forecast)
-│   │   └── ForecastChart.tsx   # Recharts forecast line + band
+│   │   └── ForecastChart.tsx   # Forecast bars + confidence band
 │   ├── layout/
 │   │   ├── TopBar.tsx          # Top navigation / search
 │   │   ├── Rail.tsx            # Left icon rail (workbench, layers, analytics)
@@ -271,7 +270,7 @@ Open via the left rail → **Detections** (modal, `components/workbench/Workbenc
 - Sort by date / count / confidence / region
 - Select rows for **bulk actions** — validate or flag as false positive
 - Inline edit the seal count per detection
-- **Export CSV** — `tulen-detections-YYYY-MM-DD.csv`
+- **Export CSV** — `sealv-detections-YYYY-MM-DD.csv`
 
 ### Analytics & Forecast
 
@@ -286,7 +285,7 @@ Toggle via the rail → **Analytics** (`components/dashboard/Dashboard.tsx`):
 
 ### PDF Export
 
-From the Analytics panel → **PDF** button → `tulen-report-YYYY-MM-DD.pdf` (`lib/export/pdf.ts`):
+From the Analytics panel → **PDF** button → `sealv-report-YYYY-MM-DD.pdf` (`lib/export/pdf.ts`):
 
 - Header with date, sortie/seal counts
 - KPIs, forecast summary + bar chart, anomalies, and a footage table (first 22 rows)

@@ -5,7 +5,7 @@ export default function TopBar({ onCmdK }: { onCmdK: ()=>void }){
   return (
     <div className="h-11 shrink-0 bg-bg border-b border-line flex items-center px-3 gap-3">
       <div className="flex items-baseline gap-2.5 select-none">
-        <span className="text-base font-medium tracking-tight">Tulen</span>
+        <span className="text-base font-medium tracking-tight">SEALv</span>
         <span className="text-xs text-ink3">Caspian seal survey</span>
       </div>
 

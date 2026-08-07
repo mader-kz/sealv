@@ -126,7 +126,7 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
         map.addLayer({ id:"detections-count", type:"symbol", source:"detections", layout:{ "text-field":["to-string",["get","count"]], "text-size":11, "text-font":["Noto Sans Bold","Open Sans Bold"], "text-allow-overlap": true, "text-ignore-placement": true }, paint:{ "text-color":"#0a0a0b", "text-halo-color":"rgba(255,255,255,0.9)","text-halo-width":0.9, "text-halo-blur":0 } });
       } catch(e){ console.warn("symbol layer failed", e); }
 
-      (window as any).__tulenMap = map;
+      (window as any).__sealvMap = map;
       setMapLoaded(true);
       onMapReady?.(map);
 
@@ -273,7 +273,7 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
       if (isFinite(minLng)) {
         const pad = 0.15;
         try { map.stop(); map.fitBounds([[minLng-pad, minLat-pad],[maxLng+pad, maxLat+pad]], { padding: 40, duration: 520, maxZoom: 8.2 }); } catch{}
-        console.log(`[TULEN] fitBounds ${footages.length}F ${detections.length}G -> [[${minLng.toFixed(2)},${minLat.toFixed(2)}],[${maxLng.toFixed(2)},${maxLat.toFixed(2)}]] zoom=${map.getZoom().toFixed(2)}`);
+        console.log(`[SEALv] fitBounds ${footages.length}F ${detections.length}G -> [[${minLng.toFixed(2)},${minLat.toFixed(2)}],[${maxLng.toFixed(2)},${maxLat.toFixed(2)}]] zoom=${map.getZoom().toFixed(2)}`);
       }
     }
   },[footages.length, detections.length, mapLoaded, selectedId]);
@@ -281,7 +281,7 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
   // debug: log every push
   useEffect(()=>{
     if(!mapLoaded) return;
-    console.log(`[TULEN] push ${footages.length} footages, ${detections.length} detections, layers`, layerState, "zoom", mapRef.current?.getZoom?.()?.toFixed(2));
+    console.log(`[SEALv] push ${footages.length} footages, ${detections.length} detections, layers`, layerState, "zoom", mapRef.current?.getZoom?.()?.toFixed(2));
   },[footages.length, detections.length, layerState, mapLoaded]);
 
   // DOM fallback overlay — guaranteed visible even if MapLibre layers/glyphs fail

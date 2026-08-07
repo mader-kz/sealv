@@ -64,7 +64,7 @@ export default function Workbench({ open, onClose }: { open: boolean; onClose: (
       rows.push(`${d.id},${d.footageId},${f?.filename||""},${f?.region||""},${d.t},${d.lat},${d.lng},${d.count},${d.confidence},${d.status}`);
     }
     const blob=new Blob([rows.join("\n")],{type:"text/csv"}); const url=URL.createObjectURL(blob);
-    const a=document.createElement("a"); a.href=url; a.download=`tulen-detections-${new Date().toISOString().slice(0,10)}.csv`; a.click(); URL.revokeObjectURL(url);
+    const a=document.createElement("a"); a.href=url; a.download=`sealv-detections-${new Date().toISOString().slice(0,10)}.csv`; a.click(); URL.revokeObjectURL(url);
   };
 
   const th = "px-3 py-2 label font-normal";

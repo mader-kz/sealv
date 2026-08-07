@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Tulen — Caspian seal survey",
+  title: "SEALv — Caspian seal survey",
   description: "Drone footage ingest, seal counts, and population analytics for the Kazakh Caspian sector.",
 };
 

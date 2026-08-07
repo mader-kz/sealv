@@ -114,7 +114,7 @@ export default function Page(){
                   <Icon name="upload" size={22} className="text-ink3 mx-auto" />
                   <h2 className="text-lead text-ink mt-3">Ingest drone footage</h2>
                   <p className="text-sm text-ink2 mt-1.5 leading-relaxed">
-                    Tulen reads the flight track from the video, counts seals, and plots the count
+                    SEALv reads the flight track from the video, counts seals, and plots the count
                     where the footage was shot.
                   </p>
                   <div className="flex items-center justify-center gap-1.5 mt-4">

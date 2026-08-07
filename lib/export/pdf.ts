@@ -16,7 +16,7 @@ export async function exportPDF(footages: Footage[]){
   doc.setTextColor(56,189,248);
   doc.setFontSize(14);
   doc.setFont("helvetica","bold");
-  doc.text("TULEN — CASPIAN SEAL OPERATIONS", 10, 12);
+  doc.text("SEALv — CASPIAN SEAL OPERATIONS", 10, 12);
   doc.setFontSize(7);
   doc.setTextColor(148,163,184);
   doc.setFont("helvetica","normal");
@@ -111,7 +111,7 @@ export async function exportPDF(footages: Footage[]){
   // footer
   doc.setFontSize(6);
   doc.setTextColor(100,116,139);
-  doc.text("TULEN OS • Mock forecast — swappable to real model via POST /api/forecast • Detections with status=false_positive excluded from totals", 10, 290);
+  doc.text("SEALv • Mock forecast — swappable to real model via POST /api/forecast • Detections with status=false_positive excluded from totals", 10, 290);
 
-  doc.save(`tulen-report-${new Date().toISOString().slice(0,10)}.pdf`);
+  doc.save(`sealv-report-${new Date().toISOString().slice(0,10)}.pdf`);
 }
