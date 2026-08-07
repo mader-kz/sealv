@@ -56,15 +56,13 @@ variables to offload inference to a GPU instead of running it on CPU.
 `la_studio/` is the detection engine plus the MLX prototype this grew out of;
 `modal_app.py` is the GPU side; `vendor/CountGD/` is the vendored detector.
 
-### The web platform lives on `old-codebase`
+The operator UI is `webapp/index.html` — one file, no build step, no framework.
+Upload, survey metadata, detection settings, the count band, verify mode and the
+analytics tab, in English, Russian and Kazakh.
 
-This branch is the detection half. The Next.js platform — Caspian chart on
-MapLibre, sortie ingest, analytics, forecasting and reporting — is on the
-[`old-codebase`](../../tree/old-codebase) branch, with its own README.
-
-The two halves fit together: the platform reads flight tracks and plots
-observations but its detections are synthetic (`lib/mock/detections.ts`), and
-this branch is the real counting engine that fills exactly that gap.
+An earlier, separate platform prototype is preserved on the
+[`old-codebase`](../../tree/old-codebase) branch. It is not part of this
+product and nothing here depends on it.
 
 ---
 
