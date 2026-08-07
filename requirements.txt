@@ -1,0 +1,19 @@
+# Runtime dependencies, pinned to what LocateAnything inference actually touches.
+#
+# mlx-vlm is installed separately by run.sh with --no-deps: its declared
+# requirements pull datasets, mlx-audio, miniaudio and opencv-python (~1 GB)
+# that this app never imports. Everything mlx_vlm.utils needs at import time
+# is listed here.
+mlx>=0.32
+mlx-lm>=0.31.3
+transformers>=5.5
+numpy
+pillow>=11.0
+requests
+tqdm
+huggingface_hub
+
+# web layer
+fastapi>=0.115
+uvicorn[standard]>=0.32
+python-multipart>=0.0.12

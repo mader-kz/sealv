@@ -1,0 +1,68 @@
+# What must never enter git history.
+#
+# This is not the same file as .dockerignore and cannot be replaced by it: that
+# one shapes the build context, this one is what stands between a `git add -A`
+# and a push GitHub refuses. Three files in this tree are individually larger
+# than GitHub's 100 MB blob limit, and a rejected push is the good outcome - the
+# bad one is a 1.2 GB blob that lands in history and cannot be removed casually.
+
+# --- model weights: fetched during the Docker build, never committed ---------
+#   vendor/CountGD/checkpoints/checkpoint_best_regular.pth      1,250,122,522 B
+#   vendor/CountGD/checkpoints/bert-base-uncased/*.safetensors    440,449,768 B
+# The Dockerfile pulls both from Hugging Face at build time.
+vendor/CountGD/checkpoints/
+
+# 109 MB of an unrelated detector this service never loads - also over the limit.
+yolo11x.pt
+*.pt
+*.pth
+*.onnx
+*.safetensors
+
+# --- virtualenvs -------------------------------------------------------------
+# Built for macOS arm64, so they are not merely large but unusable on the
+# linux/amd64 image, which installs its own.
+.venv/
+.venv-torch/
+.venv-countgd/
+
+# --- python noise ------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- local runtime state -----------------------------------------------------
+# The database and the survey archive live on the Railway volume at /data. A
+# committed copy would ship stale jobs and rows whose media files do not exist.
+.tulen/
+workspace/
+runs/
+out/
+tmp/
+*.db
+*.db-wal
+*.db-shm
+*.log
+
+# --- sample media ------------------------------------------------------------
+*.mp4
+*.mov
+*.m4v
+*.webm
+*.mkv
+*.avi
+
+# --- editor / os -------------------------------------------------------------
+.DS_Store
+.idea/
+.vscode/
+
+# 19 MB of COCO val2017 annotations that came with the vendored CountGD clone.
+# Nothing on the inference path reads it - the sole reference,
+# util/static_data_path.py, points at an absolute path on the original authors'
+# cluster. Already excluded from the Docker context; excluded here too because
+# `railway up` uploads the working tree, so it would ride along on every deploy.
+vendor/CountGD/config/instances_val2017.json

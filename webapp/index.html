@@ -1,0 +1,1100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tulen — Caspian Seal Survey</title>
+<style>
+  :root{
+    --bg:#080a0c; --panel:#0e1114; --panel-2:#141920; --line:#1f262e;
+    --line-soft:#181d24; --text:#e8ecf1; --muted:#8b96a5; --dim:#5a6674;
+    --accent:#3ddc97; --accent-dim:#2a9c6c; --warn:#f5c451; --danger:#ff6b5e;
+    --blue:#5cc8ff;
+    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Inter","Segoe UI",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);
+    font-size:13.5px;line-height:1.5;-webkit-font-smoothing:antialiased;
+    display:flex;flex-direction:column;overflow:hidden}
+  button,input,select,textarea{font:inherit;color:inherit}
+  ::-webkit-scrollbar{width:9px;height:9px}
+  ::-webkit-scrollbar-thumb{background:#242b34;border-radius:6px}
+  ::-webkit-scrollbar-track{background:transparent}
+  .hidden{display:none !important}
+
+  header{display:flex;align-items:center;gap:16px;padding:0 18px;height:54px;
+    border-bottom:1px solid var(--line);background:var(--panel);flex:0 0 auto}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:680;letter-spacing:-.02em;font-size:15px}
+  .brand em{font-style:normal;color:var(--accent)}
+  .brand small{font-weight:400;color:var(--dim);font-size:11px;letter-spacing:.04em;text-transform:uppercase}
+  nav{display:flex;gap:2px;margin-left:12px}
+  nav button{padding:6px 14px;border-radius:8px;border:1px solid transparent;
+    background:transparent;color:var(--muted);cursor:pointer;font-size:13px;transition:.14s}
+  nav button:hover{color:var(--text)}
+  nav button.on{background:var(--panel-2);border-color:var(--line);color:var(--text)}
+  .status{margin-left:auto;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--dim)}
+  .dot.ok{background:var(--accent);box-shadow:0 0 0 3px rgba(61,220,151,.14)}
+  .dot.bad{background:var(--danger)}
+
+  main{flex:1;min-height:0;display:none}
+  main.on{display:grid}
+  #view-survey{grid-template-columns:300px minmax(0,1fr) 330px}
+  #view-analytics{grid-template-columns:minmax(0,1fr)}
+  .col{min-height:0;display:flex;flex-direction:column;overflow:hidden}
+  .left{border-right:1px solid var(--line);background:var(--panel)}
+  .right{border-left:1px solid var(--line);background:var(--panel)}
+  .scroll{overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:18px}
+  .sect{display:flex;flex-direction:column;gap:9px}
+  .sect>h2{margin:0;font-size:10.5px;font-weight:600;letter-spacing:.1em;
+    text-transform:uppercase;color:var(--dim)}
+
+  .drop{border:1.5px dashed var(--line);border-radius:10px;padding:22px 14px;
+    text-align:center;cursor:pointer;transition:.15s;background:var(--panel-2)}
+  .drop:hover,.drop.over{border-color:var(--accent);background:rgba(61,220,151,.05)}
+  .drop b{display:block;font-size:13px;margin-bottom:3px}
+  .drop small{color:var(--dim);font-size:11.5px}
+
+  .row{display:flex;align-items:center;gap:9px}
+  .row label{flex:0 0 92px;font-size:11.5px;color:var(--muted)}
+  .row input,.row select{flex:1;min-width:0;background:var(--panel-2);
+    border:1px solid var(--line);border-radius:7px;padding:6px 9px;outline:none;
+    font-family:var(--mono);font-size:12px}
+  .row input:focus,.row select:focus{border-color:var(--accent-dim)}
+  .note{font-size:11px;color:var(--dim);line-height:1.55}
+  .note b{color:var(--muted)}
+
+  .btn{display:flex;align-items:center;justify-content:center;gap:7px;width:100%;
+    padding:10px 12px;border-radius:9px;border:1px solid var(--line);
+    background:var(--panel-2);cursor:pointer;font-weight:550;transition:.14s}
+  .btn:hover:not(:disabled){border-color:#2c343f;background:#1a2028}
+  .btn:disabled{opacity:.4;cursor:not-allowed}
+  .btn.primary{background:var(--accent);color:#04150d;border-color:var(--accent);font-weight:680}
+  .btn.primary:hover:not(:disabled){background:#4ee9a6;border-color:#4ee9a6}
+  .btn.primary:disabled{background:var(--panel-2);color:var(--dim);border-color:var(--line);opacity:1}
+  .btn-row{display:flex;gap:8px}.btn-row .btn{width:auto;flex:1}
+  .leftfoot{flex:0 0 auto;padding:12px 16px;border-top:1px solid var(--line);background:var(--panel)}
+
+  /* ---- the count band: the most important element in the product ---- */
+  .band{background:linear-gradient(180deg,#121820,#0e1319);border:1px solid var(--line);
+    border-radius:12px;padding:16px;text-align:center}
+  .band .best{font-family:var(--mono);font-size:44px;font-weight:600;letter-spacing:-.03em;
+    line-height:1;color:var(--accent)}
+  .band .lbl{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin-top:6px}
+  .band .range{margin-top:12px;padding-top:12px;border-top:1px solid var(--line-soft);
+    display:flex;justify-content:center;gap:18px;font-family:var(--mono);font-size:13px}
+  .band .range i{font-style:normal;color:var(--muted)}
+  .band .range u{text-decoration:none;color:var(--dim);font-size:10px;display:block;
+    text-transform:uppercase;letter-spacing:.08em}
+  .band .basis{margin-top:10px;font-size:11px;color:var(--dim);font-family:var(--mono)}
+  .band.verified .best{color:var(--blue)}
+  /* The spread line is the honest half of the band: it says either how wide the
+     measured disagreement was, or that no spread could be measured at all. It is
+     never absent, because a bare integer is the failure mode this product exists
+     to avoid. */
+  .band .spread{margin-top:9px;font-size:11px;line-height:1.45;color:var(--warn)}
+  .band .spread.measured{color:var(--muted)}
+  .band.broken{border-color:rgba(255,107,94,.5)}
+  .band.broken .best{color:var(--danger)}
+
+  .warn{font-size:11.5px;color:#f5d98a;background:rgba(245,196,81,.07);
+    border:1px solid rgba(245,196,81,.24);border-radius:8px;padding:9px 11px;line-height:1.5}
+  .err{font-size:12px;color:#ff9a92;background:rgba(255,107,94,.08);
+    border:1px solid rgba(255,107,94,.25);border-radius:8px;padding:9px 11px;white-space:pre-wrap}
+  /* Server messages carry absolute paths and stack-frame text with no spaces to
+     break on; without this one long token pushes the whole right column into
+     horizontal scroll and clips the message that explains the failure. */
+  .err,.kv b,.note{overflow-wrap:anywhere}
+
+  .kv{display:flex;flex-direction:column;gap:5px}
+  .kv div{display:flex;justify-content:space-between;gap:10px;font-size:12px}
+  .kv span{color:var(--dim)}
+  .kv b{font-family:var(--mono);font-weight:500;font-size:11.5px;text-align:right}
+
+  .stage{flex:1;position:relative;display:flex;align-items:center;justify-content:center;
+    padding:18px;min-height:0;overflow:hidden;
+    background:radial-gradient(ellipse at 50% 0%,rgba(61,220,151,.04),transparent 60%),
+      repeating-conic-gradient(#0b0d10 0% 25%,#090b0e 0% 50%) 50%/22px 22px}
+  .wrap{position:relative;max-width:100%;max-height:100%;line-height:0;
+    box-shadow:0 18px 60px rgba(0,0,0,.6);border-radius:6px;overflow:hidden}
+  .wrap img{max-width:100%;max-height:100%;display:block;object-fit:contain}
+  .wrap svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+  .empty{text-align:center;color:var(--dim);max-width:340px}
+  .empty h3{margin:0 0 6px;font-size:15px;color:var(--muted);font-weight:600}
+  .empty p{margin:0;font-size:12.5px;line-height:1.6}
+
+  .bar{position:absolute;top:14px;left:50%;transform:translateX(-50%);display:flex;
+    align-items:center;gap:10px;padding:7px 14px;border-radius:999px;
+    background:rgba(14,17,20,.92);border:1px solid var(--line);backdrop-filter:blur(12px);
+    font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+  .spin{width:11px;height:11px;border:1.6px solid var(--line);border-top-color:var(--accent);
+    border-radius:50%;animation:spin .7s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .sep{width:1px;height:12px;background:var(--line)}
+
+  .strip{flex:0 0 auto;border-top:1px solid var(--line);background:var(--panel);
+    padding:8px 10px;display:flex;gap:6px;align-items:center;overflow-x:auto;min-height:70px}
+  .thumb{position:relative;flex:0 0 auto;width:74px;height:54px;border-radius:6px;
+    overflow:hidden;cursor:pointer;border:2px solid transparent;opacity:.6;transition:.13s;background:#000}
+  .thumb img{width:100%;height:100%;object-fit:cover;display:block}
+  .thumb:hover{opacity:1}
+  .thumb.on{border-color:var(--accent);opacity:1}
+  .thumb b{position:absolute;right:3px;top:3px;font-family:var(--mono);font-size:9.5px;
+    background:var(--accent);color:#04150d;padding:0 4px;border-radius:999px}
+
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th{text-align:left;font-size:10px;letter-spacing:.08em;text-transform:uppercase;
+    color:var(--dim);font-weight:600;padding:6px 8px;border-bottom:1px solid var(--line)}
+  td{padding:7px 8px;border-bottom:1px solid var(--line-soft);font-family:var(--mono);font-size:11.5px}
+  tr:hover td{background:var(--panel-2)}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+  .card{background:var(--panel-2);border:1px solid var(--line-soft);border-radius:10px;padding:12px 14px}
+  .card b{display:block;font-family:var(--mono);font-size:22px;font-weight:600;letter-spacing:-.02em}
+  .card span{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em}
+  /* Bars are capped so a survey or two does not render as one giant slab that
+     reads like a filled progress bar rather than a data point. */
+  .chart{height:180px;display:flex;align-items:flex-end;gap:4px;padding:10px 0;
+    justify-content:flex-start}
+  .chart .b{flex:1 1 0;max-width:72px;min-width:10px;
+    background:linear-gradient(180deg,var(--accent-dim),#1a5f43);
+    border-radius:3px 3px 0 0;min-height:2px;position:relative;cursor:default}
+  .chart .b:hover{background:var(--accent)}
+  .chart .b em{position:absolute;top:-18px;left:50%;transform:translateX(-50%);
+    font-style:normal;font-family:var(--mono);font-size:10.5px;color:var(--muted);white-space:nowrap}
+  .analytics{padding:22px;overflow-y:auto;display:flex;flex-direction:column;gap:22px}
+  .analytics h1{margin:0;font-size:18px;font-weight:640;letter-spacing:-.02em}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}
+  .panel h3{margin:0 0 12px;font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim)}
+  /* Lifted clear of the filmstrip when there is one, so the run toast does not
+     sit on top of the frame thumbnails it is describing. */
+  body.has-strip .toast{bottom:96px}
+  .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(8px);
+    background:var(--panel-2);border:1px solid var(--line);border-radius:9px;padding:10px 16px;
+    font-size:12.5px;opacity:0;pointer-events:none;transition:.22s;z-index:50;
+    box-shadow:0 10px 34px rgba(0,0,0,.55)}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3ddc97" stroke-width="1.9">
+      <path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3"/>
+      <circle cx="12" cy="12" r="2.6"/>
+    </svg>
+    <span>Tulen<em>.</em></span>
+    <small data-i18n="brand.sub">Caspian Seal Survey</small>
+  </div>
+  <nav>
+    <button id="tabSurvey" class="on" data-i18n="nav.survey">Survey</button>
+    <button id="tabAnalytics" data-i18n="nav.analytics">Analytics</button>
+  </nav>
+  <select id="lang" title="Language" style="margin-left:auto;background:var(--panel-2);border:1px solid var(--line);border-radius:7px;padding:5px 8px;font-size:12px;color:var(--text);outline:none;cursor:pointer"><option value="en">English</option><option value="ru">Русский</option><option value="kk">Қазақша</option></select><div class="status" style="margin-left:14px"><span class="dot" id="dot"></span><span id="statusTxt" data-i18n="st.connecting">connecting…</span></div>
+</header>
+
+<!-- ============================================================ SURVEY -->
+<main id="view-survey" class="on">
+  <section class="col left"><div class="scroll">
+    <div class="sect">
+      <h2 data-i18n="sec.media">Media</h2>
+      <div class="drop" id="drop"><b data-i18n="drop.title">Drop image or video</b><small data-i18n="drop.sub">plus .srt / .json sidecar</small></div>
+      <input type="file" id="file" class="hidden" accept="image/*,video/*">
+      <input type="file" id="sidecar" class="hidden" accept=".srt,.json">
+      <div class="note" id="mediaInfo"></div>
+    </div>
+
+    <div class="sect">
+      <h2 data-i18n="sec.meta">Survey metadata</h2>
+      <div class="row"><label data-i18n="f.captured">Captured</label><input id="capturedAt" type="text" placeholder="2026-08-06T07:14:00Z"></div>
+      <div class="row"><label data-i18n="f.altitude">Altitude m</label><input id="altitude" type="number" step="1" placeholder="120"></div>
+      <div class="row"><label data-i18n="f.sensorpx">Sensor px</label><input id="sensorPx" type="number" step="1" placeholder="5472"></div>
+      <!-- The optics, not decoration: gsd = sensor_mm * alt / (focal_mm * width_px).
+           Left blank the service falls back to a DJI 1-inch airframe and labels the
+           result assumed, because a 6.17mm/4.3mm camera is ~4% off at the same
+           altitude and that error lands in tiling and in every coordinate. -->
+      <div class="row"><label data-i18n="f.sensormm">Sensor mm</label><input id="sensorMm" type="number" step="0.01" placeholder="13.2 (DJI 1&quot;)"></div>
+      <div class="row"><label data-i18n="f.focalmm">Focal mm</label><input id="focalMm" type="number" step="0.01" placeholder="8.8 (DJI 1&quot;)"></div>
+      <div class="row"><label data-i18n="f.gsd">GSD cm/px</label><input id="gsd" type="number" step="0.01" placeholder="auto"></div>
+      <div class="row"><label data-i18n="f.tide">Tide</label>
+        <select id="tide">
+          <option value="" data-i18n="tide.unknown">unknown</option><option value="low" data-i18n="tide.low">low</option><option value="falling" data-i18n="tide.falling">falling</option>
+          <option value="high" data-i18n="tide.high">high</option><option value="rising" data-i18n="tide.rising">rising</option>
+        </select>
+      </div>
+      <div class="note" data-i18n="note.gsd"></div>
+    </div>
+
+    <div class="sect">
+      <h2 data-i18n="sec.detect">Detection</h2>
+      <div class="row"><label data-i18n="f.target">Target</label><input id="target" type="text" value="seal"></div>
+      <div class="row"><label data-i18n="f.threshold">Threshold</label><input id="threshold" type="number" step="0.01" value="0.23"></div>
+      <div class="row"><label data-i18n="f.tiling">Tiling</label>
+        <select id="tiling"><option value="auto" data-i18n="tile.auto">auto (from GSD)</option><option value="off" data-i18n="tile.off">whole frame</option>
+          <option value="600">600px</option><option value="400">400px</option>
+          <option value="250">250px</option><option value="180">180px</option></select>
+      </div>
+      <!-- video-only sampling controls: hidden until a video is actually loaded,
+           so a still-image operator is not offered knobs that do nothing -->
+      <div class="row hidden" id="rowEvery"><label data-i18n="f.every">Every s</label><input id="everyS" type="number" step="0.5" value="1.5"></div>
+      <div class="row hidden" id="rowFrames"><label data-i18n="f.maxframes">Max frames</label><input id="maxFrames" type="number" step="1" value="8"></div>
+      <div class="row hidden" id="rowSupport"><label data-i18n="f.minsupport">Min support</label><input id="minSupport" type="number" step="1" value="3"></div>
+    </div>
+
+    <div class="sect hidden" id="verifySect">
+      <h2 data-i18n="sec.verify">Verify</h2>
+      <button class="btn" id="verifyBtn" data-i18n="btn.verifyOn">Enable verify mode</button>
+      <!-- This note used to read "precision is measured at ~0 false positives, so
+           this is almost entirely adding what was missed". Two problems, both of
+           which push the operator toward a wrong count. (1) It is an accuracy
+           claim about the image on screen, and there is no ground truth for it —
+           the plan (§7) says no accuracy claim belongs in this UI until one
+           image is hand-counted exactly. (2) The ~0 figure was measured on one
+           hand-verified patch at 400px tiles; the same measurement gave ~21
+           false positives at 250px, a tile size this very panel offers. Telling
+           the operator their edits are "almost entirely adding" suppresses the
+           rejections that are the only false-positive evidence this system will
+           ever collect. -->
+      <div class="note" data-i18n="note.verify">Click an animal to add, click a dot to reject. <b>Both directions matter</b> — rejections are the only false-positive evidence this system ever collects, additions the only recall evidence. Nothing here is calibrated against a ground-truth count, so do not assume the dots on screen are mostly right; check them. Every edit is written to an append-only audit log.</div>
+    </div>
+  </div>
+  <!-- Outside .scroll: at 1280x800 the primary action sat ~60px below the fold
+       and only appeared if the operator guessed the panel scrolled. -->
+  <div class="leftfoot"><button class="btn primary" id="runBtn" disabled data-i18n="btn.count">Count</button></div>
+  </section>
+
+  <section class="col">
+    <div class="stage" id="stage">
+      <div class="empty" id="empty">
+        <h3 data-i18n="empty.title">No media loaded</h3>
+        <p data-i18n="empty.body"></p>
+      </div>
+      <div class="wrap hidden" id="wrap"><img id="img" alt=""><svg id="svg" preserveAspectRatio="none"></svg></div>
+      <div class="bar hidden" id="bar"></div>
+      <div class="bar hidden" id="overlayNote" style="top:auto;bottom:14px">
+        detections are registered onto the reference frame — not shown on this one
+      </div>
+    </div>
+    <div class="strip hidden" id="strip"></div>
+  </section>
+
+  <section class="col right"><div class="scroll">
+    <div class="sect">
+      <h2 data-i18n="sec.count">Count</h2>
+      <div class="band" id="band">
+        <div class="best" id="cBest">—</div>
+        <div class="lbl" id="cLbl">no run yet</div>
+        <div class="range hidden" id="cRange">
+          <div><i id="cLow">—</i><u data-i18n="cnt.low">low</u></div>
+          <div><i id="cHigh">—</i><u data-i18n="cnt.high">high</u></div>
+        </div>
+        <div class="spread hidden" id="cSpread"></div>
+        <div class="basis hidden" id="cBasis"></div>
+      </div>
+      <div class="note" data-i18n="note.band"></div>
+    </div>
+
+    <div class="sect hidden" id="caveatSect"><h2 data-i18n="sec.caveats">Caveats</h2><div class="warn" id="caveatBox"></div></div>
+    <div class="sect hidden" id="errSect"><h2 data-i18n="sec.error">Error</h2><div class="err" id="errBox"></div></div>
+
+    <div class="sect hidden" id="detailSect">
+      <h2 data-i18n="sec.rundetail">Run detail</h2>
+      <div class="kv" id="detailKv"></div>
+    </div>
+
+    <div class="sect hidden" id="framesSect">
+      <h2 data-i18n="sec.perframe">Per frame</h2>
+      <table id="frameTable"><thead><tr><th data-i18n="th.frame">#</th><th data-i18n="th.t">t</th><th data-i18n="th.count">count</th><th data-i18n="th.reg">reg</th></tr></thead><tbody></tbody></table>
+    </div>
+  </div></section>
+</main>
+
+<!-- ========================================================= ANALYTICS -->
+<main id="view-analytics">
+  <div class="analytics">
+    <h1 data-i18n="an.title">Survey analytics</h1>
+    <div class="cards" id="statCards"></div>
+    <div class="panel">
+      <h3 data-i18n="an.overtime">Counts over time</h3>
+      <div id="overTime"></div>
+    </div>
+    <div class="panel">
+      <h3 data-i18n="an.persite">Per site</h3>
+      <div id="perSite"></div>
+    </div>
+    <div class="panel">
+      <h3 data-i18n="an.latest">Latest runs</h3>
+      <div id="latestRuns"></div>
+    </div>
+  </div>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+const API = location.origin;
+/* ------------------------------------------------------------------ i18n
+   Three languages because this is a Kazakh Caspian product: English for the
+   record, Russian as the working language of the sector, Kazakh as the state
+   language. Every visible string is keyed - an untranslated fragment in an
+   otherwise Kazakh screen is worse than no translation at all.
+
+   Terminology note: the seal is `тюлень` in Russian and `итбалық` in Kazakh.
+   The product name "Tulen" comes from the Russian word, not the Kazakh one. */
+const I18N = {
+  en: {
+    "lang.name":"English",
+    "brand.sub":"Caspian Seal Survey",
+    "nav.survey":"Survey", "nav.analytics":"Analytics",
+    "st.connecting":"connecting…", "st.ok":"service ok", "st.err":"service error",
+    "st.unreachable":"unreachable", "st.queued":"queued", "st.running":"running",
+
+    "sec.media":"Media", "sec.meta":"Survey metadata", "sec.detect":"Detection",
+    "sec.verify":"Verify", "sec.count":"Count", "sec.caveats":"Caveats",
+    "sec.error":"Error", "sec.rundetail":"Run detail", "sec.perframe":"Per frame",
+
+    "drop.title":"Drop image or video", "drop.sub":"plus .srt / .json sidecar",
+    "drop.loadedImage":"Image loaded", "drop.loadedVideo":"Video loaded",
+    "drop.replace":"click to replace", "drop.uploading":"Uploading…",
+
+    "f.captured":"Captured", "f.altitude":"Altitude m", "f.sensorpx":"Sensor px",
+    "f.sensormm":"Sensor mm", "f.focalmm":"Focal mm", "f.gsd":"GSD cm/px",
+    "f.tide":"Tide", "f.target":"Target", "f.threshold":"Threshold",
+    "f.tiling":"Tiling", "f.every":"Every s", "f.maxframes":"Max frames",
+    "f.minsupport":"Min support",
+
+    "tide.unknown":"unknown", "tide.low":"low", "tide.falling":"falling",
+    "tide.high":"high", "tide.rising":"rising",
+    "tile.auto":"auto (from GSD)", "tile.off":"whole frame",
+
+    "note.gsd":"Altitude alone is only trustworthy on an <b>uncropped native frame</b> — give the camera's sensor width, or an explicit GSD, and scale becomes measured rather than assumed.",
+    "note.verify":"Click an animal to add, click a dot to reject. <b>Both directions matter</b> — rejections are the only false-positive evidence this system ever collects, additions the only recall evidence. Nothing here is calibrated against a ground-truth count, so do not assume the dots on screen are mostly right; check them. Every edit is written to an append-only audit log.",
+    "note.band":"The band is not decoration. Four frames of the same colony 1.5s apart returned counts 25% apart on animals that barely moved — a single number would be false precision.",
+
+    "btn.count":"Count", "btn.verifyOn":"Enable verify mode", "btn.verifyOff":"Exit verify mode",
+
+    "cnt.none":"no run yet", "cnt.best":"best estimate", "cnt.verified":"verified count",
+    "cnt.low":"low", "cnt.high":"high",
+    "cnt.floor":"<b>This count is a floor.</b>",
+    "cnt.noSpread":"One frame, so no spread could be measured — this is not a ±0 count. Recall is unquantified: treat it as a floor.",
+    "cnt.spread":"Frames disagreed by {pct}% — the band is that disagreement, not an error bar.",
+    "cnt.modelSaid":"model said {n}",
+
+    "empty.title":"No media loaded",
+    "empty.body":"Drop a drone still or a video clip. With a DJI <code>.srt</code> sidecar the flight track is read automatically and every detection gets real coordinates.",
+
+    "an.title":"Survey analytics", "an.overtime":"Counts over time",
+    "an.persite":"Per site", "an.latest":"Latest runs",
+    "an.surveys":"surveys", "an.media":"media", "an.runs":"runs", "an.sites":"sites",
+    "an.queued":"queued", "an.failed":"failed",
+    "an.noRuns":"No completed runs yet. This chart is drawn from real survey data only — nothing is generated to fill it.",
+    "an.noSites":"No sites registered yet.", "an.noRunsShort":"No runs yet.",
+    "an.notAdditive":"{n} surveys. Each bar is one survey's best estimate; hover for its band and tide state. <b>These are not additive</b> — repeat surveys of the same haul-out count the same animals again, so there is no total here. <b>Counts are only comparable at similar tide and season</b> — a haul-out empties as the water rises.",
+
+    "th.when":"when", "th.media":"media", "th.best":"best", "th.range":"range",
+    "th.tide":"tide", "th.basis":"basis", "th.site":"site", "th.surveys":"surveys",
+    "th.frame":"#", "th.t":"t", "th.count":"count", "th.reg":"reg",
+    "misc.noTrack":"no track", "misc.trackPoints":"track points",
+    "misc.wholeFrame":"whole frame", "misc.autoTile":"auto tile",
+    "misc.gsdUnknown":"scale unknown",
+    "warn.gsdAssumed":"GSD assumed from image width — only valid for an uncropped native frame.",
+  },
+
+  ru: {
+    "lang.name":"Русский",
+    "brand.sub":"Учёт каспийского тюленя",
+    "nav.survey":"Съёмка", "nav.analytics":"Аналитика",
+    "st.connecting":"подключение…", "st.ok":"сервис работает", "st.err":"ошибка сервиса",
+    "st.unreachable":"недоступен", "st.queued":"в очереди", "st.running":"выполняется",
+
+    "sec.media":"Материал", "sec.meta":"Данные съёмки", "sec.detect":"Обнаружение",
+    "sec.verify":"Проверка", "sec.count":"Численность", "sec.caveats":"Оговорки",
+    "sec.error":"Ошибка", "sec.rundetail":"Детали расчёта", "sec.perframe":"По кадрам",
+
+    "drop.title":"Перетащите фото или видео", "drop.sub":"вместе с .srt / .json",
+    "drop.loadedImage":"Фото загружено", "drop.loadedVideo":"Видео загружено",
+    "drop.replace":"нажмите, чтобы заменить", "drop.uploading":"Загрузка…",
+
+    "f.captured":"Съёмка", "f.altitude":"Высота, м", "f.sensorpx":"Сенсор, пикс",
+    "f.sensormm":"Сенсор, мм", "f.focalmm":"Фокус, мм", "f.gsd":"GSD, см/пикс",
+    "f.tide":"Уровень воды", "f.target":"Объект", "f.threshold":"Порог",
+    "f.tiling":"Разбиение", "f.every":"Шаг, с", "f.maxframes":"Кадров максимум",
+    "f.minsupport":"Мин. подтверждений",
+
+    "tide.unknown":"неизвестно", "tide.low":"отлив", "tide.falling":"убывает",
+    "tide.high":"прилив", "tide.rising":"растёт",
+    "tile.auto":"авто (по GSD)", "tile.off":"весь кадр",
+
+    "note.gsd":"Одной высоте можно доверять только для <b>необрезанного исходного кадра</b>. Укажите ширину сенсора или задайте GSD напрямую — тогда масштаб будет измерен, а не предположен.",
+    "note.verify":"Нажмите на животное, чтобы добавить точку; нажмите на точку, чтобы отклонить её. <b>Важны оба действия</b>: отклонения — единственные данные о ложных срабатываниях, добавления — единственные данные о пропусках. Система не сверена с эталонным подсчётом, поэтому не считайте показанные точки заведомо верными — проверяйте их. Каждая правка пишется в журнал без возможности перезаписи.",
+    "note.band":"Диапазон здесь не для красоты. Четыре кадра одной колонии с интервалом 1,5 с дали значения, расходящиеся на 25 %, хотя животные почти не двигались. Одно число создавало бы ложную точность.",
+
+    "btn.count":"Подсчитать", "btn.verifyOn":"Включить проверку", "btn.verifyOff":"Выйти из проверки",
+
+    "cnt.none":"расчёта ещё не было", "cnt.best":"наиболее вероятно", "cnt.verified":"проверено вручную",
+    "cnt.low":"минимум", "cnt.high":"максимум",
+    "cnt.floor":"<b>Это нижняя граница.</b>",
+    "cnt.noSpread":"Один кадр — разброс измерить невозможно. Это не значит, что погрешность равна нулю. Полнота обнаружения не измерена: считайте значение нижней границей.",
+    "cnt.spread":"Расхождение между кадрами — {pct} %. Диапазон отражает именно это расхождение, а не погрешность измерения.",
+    "cnt.modelSaid":"модель дала {n}",
+
+    "empty.title":"Материал не загружен",
+    "empty.body":"Перетащите снимок с дрона или видеоролик. При наличии файла <code>.srt</code> от DJI трек полёта считывается автоматически, и каждое обнаружение получает реальные координаты.",
+
+    "an.title":"Аналитика учётов", "an.overtime":"Динамика численности",
+    "an.persite":"По участкам", "an.latest":"Последние расчёты",
+    "an.surveys":"съёмок", "an.media":"файлов", "an.runs":"расчётов", "an.sites":"участков",
+    "an.queued":"в очереди", "an.failed":"с ошибкой",
+    "an.noRuns":"Завершённых расчётов пока нет. График строится только по реальным данным — ничего не добавляется для заполнения.",
+    "an.noSites":"Участки пока не заведены.", "an.noRunsShort":"Расчётов пока нет.",
+    "an.notAdditive":"Съёмок: {n}. Каждый столбец — наиболее вероятная оценка одной съёмки; наведите курсор, чтобы увидеть диапазон и уровень воды. <b>Эти значения нельзя складывать</b>: повторные съёмки того же лежбища считают тех же животных заново, поэтому общей суммы здесь нет. <b>Сравнивать можно только съёмки при схожем уровне воды и в один сезон</b> — с приливом лежбище пустеет.",
+
+    "th.when":"когда", "th.media":"файл", "th.best":"оценка", "th.range":"диапазон",
+    "th.tide":"вода", "th.basis":"основа", "th.site":"участок", "th.surveys":"съёмок",
+    "th.frame":"№", "th.t":"время", "th.count":"кол-во", "th.reg":"привязка",
+    "misc.noTrack":"трека нет", "misc.trackPoints":"точек трека",
+    "misc.wholeFrame":"весь кадр", "misc.autoTile":"авторазбиение",
+    "misc.gsdUnknown":"масштаб неизвестен",
+    "warn.gsdAssumed":"GSD рассчитан по ширине изображения — это верно только для необрезанного исходного кадра.",
+  },
+
+  kk: {
+    "lang.name":"Қазақша",
+    "brand.sub":"Каспий итбалығының есебі",
+    "nav.survey":"Түсірілім", "nav.analytics":"Талдау",
+    "st.connecting":"қосылуда…", "st.ok":"қызмет жұмыс істеуде", "st.err":"қызмет қатесі",
+    "st.unreachable":"қолжетімсіз", "st.queued":"кезекте", "st.running":"орындалуда",
+
+    "sec.media":"Материал", "sec.meta":"Түсірілім деректері", "sec.detect":"Анықтау",
+    "sec.verify":"Тексеру", "sec.count":"Саны", "sec.caveats":"Ескертпелер",
+    "sec.error":"Қате", "sec.rundetail":"Есептеу егжей-тегжейі", "sec.perframe":"Кадр бойынша",
+
+    "drop.title":"Сурет немесе бейнені сүйреңіз", "drop.sub":".srt / .json файлымен бірге",
+    "drop.loadedImage":"Сурет жүктелді", "drop.loadedVideo":"Бейне жүктелді",
+    "drop.replace":"ауыстыру үшін басыңыз", "drop.uploading":"Жүктелуде…",
+
+    "f.captured":"Түсірілген", "f.altitude":"Биіктік, м", "f.sensorpx":"Сенсор, пиксель",
+    "f.sensormm":"Сенсор, мм", "f.focalmm":"Фокус, мм", "f.gsd":"GSD, см/пиксель",
+    "f.tide":"Су деңгейі", "f.target":"Нысан", "f.threshold":"Табалдырық",
+    "f.tiling":"Бөлшектеу", "f.every":"Қадам, с", "f.maxframes":"Кадр саны",
+    "f.minsupport":"Ең аз растау",
+
+    "tide.unknown":"белгісіз", "tide.low":"қайту", "tide.falling":"төмендеуде",
+    "tide.high":"толысу", "tide.rising":"көтерілуде",
+    "tile.auto":"авто (GSD бойынша)", "tile.off":"бүкіл кадр",
+
+    "note.gsd":"Тек биіктікке <b>қиылмаған бастапқы кадр</b> үшін ғана сенуге болады. Сенсор енін көрсетіңіз немесе GSD мәнін тікелей беріңіз — сонда масштаб болжанбай, өлшенеді.",
+    "note.verify":"Нүкте қосу үшін жануарды басыңыз, нүктені қабылдамау үшін оны басыңыз. <b>Екі әрекет те маңызды</b>: қабылдамау — жүйедегі жалған анықтау туралы жалғыз дерек, қосу — жіберіп алу туралы жалғыз дерек. Жүйе эталондық санақпен салыстырылмаған, сондықтан экрандағы нүктелерді дұрыс деп санамай, тексеріп шығыңыз. Әрбір түзету өзгертілмейтін журналға жазылады.",
+    "note.band":"Мұндағы диапазон әшекей емес. Бір колонияның 1,5 секунд аралықпен түсірілген төрт кадры, жануарлар қозғалмаса да, 25 % айырмашылығы бар мәндер берді. Жалғыз сан жалған дәлдік жасаған болар еді.",
+
+    "btn.count":"Санау", "btn.verifyOn":"Тексеруді қосу", "btn.verifyOff":"Тексеруден шығу",
+
+    "cnt.none":"есептеу әлі жүргізілмеді", "cnt.best":"ең ықтимал баға", "cnt.verified":"қолмен тексерілді",
+    "cnt.low":"ең аз", "cnt.high":"ең көп",
+    "cnt.floor":"<b>Бұл — төменгі шек.</b>",
+    "cnt.noSpread":"Бір ғана кадр — шашырауды өлшеу мүмкін емес. Бұл қателік нөлге тең дегенді білдірмейді. Толықтығы өлшенбеген: мәнді төменгі шек ретінде қабылдаңыз.",
+    "cnt.spread":"Кадрлар арасындағы айырмашылық — {pct} %. Диапазон дәл осы айырмашылықты көрсетеді, өлшеу қателігін емес.",
+    "cnt.modelSaid":"модель {n} деп берді",
+
+    "empty.title":"Материал жүктелмеген",
+    "empty.body":"Дрон түсірген суретті немесе бейнені сүйреп әкеліңіз. DJI <code>.srt</code> файлы болса, ұшу трегі автоматты түрде оқылып, әрбір анықтау нақты координат алады.",
+
+    "an.title":"Есеп талдауы", "an.overtime":"Сан динамикасы",
+    "an.persite":"Учаскелер бойынша", "an.latest":"Соңғы есептеулер",
+    "an.surveys":"түсірілім", "an.media":"файл", "an.runs":"есептеу", "an.sites":"учаске",
+    "an.queued":"кезекте", "an.failed":"қатемен",
+    "an.noRuns":"Аяқталған есептеулер әзірге жоқ. График тек нақты деректер бойынша салынады — толтыру үшін ештеңе қосылмайды.",
+    "an.noSites":"Учаскелер әзірге тіркелмеген.", "an.noRunsShort":"Есептеулер әзірге жоқ.",
+    "an.notAdditive":"Түсірілім саны: {n}. Әр баған — бір түсірілімнің ең ықтимал бағасы; диапазон мен су деңгейін көру үшін курсорды апарыңыз. <b>Бұл мәндерді қосуға болмайды</b>: сол жатақтың қайталанған түсірілімі сол жануарларды қайта санайды, сондықтан жалпы сома жоқ. <b>Тек ұқсас су деңгейі мен бір маусымдағы түсірілімдерді салыстыруға болады</b> — су көтерілгенде жатақ босайды.",
+
+    "th.when":"уақыты", "th.media":"файл", "th.best":"баға", "th.range":"диапазон",
+    "th.tide":"су", "th.basis":"негізі", "th.site":"учаске", "th.surveys":"түсірілім",
+    "th.frame":"№", "th.t":"уақыт", "th.count":"саны", "th.reg":"байланыс",
+    "misc.noTrack":"трек жоқ", "misc.trackPoints":"трек нүктесі",
+    "misc.wholeFrame":"бүкіл кадр", "misc.autoTile":"автобөлшектеу",
+    "misc.gsdUnknown":"масштаб белгісіз",
+    "warn.gsdAssumed":"GSD сурет ені бойынша болжанды — бұл тек қиылмаған бастапқы кадр үшін дұрыс.",
+  },
+};
+
+let LANG = localStorage.getItem("tulen.lang") || "en";
+if (!I18N[LANG]) LANG = "en";
+
+/** Translate. Falls back to English, then to the key itself, so a missing
+    string is visible in review rather than rendering as blank. */
+function t(key, vars){
+  let s = (I18N[LANG] && I18N[LANG][key]) ?? I18N.en[key] ?? key;
+  if (vars) for (const k in vars) s = s.replaceAll("{"+k+"}", vars[k]);
+  return s;
+}
+
+function applyI18n(){
+  document.documentElement.lang = LANG;
+  for (const el of document.querySelectorAll("[data-i18n]")) {
+    el.innerHTML = t(el.dataset.i18n);
+  }
+  for (const el of document.querySelectorAll("[data-i18n-ph]")) {
+    el.placeholder = t(el.dataset.i18nPh);
+  }
+  // Strings rendered by JS rather than sitting in markup. Guarded because
+  // applyI18n runs once at boot before any run exists, and again on every
+  // language switch when one may.
+  if (typeof renderDropLabel === "function") renderDropLabel();
+  if (typeof renderBand === "function" && S.result) renderBand(S.result);
+  else if (typeof resetBand === "function") resetBand();
+  if (typeof refreshStats === "function") refreshStats();
+}
+
+function setLang(code){
+  if (!I18N[code]) return;
+  LANG = code;
+  localStorage.setItem("tulen.lang", code);
+  // keep the picker in step when the language is set from anywhere but the
+  // picker itself (boot, a deep link, a test)
+  const sel = document.getElementById("lang");
+  if (sel && sel.value !== code) sel.value = code;
+  applyI18n();
+}
+
+const $ = id => document.getElementById(id);
+const S = { media:null, job:null, run:null, result:null, points:[], frames:[], shots:[],
+            frame:0, space:null, verify:false, es:null };
+
+/* Scale provenance. GSD drives the tile size AND every projected lat/lng, so a
+   value derived from a guessed term is not the same fact as a measured one and
+   must not print like one. Only these two are free of guesses; every other
+   label names what the service had to assume. */
+const GSD_TRUSTED = new Set(["explicit","optics"]);
+const GSD_WARN = {
+  assumed_optics:
+    "Camera optics assumed (DJI 1-inch, 13.2mm/8.8mm) — sensor width in px was used, "+
+    "but focal length and sensor size were not. Enter both to make this scale measured.",
+  assumed_native_width:
+    "GSD assumed from image width — only valid for an uncropped native frame.",
+  assumed_native_width_and_optics:
+    "GSD assumed from image width AND from DJI 1-inch optics — valid only for an "+
+    "uncropped native frame off that airframe. Give sensor px, sensor mm and focal mm, "+
+    "or an explicit GSD.",
+  unknown: "No scale recorded for this media.",
+};
+
+function toast(m,ms=2600){const t=$("toast");t.textContent=m;t.classList.add("show");
+  clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove("show"),ms);}
+function showErr(m){$("errSect").classList.toggle("hidden",!m);$("errBox").textContent=m||"";}
+const fmt = n => (n==null?"—":Number(n).toLocaleString());
+
+/* The no-media copy is stashed because the video branch of upload() replaces it
+   with a "frames appear after the count" message. */
+const emptyHtml = () =>
+  `<h3 data-i18n="empty.title">${t("empty.title")}</h3>` +
+  `<p data-i18n="empty.body">${t("empty.body")}</p>`;
+
+/* ------------------------------------------------------------- status */
+async function poll(){
+  try{
+    const r = await fetch(API+"/healthz");
+    const d = await r.json();
+    $("dot").className = "dot " + (d.status==="ok"?"ok":"bad");
+    const q=d.jobs||{};
+    $("statusTxt").textContent = d.status==="ok"
+      ? `${t("st.ok")} · ${q.queued||0} ${t("st.queued")} · ${q.running||0} ${t("st.running")}`
+      : t("st.err");
+  }catch{ $("dot").className="dot bad"; $("statusTxt").textContent=t("st.unreachable"); }
+  setTimeout(poll, 5000);
+}
+
+/* -------------------------------------------------------------- upload */
+function wireDrop(){
+  const d=$("drop");
+  d.onclick=()=>$("file").click();
+  $("file").onchange=e=>e.target.files[0]&&upload(e.target.files[0]);
+  ["dragenter","dragover"].forEach(ev=>document.addEventListener(ev,e=>{e.preventDefault();d.classList.add("over");}));
+  ["dragleave","drop"].forEach(ev=>document.addEventListener(ev,e=>{e.preventDefault();
+    if(ev==="drop"||e.target===document.body)d.classList.remove("over");}));
+  document.addEventListener("drop",e=>{
+    const fs=[...(e.dataTransfer?.files||[])];
+    const side=fs.find(f=>/\.(srt|json)$/i.test(f.name));
+    const main=fs.find(f=>!/\.(srt|json)$/i.test(f.name));
+    if(main) upload(main, side);
+  });
+}
+
+/* The drop zone label is the only thing on screen that answers "what will Count
+   run on", so it is derived from S.media rather than set ad hoc. A failed upload
+   used to reset it to the empty prompt while leaving S.media and an enabled
+   Count button pointed at the previous file - three widgets giving three answers,
+   and a survey record silently attributed to the wrong media. */
+function renderDropLabel(){
+  $("drop").innerHTML = S.media
+    ? `<b>${t(S.media.kind==="video"?"drop.loadedVideo":"drop.loadedImage")}</b>`
+      + `<small>${S.media.filename||t("drop.replace")}</small>`
+    : `<b>${t("drop.title")}</b><small>${t("drop.sub")}</small>`;
+  $("runBtn").disabled=!S.media;
+  if(!S.media){ $("empty").innerHTML=emptyHtml();
+    $("empty").classList.remove("hidden"); $("wrap").classList.add("hidden"); }
+}
+
+async function upload(file, side){
+  showErr("");
+  const fd=new FormData();
+  fd.append("file",file);
+  if(side) fd.append("sidecar",side);
+  for(const [k,id] of [["captured_at","capturedAt"],["altitude_m","altitude"],
+                       ["sensor_width_px","sensorPx"],["sensor_width_mm","sensorMm"],
+                       ["focal_length_mm","focalMm"],["gsd_cm_px","gsd"],["tide_state","tide"]]){
+    const v=$(id).value.trim(); if(v) fd.append(k,v);
+  }
+  $("drop").innerHTML=`<b>${t("drop.uploading")}</b><small>${file.name}</small>`;
+  try{
+    const r=await fetch(API+"/v1/media",{method:"POST",body:fd});
+    const d=await r.json();
+    if(!r.ok) throw new Error(d.detail||d.error||"upload failed");
+    S.media=d; S.run=null; S.points=[]; S.frames=[]; S.shots=[]; S.job=null;
+    S.result=null; S.frame=0; S.space=[d.width,d.height];
+    renderDropLabel();
+    const gsdTxt = d.gsd_cm_px ? `${d.gsd_cm_px.toFixed(2)} cm/px (${d.gsd_source})` : "scale unknown";
+    $("mediaInfo").innerHTML =
+      `${d.filename} · ${d.width}×${d.height}${d.duration_s?` · ${d.duration_s.toFixed(1)}s`:""}<br>`+
+      `${gsdTxt} · auto tile <b>${d.tile_px||"whole frame"}</b>`+
+      (d.track_points?` · <b>${d.track_points}</b> track points`:" · no track");
+    if(!d.gsd_cm_px)
+      $("mediaInfo").innerHTML += `<br><span style="color:var(--warn)">No scale: tiling falls back to a default and no detection can be given coordinates or a density.</span>`;
+    // Whitelist, not blacklist. This warned on exactly one label, so the
+    // `sensor_width` path — pixel width supplied, optics still assumed off a DJI
+    // 1-inch airframe — printed a bare "3.29 cm/px (sensor_width)" that read as
+    // measured. Anything the service has not called explicit or optics contains
+    // at least one guess, and the guess is what has to be on screen.
+    else if(!GSD_TRUSTED.has(d.gsd_source))
+      $("mediaInfo").innerHTML += `<br><span style="color:var(--warn)">${GSD_WARN[d.gsd_source]||"GSD provenance not recorded — treat this scale as assumed."}</span>`;
+    const vid = d.kind==="video";
+    ["rowEvery","rowFrames","rowSupport"].forEach(i=>$(i).classList.toggle("hidden",!vid));
+    $("svg").innerHTML=""; $("strip").classList.add("hidden");
+    document.body.classList.remove("has-strip");
+    $("overlayNote").classList.add("hidden");
+    $("svg").setAttribute("viewBox",`0 0 ${d.width} ${d.height}`);
+    if(vid){
+      // A video URL cannot decode in an <img>; setting it collapsed .wrap to 0x0
+      // and left the stage an unexplained black void for the whole video flow.
+      $("img").removeAttribute("src");
+      $("wrap").classList.add("hidden"); $("empty").classList.remove("hidden");
+      $("empty").innerHTML=`<h3>${t("drop.loadedVideo")}</h3><p>${d.filename} · ${d.width}×${d.height}`+
+        `${d.duration_s?` · ${d.duration_s.toFixed(1)}s`:""}.<br>Frames are sampled when you press `+
+        `Count — the filmstrip and the detections appear then.</p>`;
+    }else{
+      $("img").src=API+d.url;
+      $("empty").classList.add("hidden"); $("wrap").classList.remove("hidden");
+    }
+    resetBand();
+  }catch(e){
+    showErr(String(e.message||e));
+    // Fall back to describing whatever is actually still loaded, so the label and
+    // the Count button never disagree about it.
+    renderDropLabel();
+  }
+}
+
+/* ----------------------------------------------------------------- run */
+function jobParams(){
+  const t=$("tiling").value;
+  return {
+    target:$("target").value.trim()||"seal",
+    threshold:parseFloat($("threshold").value)||0.23,
+    tiling: (t==="auto"||t==="off")?t:parseInt(t,10),
+    sampling:{every_s:parseFloat($("everyS").value)||1.5,
+              max_frames:parseInt($("maxFrames").value,10)||8},
+    consensus:{min_support:parseInt($("minSupport").value,10)||3},
+  };
+}
+
+async function run(){
+  if(!S.media) return;
+  showErr(""); busy(true,"queued…"); resetBand();
+  try{
+    const r=await fetch(API+"/v1/jobs",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({media_id:S.media.id,params:jobParams()})});
+    const d=await r.json();
+    if(!r.ok) throw new Error(d.detail||d.error||"could not queue");
+    S.job=d.job_id;
+    watch(d.job_id);
+  }catch(e){ showErr(String(e.message||e)); busy(false); }
+}
+
+function watch(jobId){
+  if(S.es){S.es.close();S.es=null;}
+  const es=new EventSource(API+`/v1/jobs/${jobId}/events`); S.es=es;
+  es.addEventListener("progress",e=>{
+    const p=JSON.parse(e.data)||{};
+    const pr=p.progress||p;
+    const done=pr.frames_done??0, tot=pr.frames_total??0;
+    $("bar").innerHTML=`<span class="spin"></span><span>${pr.stage||"working"}</span>`+
+      (tot?`<span class="sep"></span><span>frame ${done}/${tot}</span>`:"");
+  });
+  es.addEventListener("done",()=>{es.close();S.es=null;load(jobId);});
+  es.addEventListener("failed",e=>{es.close();S.es=null;busy(false);
+    let m="job failed"; try{m=(JSON.parse(e.data)||{}).error||m;}catch{}
+    showErr(m);});
+  es.onerror=()=>{ // SSE dropped — fall back to polling so a result is never lost
+    es.close(); S.es=null;
+    // The old fallback had no failure path at all: a 404 or an unreachable
+    // service produced a body that was neither done nor failed, so it polled
+    // every 2s forever behind a spinner that never said anything was wrong and a
+    // Count button that stayed disabled until the page was reloaded.
+    let fails=0;
+    busy(true,"live updates dropped — polling");
+    const iv=setInterval(async()=>{
+      try{
+        const res=await fetch(API+`/v1/jobs/${jobId}`);
+        const d=await res.json();
+        if(!res.ok) throw new Error(d.error||d.detail||`job lookup failed (${res.status})`);
+        fails=0;
+        if(d.status==="done"){clearInterval(iv);load(jobId);}
+        else if(d.status==="failed"||d.status==="cancelled"){
+          clearInterval(iv);busy(false);showErr(d.error||`job ${d.status}`);}
+        else if(d.status!=="queued"&&d.status!=="running"){
+          clearInterval(iv);busy(false);showErr("job is in an unrecognised state: "+d.status);}
+      }catch(e){
+        if(++fails>=5){
+          clearInterval(iv);busy(false);
+          showErr("Lost contact with the service and could not recover this job.\n"+
+                  String(e.message||e)+"\nThe job may still be running — reload to check.");
+        }
+      }
+    },2000);
+  };
+}
+
+/* The space the detections live in.
+   For a video the worker downscales before inference, so `quality.width/height`
+   (what the model actually saw, e.g. 1152x2048) is NOT the media size (1440x2560).
+   Driving the overlay off the media size put every dot at 80% of its true
+   position, leaving hundreds of visible animals unmarked. */
+function pointSpace(r){
+  const q=(r&&r.quality)||{};
+  if(q.width&&q.height) return [q.width,q.height];
+  return [S.media?.width||1000, S.media?.height||1000];
+}
+
+function applySpace(r){
+  S.space=pointSpace(r);
+  $("svg").setAttribute("viewBox",`0 0 ${S.space[0]} ${S.space[1]}`);
+}
+
+async function load(jobId){
+  let d;
+  try{ d=await (await fetch(API+`/v1/jobs/${jobId}`)).json(); }
+  catch(e){ busy(false); showErr("could not read the job: "+String(e.message||e)); return; }
+  busy(false);
+  if(d.status!=="done"){ showErr(d.error||d.detail||("job "+(d.status||"is in an unknown state"))); return; }
+  const r=d.result;
+  if(!r||!r.count){ showErr("the job finished but returned no count"); return; }
+  S.run=r.run_id; S.points=r.points||[]; S.result=r; S.frame=0;
+  applySpace(r);
+  renderBand(r); renderDetail(r); renderFrames(r,d.media_id,d.job_id); draw();
+  $("verifySect").classList.remove("hidden");
+  toast(`${fmt(r.count.best)} ${$("target").value} · ${r.seconds?.toFixed?.(1)??"?"}s`);
+  refreshStats();
+}
+
+function busy(on,txt){
+  $("bar").classList.toggle("hidden",!on);
+  if(on)$("bar").innerHTML=`<span class="spin"></span><span>${txt||"working"}</span>`;
+  $("runBtn").disabled=on||!S.media;
+}
+
+/* --------------------------------------------------------------- render */
+function resetBand(){
+  $("cBest").textContent="—"; $("cLbl").textContent=t("cnt.none");
+  $("cRange").classList.add("hidden"); $("cBasis").classList.add("hidden");
+  $("cSpread").classList.add("hidden");
+  $("caveatSect").classList.add("hidden"); $("detailSect").classList.add("hidden");
+  $("framesSect").classList.add("hidden");
+  $("band").classList.remove("verified"); $("band").classList.remove("broken");
+}
+
+/* Whether an operator has touched this run is a fact about the audit log, not an
+   arithmetic coincidence. Comparing verified_count to the model's best said "not
+   verified" for any run whose adds and rejections happened to cancel out, which
+   is exactly the run where the provenance matters most. Point status carries the
+   answer and is already in the payload. */
+function isEdited(r){
+  return (r.points||[]).some(p=>p.status && p.status!=="auto");
+}
+
+function renderBand(r){
+  const c=r.count||{};
+  const edited = isEdited(r);
+  const shown = (edited && r.verified_count!=null) ? r.verified_count : c.best;
+  $("cBest").textContent=fmt(shown);
+  $("cLbl").textContent=edited?t("cnt.verified"):t("cnt.best");
+  $("band").classList.toggle("verified",edited);
+
+  // The range row is shown whenever the service reported one, including when low
+  // and high coincide. Hiding it there left a bare 44px integer on every still
+  // image - the one presentation this product is built to never make.
+  const hasBand = c.low!=null && c.high!=null;
+  $("cRange").classList.toggle("hidden",!hasBand);
+  if(hasBand){ $("cLow").textContent=fmt(c.low); $("cHigh").textContent=fmt(c.high); }
+
+  // A band that does not contain its own best estimate is not a band, and a
+  // number presented confidently while contradicting its own bounds is the worst
+  // failure this system can have. Flag it instead of rendering it as fact.
+  const broken = hasBand && c.best!=null && (c.best<c.low || c.best>c.high);
+  $("band").classList.toggle("broken",broken);
+
+  const sp=$("cSpread"); sp.classList.remove("hidden","measured");
+  if(broken){
+    sp.textContent=`Inconsistent: best (${fmt(c.best)}) falls outside its own `+
+      `${fmt(c.low)}–${fmt(c.high)} band. Do not report this figure.`;
+  }else if(hasBand && c.low!==c.high){
+    const pct = c.best ? Math.round((c.high-c.low)/c.best*100) : null;
+    sp.classList.add("measured");
+    // Not "±": the band is not symmetric about best. A run measured at
+    // 367/367/548 is +181/-0, and writing that as "±49%" claims a lower bound
+    // of 187 that nothing measured - overstating the uncertainty is the same
+    // class of error as understating it.
+    sp.textContent=`spread ${fmt(c.high-c.low)} animals`+
+      (pct!=null?` (${pct}% of best)`:"")+` between frames`;
+  }else if(hasBand){
+    sp.textContent="One frame, so no spread could be measured — this is not a "+
+      "±0 count. Recall is unquantified: treat it as a floor.";
+  }else{
+    sp.textContent="No band reported for this run — the count below cannot be "+
+      "read as an exact figure.";
+  }
+
+  $("cBasis").classList.remove("hidden");
+  $("cBasis").textContent=(c.basis||"").replace(/_/g," ")+(edited?` · model said ${fmt(c.best)}`:"");
+  const cav=r.caveats||[];
+  $("caveatSect").classList.toggle("hidden",!cav.length);
+  if(cav.length) $("caveatBox").innerHTML=t("cnt.floor")+"<br>"+cav.map(c=>"· "+c).join("<br>");
+}
+
+function renderDetail(r){
+  const q=r.quality||{}, e=r.engine||{};
+  const rows=[
+    ["engine", e.name+(e.version?" "+e.version:"")],
+    ["threshold", e.threshold],
+    ["tiling", e.tiling?e.tiling+"px":"whole frame"],
+    ["tiles", q.tiles??"—"],
+    ["seconds", r.seconds?.toFixed?.(1)??"—"],
+    ["points", (r.points||[]).length],
+  ];
+  if(q.tiles_rejected) rows.push(["tiles rejected", q.tiles_rejected]);
+  if(q.malformed_dropped) rows.push(["malformed dropped", q.malformed_dropped]);
+  /* An "elevated" false-positive verdict nobody sees is the same as no verdict.
+     The reasons ride in the tooltip because the label on its own is an
+     adjective, and this product does not ship unexplained adjectives. */
+  if(q.false_positive_risk){
+    const why=(q.false_positive_basis||[]).join(" · ");
+    rows.push(["false positives",
+      `<span title="${why.replace(/"/g,"&quot;")}" style="color:${
+        q.false_positive_risk==="low"?"var(--dim)":"var(--danger)"}">${q.false_positive_risk}</span>`]);
+  }
+  $("detailKv").innerHTML=rows.map(([k,v])=>`<div><span>${k}</span><b>${v}</b></div>`).join("");
+  $("detailSect").classList.remove("hidden");
+}
+
+/* The service names sampled frames in `per_frame[].file` and serves them from
+   /media/{id}/frames/{name}; it has never emitted a `url` field. Filtering on
+   `f.url` meant the filmstrip matched nothing and stayed hidden on every video
+   run ever made, which - because a video's own URL cannot render in an <img> -
+   left the stage completely blank for the whole video flow. */
+/* The job id is part of the path because `frame_00002.jpg` does not identify an
+   image on its own: two runs on the same media at different sampling intervals
+   both have a frame 2, and they are different moments in the clip. Asking for
+   the frame without saying which run wanted it is how a filmstrip ends up
+   showing a later run's images beside this run's counts. */
+function frameSrc(f, mediaId, jobId){
+  if(f.url) return API+f.url;
+  if(!f.file || !mediaId) return null;
+  const name=encodeURIComponent(f.file);
+  return jobId
+    ? `${API}/media/${mediaId}/frames/${encodeURIComponent(jobId)}/${name}`
+    : `${API}/media/${mediaId}/frames/${name}`;
+}
+
+function renderFrames(r, mediaId, jobId){
+  const pf=r.per_frame||[];
+  $("framesSect").classList.toggle("hidden",!pf.length);
+  if(pf.length) $("frameTable").querySelector("tbody").innerHTML=pf.map(f=>
+    `<tr><td>${f.index}</td><td>${(f.t??0).toFixed(1)}s</td><td>${fmt(f.count)}</td>`+
+    `<td style="color:var(--dim)">${(f.registration||f.registered||"—")}</td></tr>`).join("");
+
+  const shots=pf.map(f=>({...f,src:frameSrc(f,mediaId,jobId)})).filter(f=>f.src);
+  S.shots=shots;
+  $("strip").classList.toggle("hidden",!shots.length);
+  document.body.classList.toggle("has-strip",!!shots.length);
+  if(!shots.length) return;
+  const pick=i=>{
+    S.frame=i;
+    [...$("strip").children].forEach((x,n)=>x.classList.toggle("on",n===i));
+    $("img").src=shots[i].src;
+    $("empty").classList.add("hidden"); $("wrap").classList.remove("hidden");
+    draw();
+  };
+  $("strip").innerHTML=shots.map((f,i)=>
+    `<div class="thumb" data-i="${i}" title="frame ${f.index} · ${(f.t??0).toFixed(1)}s · ${fmt(f.count)} detected">`+
+    `<img src="${f.src}" loading="lazy" alt=""><b>${fmt(f.count)}</b></div>`).join("");
+  [...$("strip").children].forEach(t=>t.onclick=()=>pick(+t.dataset.i));
+  pick(Math.min(S.frame||0,shots.length-1));
+}
+
+/* Consensus points are registered onto one reference frame, so they only line up
+   with that frame. Drawing them over frame 3 would invent a correspondence the
+   pipeline never claimed. */
+function isReferenceFrame(){
+  const shots=S.shots||[];
+  if(!shots.length) return true;
+  const ref=(S.result?.quality||{}).reference_frame;
+  if(ref==null) return S.frame===0;
+  return shots[S.frame]?.index===ref;
+}
+
+function draw(){
+  const svg=$("svg"); svg.innerHTML="";
+  const NS="http://www.w3.org/2000/svg";
+  const onRef=isReferenceFrame();
+  $("overlayNote").classList.toggle("hidden",onRef);
+  if(!onRef) return;
+  const w=(S.space&&S.space[0])||S.media?.width||1000;
+  const r=Math.max(3,w*0.0035);
+  for(const p of S.points){
+    if(p.status==="false_positive") continue;
+    const halo=document.createElementNS(NS,"circle");
+    halo.setAttribute("cx",p.x);halo.setAttribute("cy",p.y);halo.setAttribute("r",r*1.9);
+    halo.setAttribute("fill","#000");halo.setAttribute("fill-opacity",".45");
+    const c=document.createElementNS(NS,"circle");
+    c.setAttribute("cx",p.x);c.setAttribute("cy",p.y);c.setAttribute("r",r);
+    c.setAttribute("fill",p.status==="validated"?"#5cc8ff":"#3ddc97");
+    c.setAttribute("stroke",p.status==="validated"?"#fff":"#000");
+    c.setAttribute("stroke-width",p.status==="validated"?"1.4":".7");
+    svg.append(halo,c);
+  }
+}
+
+/* -------------------------------------------------------------- verify */
+function toggleVerify(){
+  S.verify=!S.verify;
+  $("verifyBtn").textContent=S.verify?t("btn.verifyOff"):t("btn.verifyOn");
+  $("verifyBtn").classList.toggle("primary",S.verify);
+  $("wrap").style.cursor=S.verify?"crosshair":"";
+}
+
+async function stageClick(e){
+  if(!S.verify||!S.run) return;
+  // Editing a frame the consensus is not registered to would write points into a
+  // coordinate space the run does not use.
+  if(!isReferenceFrame()){ toast("switch to the reference frame to edit"); return; }
+  const svg=$("svg"),b=svg.getBoundingClientRect();
+  if(!b.width||!b.height) return;
+  const vb=(svg.getAttribute("viewBox")||"0 0 1000 1000").split(/\s+/).map(Number);
+  const x=vb[0]+(e.clientX-b.left)/b.width*vb[2];
+  const y=vb[1]+(e.clientY-b.top)/b.height*vb[3];
+  // Match radius in the same space the points are in, not the media's.
+  const rad=Math.max(8,((S.space&&S.space[0])||S.media?.width||1000)*0.011);
+  let hit=null,best=rad*rad;
+  for(const p of S.points){
+    if(p.status==="false_positive") continue;
+    const d=(p.x-x)**2+(p.y-y)**2; if(d<best){best=d;hit=p;}
+  }
+  const body = hit ? {op:"remove",point_id:hit.id,operator:"web"}
+                   : {op:"add",x,y,operator:"web"};
+  try{
+    const r=await fetch(API+`/v1/runs/${S.run}/points`,{method:"PATCH",
+      headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    const d=await r.json();
+    if(!r.ok) throw new Error(d.detail||d.error||"edit failed");
+    const pts=await (await fetch(API+`/v1/runs/${S.run}/points`)).json();
+    S.points=Array.isArray(pts)?pts:(pts.points||[]);
+    draw();
+    // Re-render the whole band from the refreshed data instead of poking two
+    // elements: patching only the number left the basis line still claiming the
+    // figure was the model's, and left `verified` state to drift out of sync.
+    if(S.result){
+      S.result.points=S.points;
+      S.result.verified_count=(d.verified_count!=null)?d.verified_count:S.result.verified_count;
+      renderBand(S.result); renderDetail(S.result);
+    }
+    showErr("");
+  }catch(e){ showErr(String(e.message||e)); }
+}
+
+/* ----------------------------------------------------------- analytics */
+async function refreshStats(){
+  let d; try{ d=await (await fetch(API+"/v1/stats")).json(); }catch{ return; }
+  const t=d.totals||{};
+  $("statCards").innerHTML=[
+    ["an.surveys",t2.surveys],["an.media",t2.media],["an.runs",t2.runs],
+    ["an.sites",t2.sites],["an.queued",t2.jobs_queued],["an.failed",t2.jobs_failed],
+  ].map(([k,v])=>`<div class="card"><b>${fmt(v)}</b><span>${t(k)}</span></div>`).join("");
+
+  const ot=d.over_time||[];
+  $("overTime").innerHTML = ot.length
+    ? `<div class="chart">${(()=>{const mx=Math.max(...ot.map(o=>o.high||o.best||0),1);
+        return ot.map(o=>`<div class="b" style="height:${Math.max(2,(o.best||0)/mx*100)}%" title="${(o.captured_at||"").slice(0,16)} — best ${o.best} (band ${o.low}–${o.high})${o.tide_state?" · tide "+o.tide_state:""}">${ot.length<=12?`<em>${o.best}</em>`:""}</div>`).join("");})()}</div>
+       <div class="note">${ot.length} surveys. Each bar is one survey's best estimate; hover for its band and tide state.
+       <b>These are not additive</b> — repeat surveys of the same haul-out count the same animals again, so there is no total here.
+       <b>Counts are only comparable at similar tide and season</b> — a haul-out empties as the water rises.</div>`
+    : `<div class="note">${t("an.noRuns")}</div>`;
+
+  // The API reports `latest` as a nested band and `runs` as a count; reading
+  // `latest_count`/`total` - fields it has never sent - left both columns as an
+  // em-dash on every row while the real numbers sat unused in the payload.
+  const ps=d.per_site||[];
+  $("perSite").innerHTML = ps.length
+    ? `<table><thead><tr><th>site</th><th>surveys</th><th>runs</th><th>latest best</th><th>latest band</th><th>last captured</th></tr></thead><tbody>`+
+      ps.map(s=>{
+        const l=s.latest||{};
+        const band = (l.low!=null&&l.high!=null)
+          ? (l.low===l.high?`${fmt(l.low)} · no spread`:`${fmt(l.low)}–${fmt(l.high)}`) : "—";
+        return `<tr><td>${s.name||s.site_id||"—"}</td><td>${fmt(s.surveys)}</td><td>${fmt(s.runs)}</td>
+          <td style="color:var(--accent)">${l.best!=null?fmt(l.best):"—"}</td>
+          <td style="color:var(--dim)">${band}</td>
+          <td style="color:var(--dim)">${(s.last_captured_at||"").slice(0,10)||"—"}</td></tr>`;
+      }).join("")+
+      `</tbody></table>`
+    : `<div class="note">${t("an.noSites")}</div>`;
+
+  const lr=d.latest_runs||[];
+  const outside = r => r.low!=null&&r.high!=null&&r.best!=null&&(r.best<r.low||r.best>r.high);
+  const bad = lr.filter(outside).length;
+  $("latestRuns").innerHTML = lr.length
+    ? `<table><thead><tr><th>when</th><th>media</th><th>best</th><th>band</th><th>tide</th><th>basis</th><th>s</th></tr></thead><tbody>`+
+      lr.map(r=>`<tr><td>${(r.created_at||"").slice(0,16)}</td>
+        <td style="color:var(--muted)">${r.filename||"—"}</td>
+        <td style="color:${outside(r)?"var(--danger)":"var(--accent)"}"${outside(r)?' title="best falls outside its own band — do not report"':""}>${fmt(r.best)}${outside(r)?" ⚠":""}</td>
+        <td style="color:var(--dim)">${fmt(r.low)}–${fmt(r.high)}</td>
+        <td style="color:var(--dim)">${r.tide_state||"—"}</td>
+        <td style="color:var(--dim)">${(r.basis||"").replace(/_/g," ")}</td>
+        <td style="color:var(--dim)">${r.seconds?.toFixed?.(1)??"—"}</td></tr>`).join("")+
+      `</tbody></table>`+
+      (bad?`<div class="warn" style="margin-top:10px">${bad} run(s) marked ⚠ report a best estimate outside their own low–high band. Those counts are not defensible — treat them as a service defect, not a result.</div>`:"")
+    : `<div class="note">${t("an.noRunsShort")}</div>`;
+}
+
+/* ---------------------------------------------------------------- init */
+function show(v){
+  const s=v==="survey";
+  $("view-survey").classList.toggle("on",s);
+  $("view-analytics").classList.toggle("on",!s);
+  $("tabSurvey").classList.toggle("on",s);
+  $("tabAnalytics").classList.toggle("on",!s);
+  if(!s) refreshStats();
+}
+
+wireDrop();
+$("runBtn").onclick=run;
+$("verifyBtn").onclick=toggleVerify;
+$("wrap").addEventListener("click",stageClick);
+$("tabSurvey").onclick=()=>show("survey");
+$("tabAnalytics").onclick=()=>show("analytics");
+document.getElementById("lang").value = LANG;
+document.getElementById("lang").onchange = e => setLang(e.target.value);
+applyI18n();
+poll(); refreshStats();
+</script>
+</body>
+</html>

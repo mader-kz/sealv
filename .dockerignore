@@ -1,0 +1,96 @@
+# Build context filter for the Tulen image.
+#
+# Two jobs here. The obvious one is keeping the upload small — the raw tree is
+# ~2.5 GB and all but ~2 MB of it is either regenerable or actively harmful in
+# the image. The load-bearing one is the checkpoints exclusion: the Dockerfile
+# downloads the weights into vendor/CountGD/checkpoints, and a later
+# `COPY vendor/CountGD/` would overwrite them with whatever the dev machine had
+# (or bloat the context by 1.6 GB to write identical bytes).
+
+# --- virtualenvs -------------------------------------------------------------
+# .venv (MLX/API), .venv-torch, .venv-countgd — ~700 MB each, and built for
+# macOS arm64, so they are not merely redundant but unusable on linux/amd64.
+.venv
+.venv*
+
+# --- python noise ------------------------------------------------------------
+**/__pycache__
+**/*.py[cod]
+**/*.egg-info
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# --- vcs / tooling -----------------------------------------------------------
+.git
+.gitignore
+.github
+.idea
+.vscode
+.DS_Store
+**/.DS_Store
+
+# --- model weights: fetched at build time, never shipped through context -----
+# Both entries matter. The first is the 1.6 GB the Dockerfile downloads itself.
+# The second is 19 MB of COCO val2017 annotations used only by CountGD's
+# training/eval scripts — nothing on the inference path reads it (the sole
+# reference, util/static_data_path.py, points at an unrelated absolute path).
+vendor/CountGD/checkpoints
+vendor/CountGD/config/instances_val2017.json
+
+# Defensive hygiene rather than a fix for anything present today: the vendored
+# clone currently carries no compiled artifacts, and CountGD's CUDA
+# deformable-attention build is deliberately absent — this is a CPU image and
+# models/GroundingDINO/ms_deform_attn.py falls back to its pure-PyTorch path.
+# If someone ever builds those ops locally, they must not leak into the image.
+**/*.whl
+**/*.egg
+**/build/
+**/*.so
+
+# --- things that must not become part of a deploy ----------------------------
+# web/ is the superseded desktop UI; webapp/ is the one the API serves at /.
+# The notebook/PDF patterns are recursive on purpose — the vendored clone
+# carries a 40 KB Colab notebook and a 99 KB paper figure. vendor/CountGD's
+# LICENSE is deliberately NOT excluded: it is a vendored third-party tree and
+# its licence ships with it.
+web
+docs
+README.md
+**/*.ipynb
+**/*.pdf
+
+# yolo11x.pt — 114 MB of an unrelated detector this service never loads.
+yolo11x.pt
+*.pt
+*.pth
+*.onnx
+
+# --- local state -------------------------------------------------------------
+# SQLite lives on the Railway volume at /data. Baking a dev database into the
+# image would ship stale jobs and, worse, seed the volume with rows whose media
+# files do not exist.
+*.db
+*.db-wal
+*.db-shm
+.tulen
+workspace
+runs
+out
+tmp
+*.log
+
+# --- dev-only entrypoints ----------------------------------------------------
+# The container has its own entrypoint; these bind 127.0.0.1 and reference the
+# macOS venvs by path.
+run.sh
+start.sh
+
+# --- sample media ------------------------------------------------------------
+*.mp4
+*.mov
+*.m4v
+*.webm
+*.mkv
+*.avi
+*.srt
