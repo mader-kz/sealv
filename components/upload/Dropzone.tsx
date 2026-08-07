@@ -10,6 +10,10 @@ import type { Footage, TrackPoint } from "@/lib/types";
 import Icon from "@/components/ui/Icon";
 import { Button } from "@/components/ui/primitives";
 
+/** Sample footage bundled with the app so the ingest flow can be tried
+ *  without sourcing a drone file. Real video, real GPS in its metadata. */
+const SAMPLE_CLIP = { url: "/samples/FIELD_0001.MP4", name: "FIELD_0001.MP4" };
+
 function genId(){ return Math.random().toString(36).slice(2,9); }
 
 /** Read the real playback duration out of the file. Resolves null if the
@@ -41,6 +45,7 @@ export default function Dropzone(){
   const setPinPoints = useFootageStore(s=>s.setPinPoints);
   const fileRef = useRef<HTMLInputElement>(null);
   const [pendingVideo, setPendingVideo] = useState<{ file: File, url: string, name: string }|null>(null);
+  const [loadingSample, setLoadingSample] = useState(false);
 
   const processFiles = useCallback(async (files: FileList | File[])=>{
     const arr = Array.from(files as FileList);
@@ -154,6 +159,24 @@ export default function Dropzone(){
     if(e.dataTransfer.files) processFiles(e.dataTransfer.files);
   },[processFiles]);
 
+  /** Pull the bundled sample clip and run it through the normal ingest path —
+   *  same code as a dropped file, so this exercises the real parser rather
+   *  than a shortcut. */
+  const loadSampleClip = useCallback(async ()=>{
+    setLoadingSample(true);
+    setLog("Loading the sample clip…");
+    try {
+      const res = await fetch(SAMPLE_CLIP.url);
+      if(!res.ok) throw new Error(`${res.status}`);
+      const blob = await res.blob();
+      await processFiles([new File([blob], SAMPLE_CLIP.name, { type: "video/mp4" })]);
+    } catch(e:any){
+      setLog(`Could not load the sample clip (${e.message}). It ships at public${SAMPLE_CLIP.url} — check it wasn't removed.`);
+    } finally {
+      setLoadingSample(false);
+    }
+  },[processFiles]);
+
   const onInput = useCallback((e:React.ChangeEvent<HTMLInputElement>)=>{
     if(e.target.files) processFiles(e.target.files);
   },[processFiles]);
@@ -174,6 +197,25 @@ export default function Dropzone(){
         </div>
         <input ref={fileRef} type="file" multiple accept=".mp4,.mov,.avi,.mkv,.webm,.srt,.json" onChange={onInput} className="hidden" />
       </div>
+
+      {/* Nothing to source, nothing to install — a real GPS-tagged clip shipped
+          with the app, so the ingest path can be tried on a bare machine. */}
+      <button
+        onClick={loadSampleClip}
+        disabled={loadingSample}
+        aria-label="Use the sample clip — 38 second drone video with GPS in its metadata"
+        className="w-full flex items-center gap-2 px-2.5 py-2 rounded border border-line bg-surface2 text-left hover:border-ink3 transition-colors disabled:opacity-60 disabled:pointer-events-none"
+      >
+        <Icon name={loadingSample ? "download" : "map"} size={13} className="text-ink3" />
+        <span className="flex-1 min-w-0">
+          <span className="block text-xs text-ink">
+            {loadingSample ? "Loading sample…" : "Use the sample clip"}
+          </span>
+          <span className="block text-2xs text-ink3 truncate">
+            38s drone video, GPS in metadata · Tyuleniy West
+          </span>
+        </span>
+      </button>
 
       <div className="flex gap-1.5 items-center">
         <Button

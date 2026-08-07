@@ -375,7 +375,9 @@ Design tokens (`app/globals.css`):
 
 ## Samples
 
-`samples/` ships test flights so both ingest paths can be exercised without a drone:
+**In the app:** open **Ingest** and click **Use the sample clip** — a real 38-second drone video with GPS in its metadata, bundled at `public/samples/FIELD_0001.MP4` and served by the app. One click runs it through the normal ingest path, so nothing needs to be downloaded or generated first.
+
+`samples/` additionally ships generated test flights so both ingest paths can be exercised from disk:
 
 - `TEST_0100.MP4` — a **real, playable** 3-second clip with the GPS fix written into its container metadata (`loci` box). Drop this one on its own to test location-from-video.
 - `TEST_0100.srt` — 1 Hz DJI-style GPS cues
