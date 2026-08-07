@@ -538,12 +538,37 @@ web/index.html     the entire UI, no build step
 Uploads live in `~/.locateanything-studio/workspace/<id>/` and are never sent
 anywhere — inference is entirely local.
 
-## Licence
+## Licence and third-party components
 
 The **app** in this repo is yours to do as you like with.
 
-The **model** is not. `nvidia/LocateAnything-3B` ships under the NVIDIA License:
-academic and non-profit research use only, **commercial use is not permitted**.
-The MLX conversions inherit that restriction, as do the upstream component
-licences (Qwen2.5-3B-Instruct under the Qwen Research License, MoonViT-SO-400M
-under MIT). Keep that in mind before wiring this into anything that ships.
+### What the deployed service uses
+
+Everything the running service depends on is permissively licensed. Nothing
+here restricts commercial use.
+
+| Component | Role | Licence |
+|---|---|---|
+| [CountGD](https://github.com/niki-amini-naieni/CountGD) | the detector; vendored in `vendor/CountGD/` | MIT |
+| GroundingDINO | inside CountGD — IDEA-Research, with Microsoft and Meta portions | Apache 2.0 |
+| `google-bert/bert-base-uncased` | text encoder, fetched at build | Apache 2.0 |
+| [Natural Earth](https://www.naturalearthdata.com/) 10m land | the Caspian coastline embedded in the map | public domain |
+| PyTorch, torchvision | inference runtime | BSD-3-Clause |
+| transformers, timm, OpenCV | model plumbing | Apache 2.0 |
+| FastAPI, python-multipart | the API | MIT |
+| uvicorn, NumPy, SciPy | server and numerics | BSD-3-Clause |
+| Pillow | image handling | MIT-CMU |
+| Modal client | optional GPU offload | Apache 2.0 |
+
+The coastline is derived data: Natural Earth's 10m land layer, clipped to the
+basin and simplified. Natural Earth places no restrictions on use.
+
+### What the prototype uses, and does not ship
+
+`nvidia/LocateAnything-3B` — the MLX prototype on the `./run.sh` path — is under
+the NVIDIA License: **academic and non-profit research use only, no commercial
+use**. Its components inherit that (Qwen2.5-3B-Instruct under the Qwen Research
+License, MoonViT-SO-400M under MIT).
+
+That restriction applies to the prototype alone. The deployed service does not
+load this model, and the Docker image does not contain it.
