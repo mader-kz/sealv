@@ -114,6 +114,28 @@ Run workflow → enter the tag.
 
 ---
 
+## Versioning
+
+`1.0.0` is a promise that the public API will not break without a major bump —
+not a score out of ten. So the milestones are things the project *earns*, not
+things someone picks when it feels ready:
+
+| Version | Means |
+|---|---|
+| `0.1.0` | Counts, deploys, documented. Precision verified by rendering detections over hand-checked ground. **Recall unmeasured.** Never deployed. |
+| `0.9.0` | Deployed and serving. A real survey has gone through it end to end. API still free to change. |
+| `1.0.0` | Recall measured against at least one hand-counted frame, and the API considered stable. |
+
+The reason `0.1.0` is not `1.0.0` is the same reason the count is a band and not
+an integer, and the same reason `gsd_source` records whether the optics were
+real or assumed: this project does not claim more than it measured. Stamping
+`1.0.0` on something that has never served a request would contradict that in
+the most visible field there is.
+
+Until `1.0.0`, a breaking change bumps the minor version.
+
+---
+
 ## Design notes
 
 **CI does not build the Docker image.** That build pulls ~1.6 GB of weights and
