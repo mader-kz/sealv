@@ -56,7 +56,21 @@ export default function Dropzone(){
     id: string, media: File, sidecar: File | null, footage: Footage,
   ) => {
     try {
-      const up = await uploadMedia(media, sidecar);
+      /* The service georeferences from the track IT holds, not the one the
+         browser parsed. Embedded MP4 GPS and pinned paths exist only client-
+         side, so hand the parsed track over as a JSON sidecar the backend's
+         parser already accepts - that is what turns "562 seals somewhere"
+         into per-animal points, and what lets hydrate() restore the sortie
+         after a reload instead of skipping a record with no geography. */
+      let sc = sidecar;
+      if (!sc && footage.track.length > 0) {
+        sc = new File(
+          [JSON.stringify({ track: footage.track })],
+          "track.json",
+          { type: "application/json" },
+        );
+      }
+      const up = await uploadMedia(media, sc);
       const jobId = await createJob(up.id);
       const result = await watchJob(jobId, p => {
         const t = p.frames_total ?? 0;

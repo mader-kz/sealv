@@ -29,7 +29,7 @@ export type Footage = {
   center: { lat: number; lng: number };
   region: string;
   status: "processing" | "ready" | "error";
-  source: "srt" | "json" | "manual" | "injected" | "test";
+  source: "srt" | "json" | "manual" | "injected" | "test" | "archive";
   videoUrl?: string; // object URL
   /* The honest answer of a real count: a low/best/high range with the method
      that produced it. Absent on test data - the mock never had one, and

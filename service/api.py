@@ -818,6 +818,30 @@ async def get_media(media_id: str):
     return await asyncio.to_thread(load)
 
 
+@app.get("/v1/media/{media_id}/track")
+async def get_media_track(media_id: str):
+    """The flight track, for redrawing a sortie's path after a reload.
+
+    The points were always stored (they are what georeferences a count);
+    until the platform learned to rehydrate its map from the service, nothing
+    outside a worker ever needed to read them back.
+    """
+    def load() -> dict:
+        with _conn() as conn:
+            _media_or_404(conn, media_id)
+            points = db.get_track(conn, media_id)
+        return {
+            "media_id": media_id,
+            "points": [
+                {"t": p.get("t"), "lat": p.get("lat"), "lng": p.get("lng"),
+                 "alt": p.get("alt")}
+                for p in points
+            ],
+        }
+
+    return await asyncio.to_thread(load)
+
+
 def _media_ref(body: dict) -> tuple[str, dict]:
     """Resolve §3's `media` block to an id this service already holds.
 

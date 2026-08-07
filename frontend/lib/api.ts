@@ -197,3 +197,28 @@ export function pointsToDetections(
   }
   return { placed, unplaced };
 }
+
+/* ---------------------------------------------------------------- history */
+/* The store lives in browser memory, but the counts live in the service.
+   These three feed hydrate(): the platform reloads yesterday's surveys the
+   same way it shows today's, so an F5 no longer wipes the map. */
+
+export async function fetchStats(): Promise<any> {
+  return jsonOrThrow(await fetch(`${API}/v1/stats`));
+}
+
+export async function fetchRunPoints(runId: string): Promise<RunResult["points"]> {
+  const d = await jsonOrThrow(await fetch(`${API}/v1/runs/${runId}/points`));
+  return Array.isArray(d) ? d : (d.points ?? []);
+}
+
+export async function fetchTrack(
+  mediaId: string,
+): Promise<Array<{ t: number; lat: number; lng: number; alt?: number | null }>> {
+  const d = await jsonOrThrow(await fetch(`${API}/v1/media/${mediaId}/track`));
+  return (d.points ?? []).filter(
+    (p: any) => Number.isFinite(p.lat) && Number.isFinite(p.lng),
+  );
+}
+
+export const mediaFileUrl = (mediaId: string) => `${API}/media/${mediaId}/file`;

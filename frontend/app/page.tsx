@@ -40,6 +40,12 @@ export default function Page(){
   const selectedId = useFootageStore(s=>s.selectedId);
   const detections = useFootageStore(s=>s.detections);
   const seedTestData = useFootageStore(s=>s.seedTestData);
+  const hydrate = useFootageStore(s=>s.hydrate);
+
+  // Reload the season's counts from the service on boot. hydrate() itself
+  // refuses to run over a non-empty store, which also makes React 18's
+  // strict-mode double-invoke of this effect harmless.
+  useEffect(()=>{ hydrate(); },[hydrate]);
 
   useEffect(()=>{ if(selectedId) setRightPane("inspector"); },[selectedId]);
   // Open the footage list once there's something in it — while empty, the
