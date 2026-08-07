@@ -6,7 +6,7 @@ shapes: the API must always answer, while inference is idle for days and then
 busy for minutes.
 
 ```
-Tulen API + worker + SQLite + webapp   →  Railway / Fly / a VM  (~$5/mo)
+SEALv API + worker + SQLite + webapp   →  Railway / Fly / a VM  (~$5/mo)
         │  countgd_engine.detect_many()
         ▼
 CountGD on GPU                          →  Modal (scale-to-zero, $0 idle)
@@ -25,7 +25,7 @@ network boundary changes the transport, not the design.
 pip install modal
 modal token new                      # once, opens a browser
 
-cd tulen
+cd sealv
 modal run modal_app.py::fetch_weights # once, ~1.6 GB into a Volume
 modal deploy modal_app.py
 ```
@@ -33,7 +33,7 @@ modal deploy modal_app.py
 Then point the service at it:
 
 ```bash
-export TULEN_MODAL_APP=tulen-countgd
+export SEALV_MODAL_APP=tulen-countgd
 ```
 
 That variable is the whole switch. Unset, everything runs locally exactly as
@@ -45,7 +45,7 @@ before — a dev box needs no Modal account and no network.
 client reads credentials from the environment instead:
 
 ```
-TULEN_MODAL_APP=tulen-countgd
+SEALV_MODAL_APP=tulen-countgd
 MODAL_TOKEN_ID=ak-...
 MODAL_TOKEN_SECRET=as-...
 ```
@@ -86,7 +86,7 @@ crops. As 60 round trips, scheduling costs more than the inference. Hence
 `detect_many()` / `detect_batch` — always batch a frame's tiles into one call.
 
 **T4 is deliberate.** CountGD is a Swin-B GroundingDINO derivative. An A10G is
-~1.9× the price for no useful gain at this size. Override with `TULEN_GPU` only
+~1.9× the price for no useful gain at this size. Override with `SEALV_GPU` only
 after measuring.
 
 ---
@@ -137,7 +137,7 @@ Set a spend cap in the Modal dashboard.
 ## Troubleshooting
 
 **`Cls.from_name` raises NotFoundError** — `modal deploy` has not run, or
-`TULEN_MODAL_APP` does not match `APP_NAME` in `modal_app.py`.
+`SEALV_MODAL_APP` does not match `APP_NAME` in `modal_app.py`.
 
 **First call takes 30–60s** — expected. Cold container plus checkpoint load.
 Subsequent calls within `scaledown_window` are warm.

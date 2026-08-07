@@ -1,4 +1,4 @@
-# Build context filter for the Tulen image.
+# Build context filter for the SEALv image.
 #
 # Two jobs here. The obvious one is keeping the upload small — the raw tree is
 # ~2.5 GB and all but ~2 MB of it is either regenerable or actively harmful in
@@ -73,7 +73,7 @@ yolo11x.pt
 *.db
 *.db-wal
 *.db-shm
-.tulen
+.sealv
 workspace
 runs
 out

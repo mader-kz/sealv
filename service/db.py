@@ -1,4 +1,4 @@
-"""SQLite persistence for the Tulen detection service.
+"""SQLite persistence for the SEALv detection service.
 
 The plan (§2) calls for Postgres, and it will be right eventually. It is not
 right yet: the only hard requirement on the store is a job claim that survives
@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator, Optional
 
 SCHEMA_PATH = Path(__file__).resolve().with_name("schema.sql")
-DEFAULT_DB_PATH = Path.home() / ".tulen" / "tulen.db"
+DEFAULT_DB_PATH = Path.home() / ".sealv" / "sealv.db"
 
 JOB_STATUSES = ("queued", "running", "done", "failed", "cancelled")
 TERMINAL_JOB_STATUSES = ("done", "failed", "cancelled")
@@ -76,10 +76,10 @@ def new_id() -> str:
 
 
 def default_db_path() -> Path:
-    """`$TULEN_DB` if set, else ~/.tulen/tulen.db, always absolute.
+    """`$SEALV_DB` if set, else ~/.sealv/sealv.db, always absolute.
 
     Blank counts as unset. A declared-but-empty environment variable - which is
-    what `docker run -e TULEN_DB=` and an emptied platform variable both send -
+    what `docker run -e SEALV_DB=` and an emptied platform variable both send -
     would otherwise become `Path("")`, and `sqlite3.connect("")` quietly opens a
     private temporary database that is deleted when the connection closes. The
     API would then start, the schema would apply, uploads would succeed and
@@ -89,7 +89,7 @@ def default_db_path() -> Path:
     separate processes sharing one file, and a relative path means they share it
     only for as long as they happen to share a working directory.
     """
-    raw = (os.environ.get("TULEN_DB") or "").strip()
+    raw = (os.environ.get("SEALV_DB") or "").strip()
     return (Path(raw).expanduser() if raw else DEFAULT_DB_PATH).resolve()
 
 
@@ -945,23 +945,23 @@ if __name__ == "__main__":
         else:
             check(name, False, f"expected {exc.__name__}, nothing raised")
 
-    tmp = Path(tempfile.mkdtemp(prefix="tulen-db-selftest-"))
-    db_file = tmp / "tulen.db"
+    tmp = Path(tempfile.mkdtemp(prefix="sealv-db-selftest-"))
+    db_file = tmp / "sealv.db"
     try:
         # --- connection ------------------------------------------------
-        os.environ["TULEN_DB"] = str(db_file)
+        os.environ["SEALV_DB"] = str(db_file)
         # Compared resolved: default_db_path resolves, and macOS hands
         # tempfile a /var path that is a symlink to /private/var.
-        check("default_db_path honours $TULEN_DB", default_db_path() == db_file.resolve())
+        check("default_db_path honours $SEALV_DB", default_db_path() == db_file.resolve())
 
-        os.environ["TULEN_DB"] = ""
+        os.environ["SEALV_DB"] = ""
         check(
-            "default_db_path treats a blank $TULEN_DB as unset",
+            "default_db_path treats a blank $SEALV_DB as unset",
             default_db_path() == DEFAULT_DB_PATH.resolve(),
             # Blank would otherwise be Path("") -> sqlite's private temporary
             # database, which discards every write when the connection closes.
         )
-        os.environ["TULEN_DB"] = str(db_file)
+        os.environ["SEALV_DB"] = str(db_file)
 
         conn = connect()
         init_db(conn)
@@ -1403,7 +1403,7 @@ if __name__ == "__main__":
 
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-        os.environ.pop("TULEN_DB", None)
+        os.environ.pop("SEALV_DB", None)
 
     print(f"\n{len(PASSED)} passed, {len(FAILED)} failed")
     if FAILED:

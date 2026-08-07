@@ -37,7 +37,7 @@ __pycache__/
 # --- local runtime state -----------------------------------------------------
 # The database and the survey archive live on the Railway volume at /data. A
 # committed copy would ship stale jobs and rows whose media files do not exist.
-.tulen/
+.sealv/
 workspace/
 runs/
 out/

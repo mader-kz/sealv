@@ -1,4 +1,4 @@
-# Deploying Tulen to Railway
+# Deploying SEALv to Railway
 
 This is the operational guide for putting the Caspian seal detection backend on
 Railway: what the container looks like, what it costs, where it stops scaling,
@@ -14,7 +14,7 @@ projection rather than a measurement it says so.
 **One Railway service. One container. One volume. Two processes inside it.**
 
 ```
-┌─ Railway service "tulen" ──────────────────────────────┐
+┌─ Railway service "sealv" ──────────────────────────────┐
 │                                                        │
 │  PID 1  /app/docker-entrypoint.sh   (bash supervisor)  │
 │    │                                                   │
@@ -28,7 +28,7 @@ projection rather than a measurement it says so.
 │              └─ serves webapp/index.html at /          │
 │                                                        │
 │  /data  ← Railway volume                               │
-│         ├─ tulen.db      (SQLite, WAL)                 │
+│         ├─ sealv.db      (SQLite, WAL)                 │
 │         └─ workspace/    (uploaded media, frames)      │
 └────────────────────────────────────────────────────────┘
 ```
@@ -101,7 +101,7 @@ conn.execute("PRAGMA journal_mode = WAL")
 ```
 
 Split them into two Railway services and each gets its own volume, its own
-`tulen.db`, and its own empty job queue. The API would accept uploads and queue
+`sealv.db`, and its own empty job queue. The API would accept uploads and queue
 jobs into a database no worker can see; `/healthz` would report a healthy system
 with jobs stuck in `queued` forever. Nothing would error — it would just
 silently never work.
@@ -265,8 +265,8 @@ lease expires. This is why uvicorn is a background job and **not** an `exec`:
 watching the workers.
 
 The shutdown path is a ladder: SIGTERM to all children → wait
-`TULEN_SHUTDOWN_GRACE` (10 s) → a second SIGTERM, which `service/worker.py`
-treats as "exit now, drop the claim" → wait `TULEN_SHUTDOWN_ESCALATE` (5 s) →
+`SEALV_SHUTDOWN_GRACE` (10 s) → a second SIGTERM, which `service/worker.py`
+treats as "exit now, drop the claim" → wait `SEALV_SHUTDOWN_ESCALATE` (5 s) →
 SIGKILL. The total (15 s) is deliberately under `railway.json`'s
 `drainingSeconds: 30`, or the platform's own SIGKILL would land first and the
 ladder would never run.
@@ -316,7 +316,7 @@ Two of those are load-bearing and worth understanding rather than trusting:
 `requiredMountPath` is accepted by Railway's config schema and is intended to
 stop a deploy that has no volume at `/data`. It is **not** in Railway's
 config-as-code documentation, so do not lean on it: the container checks the
-same thing itself at boot (`TULEN_REQUIRE_VOLUME`, §7), because a durability
+same thing itself at boot (`SEALV_REQUIRE_VOLUME`, §7), because a durability
 guarantee you cannot verify from inside the process is not a guarantee.
 
 ### The steps
@@ -345,13 +345,13 @@ guarantee you cannot verify from inside the process is not a guarantee.
 
 4. **Set the environment variables** (§7). Railway injects `PORT` itself — do
    not set it. In the common case there is nothing to set at all: the Dockerfile
-   already bakes `TULEN_DATA_DIR=/data` and `COUNTGD_REPO`.
+   already bakes `SEALV_DATA_DIR=/data` and `COUNTGD_REPO`.
 
 5. **Deploy** and watch the logs. A healthy boot logs the entrypoint banner, then
    one line per worker, then uvicorn:
    ```
-   [entrypoint] Tulen starting
-   [entrypoint]   database    : /data/tulen.db
+   [entrypoint] SEALv starting
+   [entrypoint]   database    : /data/sealv.db
    [entrypoint]   workspace   : /data/workspace
    [entrypoint]   bind        : 0.0.0.0:8080
    [entrypoint]   workers     : 1
@@ -384,18 +384,18 @@ guarantee you cannot verify from inside the process is not a guarantee.
 Set these in the Railway service's *Variables* panel. The Dockerfile in §4
 already sets sane defaults for all of them; Railway values override.
 
-The volume is configured by **one** variable, `TULEN_DATA_DIR`. The entrypoint
-derives `TULEN_DB` and `TULEN_WORKSPACE` from it and *exports* them, which is
+The volume is configured by **one** variable, `SEALV_DATA_DIR`. The entrypoint
+derives `SEALV_DB` and `SEALV_WORKSPACE` from it and *exports* them, which is
 what guarantees the API and the workers open the same SQLite file. The
 Dockerfile deliberately does **not** bake the two derived paths as well: the
-entrypoint fills them in only when unset (`${TULEN_DB:-$DATA_DIR/tulen.db}`), so
-an image-level value would win and silently make `TULEN_DATA_DIR` a no-op.
+entrypoint fills them in only when unset (`${SEALV_DB:-$DATA_DIR/sealv.db}`), so
+an image-level value would win and silently make `SEALV_DATA_DIR` a no-op.
 
 | Variable | Value | What reads it |
 |---|---|---|
-| `TULEN_DATA_DIR` | `/data` | The entrypoint script (§5) — the volume root both paths below are derived from |
-| `TULEN_DB` | *(derived: `$TULEN_DATA_DIR/tulen.db`)* | `service/db.py::default_db_path()` — set it only to override the derived path; unset **and** unexported it falls back to `~/.tulen/tulen.db`, which on Railway is ephemeral |
-| `TULEN_WORKSPACE` | *(derived: `$TULEN_DATA_DIR/workspace`)* | `service/api.py` — uploaded media and extracted frames |
+| `SEALV_DATA_DIR` | `/data` | The entrypoint script (§5) — the volume root both paths below are derived from |
+| `SEALV_DB` | *(derived: `$SEALV_DATA_DIR/sealv.db`)* | `service/db.py::default_db_path()` — set it only to override the derived path; unset **and** unexported it falls back to `~/.sealv/sealv.db`, which on Railway is ephemeral |
+| `SEALV_WORKSPACE` | *(derived: `$SEALV_DATA_DIR/workspace`)* | `service/api.py` — uploaded media and extracted frames |
 | `COUNTGD_REPO` | `/app/vendor/CountGD` | `la_studio/countgd_engine.py` — where the checkpoint and config live |
 | `WORKER_CONCURRENCY` | `1` | The entrypoint script (§5) — how many worker processes to spawn |
 | `PORT` | *(do not set)* | Injected by Railway; the entrypoint binds `0.0.0.0:$PORT` |
@@ -412,8 +412,8 @@ Optional tuning, read by `service/worker.py`:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `TULEN_JOB_LEASE_S` | `300` | Seconds a claim survives unrefreshed before another worker recovers the job |
-| `TULEN_JOB_MAX_ATTEMPTS` | `3` | Claims allowed per job before recovery gives up and fails it — bounded so a job that OOM-kills its worker cannot crash-loop the queue forever |
+| `SEALV_JOB_LEASE_S` | `300` | Seconds a claim survives unrefreshed before another worker recovers the job |
+| `SEALV_JOB_MAX_ATTEMPTS` | `3` | Claims allowed per job before recovery gives up and fails it — bounded so a job that OOM-kills its worker cannot crash-loop the queue forever |
 
 Escape hatches. None of these should be set on a healthy deployment, and three
 of them will quietly break it if they are — listed so that a container behaving
@@ -421,16 +421,16 @@ strangely can be checked against them:
 
 | Variable | Default | Effect |
 |---|---|---|
-| `TULEN_PREFLIGHT` | *(unset)* | `warn` downgrades a fatal preflight to a logged banner. The UI then serves past runs and **every new job fails**. For recovering read access while storage or ffmpeg is broken, nothing else |
-| `TULEN_SKIP_PREFLIGHT` | `0` | `1` makes the entrypoint skip its own engine check entirely. Debugging the API in isolation only |
-| `TULEN_REQUIRE_VOLUME` | `/data` *(set by the Dockerfile)* | The path preflight asserts is a **mount point**, not merely a directory. Blank accepts ephemeral storage: the service then runs normally and every survey, run and count is destroyed by the next deploy. Only ever set it blank to smoke-test an image with no volume attached |
+| `SEALV_PREFLIGHT` | *(unset)* | `warn` downgrades a fatal preflight to a logged banner. The UI then serves past runs and **every new job fails**. For recovering read access while storage or ffmpeg is broken, nothing else |
+| `SEALV_SKIP_PREFLIGHT` | `0` | `1` makes the entrypoint skip its own engine check entirely. Debugging the API in isolation only |
+| `SEALV_REQUIRE_VOLUME` | `/data` *(set by the Dockerfile)* | The path preflight asserts is a **mount point**, not merely a directory. Blank accepts ephemeral storage: the service then runs normally and every survey, run and count is destroyed by the next deploy. Only ever set it blank to smoke-test an image with no volume attached |
 | `COUNTGD_PYTHON` | *(unset)* | Overrides the interpreter CountGD is invoked with. Setting it also **disables the torch/transformers pin check** (§1), because `importlib.metadata` can only speak for the running interpreter |
-| `TULEN_MODAL_APP` | *(unset)* | Switches detection to a deployed Modal app (§11). When set, the image needs the `modal` client but none of the local weights, and preflight checks that instead |
-| `TULEN_SHUTDOWN_GRACE` | `10` | Seconds children get on SIGTERM before the second one. Keep the total under `drainingSeconds` (30) |
-| `TULEN_SHUTDOWN_ESCALATE` | `5` | Seconds after that before SIGKILL |
+| `SEALV_MODAL_APP` | *(unset)* | Switches detection to a deployed Modal app (§11). When set, the image needs the `modal` client but none of the local weights, and preflight checks that instead |
+| `SEALV_SHUTDOWN_GRACE` | `10` | Seconds children get on SIGTERM before the second one. Keep the total under `drainingSeconds` (30) |
+| `SEALV_SHUTDOWN_ESCALATE` | `5` | Seconds after that before SIGKILL |
 
 Both fall back to their defaults on an unparseable value rather than refusing to
-start, "because a worker that will not start because `TULEN_JOB_LEASE_S=5m` is a
+start, "because a worker that will not start because `SEALV_JOB_LEASE_S=5m` is a
 survey that does not run."
 
 ---
@@ -580,14 +580,14 @@ duty-cycle, not on the latency number.
 ## 10. The SQLite constraint, and how to lift it
 
 **Current ceiling: one container.** Not one *service*, one *container*. The API
-and every worker must see the same `tulen.db` on the same filesystem, a Railway
+and every worker must see the same `sealv.db` on the same filesystem, a Railway
 volume attaches to exactly one service, and Railway does not offer shared
 filesystems between services. Scaling means a bigger container, up to
 `WORKER_CONCURRENCY` workers, bounded by 3.3 GiB of RAM each.
 
 That is enough for a survey team. It is not enough for many concurrent teams,
 and it has no redundancy: the container is a single point of failure and the
-volume is a single point of data loss. **Take backups of `/data/tulen.db`** —
+volume is a single point of data loss. **Take backups of `/data/sealv.db`** —
 Railway volume backups, or a periodic `sqlite3 .backup` copied to object
 storage.
 
@@ -662,7 +662,7 @@ Not endorsements — each is a different trade:
   per-machine constraint, so it does not solve the SQLite split by itself.
 - **Modal** — per-second serverless GPU with weights baked into the image;
   strong fit for spiky counting. **Already implemented**: `modal_app.py` is in
-  the repo, `countgd_engine.detect()` routes to it when `$TULEN_MODAL_APP` is
+  the repo, `countgd_engine.detect()` routes to it when `$SEALV_MODAL_APP` is
   set, and preflight then checks for the `modal` client instead of the local
   weights. See `docs/DEPLOY_MODAL.md`. The worker keeps its polling loop — only
   the transport behind `detect()` changes, so nothing downstream knows which
@@ -686,7 +686,7 @@ Not endorsements — each is a different trade:
 
 **Symptom.** In the normal case you never see this, because both the build and
 the boot preflight refuse to produce or start such a container (§4, §5). It is
-reachable only with `TULEN_PREFLIGHT=warn` or `TULEN_SKIP_PREFLIGHT=1` set.
+reachable only with `SEALV_PREFLIGHT=warn` or `SEALV_SKIP_PREFLIGHT=1` set.
 
 Jobs go `queued` → `running` → `failed`, and `job.error` names the missing
 piece:
@@ -784,7 +784,7 @@ must restart. Fix the Dockerfile and redeploy.
 **Symptom.** Everything works, then a deploy wipes all media, surveys and runs.
 Or: uploads succeed but the container restarts with a disk-full error.
 
-**Cause.** No volume at `/data`, so `TULEN_DB` and `TULEN_WORKSPACE` resolved
+**Cause.** No volume at `/data`, so `SEALV_DB` and `SEALV_WORKSPACE` resolved
 onto the container's ephemeral layer.
 
 **Diagnose.** `curl .../healthz` and read `engine.problems`. A missing mount
@@ -799,12 +799,12 @@ filesystem and lost on the next deploy
 Reading `workspace` alone is **not** a diagnosis: it says `/data/workspace` in
 both the healthy case and the ephemeral one. The two are indistinguishable by
 path, which is what made this failure silent. Only a home-directory path like
-`/root/.tulen/workspace` tells you the *variable* is wrong rather than the
+`/root/.sealv/workspace` tells you the *variable* is wrong rather than the
 mount.
 
 Preflight refuses to boot on this, so in practice a container that has been up
-for a while has its volume. The check is skipped only if `TULEN_REQUIRE_VOLUME`
-was set blank or `TULEN_PREFLIGHT=warn`.
+for a while has its volume. The check is skipped only if `SEALV_REQUIRE_VOLUME`
+was set blank or `SEALV_PREFLIGHT=warn`.
 
 **Recovery.** There is none. Ephemeral data is gone. Attach the volume, set the
 variables, redeploy, re-upload.
@@ -828,9 +828,9 @@ process behind it. Recovery is a lease, not a heartbeat-free guess:
 
 1. Workers refresh `claimed_at` while they work (`db.heartbeat_job`).
 2. Every `lease/2` seconds, any live worker runs `db.requeue_stale_jobs()`.
-3. A job whose `claimed_at` has stood still longer than `TULEN_JOB_LEASE_S`
+3. A job whose `claimed_at` has stood still longer than `SEALV_JOB_LEASE_S`
    (default 300 s) is re-queued.
-4. After `TULEN_JOB_MAX_ATTEMPTS` (default 3) it is failed permanently, so a job
+4. After `SEALV_JOB_MAX_ATTEMPTS` (default 3) it is failed permanently, so a job
    heavy enough to OOM its worker cannot crash-loop the queue forever.
 
 So expect an OOM job to retry twice and then fail with a recorded reason. If you
@@ -892,7 +892,7 @@ for the API.
 **`no such table`** — the schema is applied by the API's FastAPI lifespan hook
 (`db.init_db`) and by each worker on startup, and `schema.sql` is fully
 `IF NOT EXISTS`. Seeing this means the process is looking at a *different file*
-than the one that was initialized: `TULEN_DB` differs between the API and the
+than the one that was initialized: `SEALV_DB` differs between the API and the
 worker, most likely because it is set on only one of them. Both read the same
 env var, so set it once at the service level.
 

@@ -29,14 +29,14 @@ layer that disappears on the next restart.
 Set these three variables on the service:
 
 ```
-TULEN_MODAL_APP=tulen-countgd
+SEALV_MODAL_APP=tulen-countgd
 MODAL_TOKEN_ID=ak-...
 MODAL_TOKEN_SECRET=as-...
 ```
 
 Read the two token values out of `~/.modal.toml` on the machine where you ran
-`modal token new`. That is the whole list — `TULEN_DATA_DIR=/data` and
-`COUNTGD_REPO` are baked into the image, `TULEN_DB` and `TULEN_WORKSPACE` derive
+`modal token new`. That is the whole list — `SEALV_DATA_DIR=/data` and
+`COUNTGD_REPO` are baked into the image, `SEALV_DB` and `SEALV_WORKSPACE` derive
 from the data dir in the entrypoint, and `PORT` is injected by Railway.
 
 Without the Modal variables the container still works; it falls back to CPU
@@ -59,7 +59,7 @@ missing project rather than the wrong kind of credential.
 
 ```bash
 gh secret set RAILWAY_TOKEN --env production
-gh variable set RAILWAY_SERVICE --body tulen-backend
+gh variable set RAILWAY_SERVICE --body sealv-backend
 gh variable set RAILWAY_HEALTHCHECK_URL --body https://your-app.up.railway.app/healthz
 ```
 

@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 #
-# Tulen — Caspian seal detection backend (FastAPI + CountGD), CPU-only.
+# SEALv — Caspian seal detection backend (FastAPI + CountGD), CPU-only.
 #
 # One container runs BOTH processes. That is not a packaging shortcut: the API
 # and the worker share a single SQLite file in WAL mode, and a Railway volume
@@ -107,7 +107,7 @@ RUN pip install --no-cache-dir \
         hf_transfer \
         modal
 
-# `modal` is the client, not the model. With $TULEN_MODAL_APP set,
+# `modal` is the client, not the model. With $SEALV_MODAL_APP set,
 # countgd_engine forwards inference to a GPU on Modal and this container never
 # loads torch weights at all - which is the recommended split, because CPU
 # inference here is ~2s per still while the box must also stay responsive.
@@ -200,17 +200,17 @@ COPY webapp/ /app/webapp/
 # extracted frames are the only state that must outlive a deploy. Everything
 # else in the image is reproducible.
 #
-# One knob, not three. The entrypoint derives TULEN_DB and TULEN_WORKSPACE from
-# $TULEN_DATA_DIR and exports them, so both processes resolve the same files.
-# Baking TULEN_DB/TULEN_WORKSPACE here as well would look like belt and braces
+# One knob, not three. The entrypoint derives SEALV_DB and SEALV_WORKSPACE from
+# $SEALV_DATA_DIR and exports them, so both processes resolve the same files.
+# Baking SEALV_DB/SEALV_WORKSPACE here as well would look like belt and braces
 # and in fact silently disable the knob: the entrypoint fills them in only when
-# unset (`${TULEN_DB:-$DATA_DIR/tulen.db}`), so an image-level value wins and
-# TULEN_DATA_DIR=/srv/tulen would move nothing. Either variable may still be set
+# unset (`${SEALV_DB:-$DATA_DIR/sealv.db}`), so an image-level value wins and
+# SEALV_DATA_DIR=/srv/sealv would move nothing. Either variable may still be set
 # at deploy time to override an individual path.
 #
-# TULEN_REQUIRE_VOLUME is the assertion that /data is a real mount and not just
+# SEALV_REQUIRE_VOLUME is the assertion that /data is a real mount and not just
 # a directory. It has to be stated here because it is only true of a container:
-# on a dev box ~/.tulen is a plain directory and the question is meaningless.
+# on a dev box ~/.sealv is a plain directory and the question is meaningless.
 # Nothing else catches a forgotten volume — mkdir succeeds, the write probe
 # passes, uploads work, /healthz says ok, and the whole survey archive is
 # deleted by the next deploy. railway.json declares the same requirement as
@@ -220,8 +220,8 @@ COPY webapp/ /app/webapp/
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     COUNTGD_REPO=/app/vendor/CountGD \
-    TULEN_DATA_DIR=/data \
-    TULEN_REQUIRE_VOLUME=/data
+    SEALV_DATA_DIR=/data \
+    SEALV_REQUIRE_VOLUME=/data
 
 # The mount point has to exist for a volume to be mounted over it, and creating
 # it here rather than at boot keeps the entrypoint's `mkdir` from being the
@@ -238,13 +238,13 @@ RUN mkdir -p /data
 #
 # version() reports "<name>/<bytes>", which is how a run records which weights
 # produced a count; printing it puts that identity in the build log.
-# TULEN_REQUIRE_VOLUME is blanked for this one command. `probe_writes=False`
+# SEALV_REQUIRE_VOLUME is blanked for this one command. `probe_writes=False`
 # skips the write probe but NOT the mount-point assertion, which is gated
 # separately by that variable - and a mount point cannot exist during a build,
 # only at `docker run`. Left set, this check fails every build with a message
 # about an unattached volume, which is true and irrelevant here. The runtime
 # entrypoint still asserts it, which is where the answer is meaningful.
-RUN TULEN_REQUIRE_VOLUME= python -c "\
+RUN SEALV_REQUIRE_VOLUME= python -c "\
 from service import preflight; \
 from la_studio import countgd_engine as e; \
 p = preflight.check(probe_writes=False); \
@@ -279,5 +279,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 # writability probe reports that condition explicitly if it ever changes.
 #
 # No CMD: the entrypoint takes no arguments and is configured entirely through
-# the environment ($PORT, $WORKER_CONCURRENCY, $TULEN_DATA_DIR).
+# the environment ($PORT, $WORKER_CONCURRENCY, $SEALV_DATA_DIR).
 ENTRYPOINT ["/app/docker-entrypoint.sh"]

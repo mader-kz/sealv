@@ -1,4 +1,4 @@
--- Tulen detection backend schema.
+-- SEALv detection backend schema.
 --
 -- SQLite with WAL. Single-node worker pool for now; every construct here maps
 -- 1:1 onto Postgres if this needs to scale out (the only change is the job

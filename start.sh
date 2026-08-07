@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tulen — detection API + worker + web app, in one process group.
+# SEALv — detection API + worker + web app, in one process group.
 #
 # Both processes live here rather than in two services because they share one
 # SQLite file: the API writes the job, the worker claims it, and WAL only
@@ -9,8 +9,8 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-export TULEN_DB="${TULEN_DB:-$HOME/.tulen/tulen.db}"
-mkdir -p "$(dirname "$TULEN_DB")"
+export SEALV_DB="${SEALV_DB:-$HOME/.sealv/sealv.db}"
+mkdir -p "$(dirname "$SEALV_DB")"
 
 # The dev box keeps runtime dependencies in .venv. A container installs them
 # into the system interpreter and has no venv at all, so the venv is a
@@ -35,7 +35,7 @@ API=$!
 # shell and orphans a worker that is mid-count.
 trap 'kill "$WORKER" "$API" 2>/dev/null || true' INT TERM
 
-echo "==> Tulen  http://${HOST}:${PORT}"
+echo "==> SEALv  http://${HOST}:${PORT}"
 
 # Neither half is useful alone: an API with no worker accepts uploads and queues
 # jobs that never run, and a worker with no API has nothing feeding it. In one

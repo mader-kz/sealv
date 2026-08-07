@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Tulen — Caspian Seal Survey</title>
+<title>SEALv — Caspian Seal Survey</title>
 <style>
   :root{
     --bg:#080a0c; --panel:#0e1114; --panel-2:#141920; --line:#1f262e;
@@ -185,7 +185,7 @@
       <path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3"/>
       <circle cx="12" cy="12" r="2.6"/>
     </svg>
-    <span>Tulen<em>.</em></span>
+    <span>SEALv<em>.</em></span>
     <small data-i18n="brand.sub">Caspian Seal Survey</small>
   </div>
   <nav>
@@ -343,7 +343,7 @@ const API = location.origin;
    otherwise Kazakh screen is worse than no translation at all.
 
    Terminology note: the seal is `тюлень` in Russian and `итбалық` in Kazakh.
-   The product name "Tulen" comes from the Russian word, not the Kazakh one. */
+   The product name "SEALv" comes from the Russian word, not the Kazakh one. */
 const I18N = {
   en: {
     "lang.name":"English",
@@ -520,7 +520,7 @@ const I18N = {
   },
 };
 
-let LANG = localStorage.getItem("tulen.lang") || "en";
+let LANG = localStorage.getItem("sealv.lang") || "en";
 if (!I18N[LANG]) LANG = "en";
 
 /** Translate. Falls back to English, then to the key itself, so a missing
@@ -551,7 +551,7 @@ function applyI18n(){
 function setLang(code){
   if (!I18N[code]) return;
   LANG = code;
-  localStorage.setItem("tulen.lang", code);
+  localStorage.setItem("sealv.lang", code);
   // keep the picker in step when the language is set from anywhere but the
   // picker itself (boot, a deep link, a test)
   const sel = document.getElementById("lang");

@@ -23,7 +23,7 @@ stderr and the process refuses to start. On a platform that health-checks a
 rollout, refusing to start is what fails the rollout and leaves the previous
 working release serving - the correct outcome for an image that cannot count.
 
-`TULEN_PREFLIGHT=warn` downgrades fatal to logged. It exists for one situation:
+`SEALV_PREFLIGHT=warn` downgrades fatal to logged. It exists for one situation:
 storage or ffmpeg is broken and an operator needs the read-only half of the UI
 (past runs, past counts, the archive) while they fix it. The banner prints on
 every start either way, so nothing is ever silently degraded.
@@ -52,7 +52,7 @@ from la_studio import frames as frames_mod  # noqa: E402
 
 from . import db  # noqa: E402
 
-DEFAULT_WORKSPACE = Path.home() / ".tulen" / "workspace"
+DEFAULT_WORKSPACE = Path.home() / ".sealv" / "workspace"
 
 # A truncated download and a git-lfs pointer file both leave something on disk
 # that `is_file()` is perfectly happy with: a few hundred bytes where 1.2GB was
@@ -116,7 +116,7 @@ def workspace_path() -> Path:
     the file-serving routes would start missing the moment anything ran from
     somewhere else - the worker, a shell, a one-off script.
     """
-    return (_env_path("TULEN_WORKSPACE") or DEFAULT_WORKSPACE).resolve()
+    return (_env_path("SEALV_WORKSPACE") or DEFAULT_WORKSPACE).resolve()
 
 
 # -------------------------------------------------------------------- checks
@@ -137,9 +137,9 @@ def _check_remote_engine(problems: list[Problem]) -> None:
 
     if find_spec("modal") is None:
         problems.append(Problem(
-            f"$TULEN_MODAL_APP is set to {countgd_engine.MODAL_APP!r} but the "
+            f"$SEALV_MODAL_APP is set to {countgd_engine.MODAL_APP!r} but the "
             "modal client is not installed",
-            "pip install modal, or unset $TULEN_MODAL_APP to run the model in "
+            "pip install modal, or unset $SEALV_MODAL_APP to run the model in "
             "this container (which then needs the ~1.6GB of local weights)",
         ))
 
@@ -234,7 +234,7 @@ def _probe_write(where: Path, label: str, problems: list[Problem]) -> None:
     """
     try:
         where.mkdir(parents=True, exist_ok=True)
-        marker = where / f".tulen-preflight-{os.getpid()}"
+        marker = where / f".sealv-preflight-{os.getpid()}"
         marker.write_bytes(b"")
         marker.unlink()
     except OSError as exc:
@@ -256,14 +256,14 @@ def _check_volume(problems: list[Problem]) -> None:
     nothing anywhere having reported a problem. Read-only and wrong-uid mounts
     announce themselves on the first write; a missing one never does.
 
-    `$TULEN_REQUIRE_VOLUME` names the path that has to be a mount point. The
+    `$SEALV_REQUIRE_VOLUME` names the path that has to be a mount point. The
     Dockerfile sets it to /data, matching `deploy.requiredMountPath` in
     railway.json - which is a Railway-side declaration this process cannot
     verify, so it is restated here where it can be. Unset on a dev box, where
-    ~/.tulen is a plain directory and the question is meaningless; blank unsets
+    ~/.sealv is a plain directory and the question is meaningless; blank unsets
     it again, for deliberately running the image with no volume attached.
     """
-    required = _env_path("TULEN_REQUIRE_VOLUME")
+    required = _env_path("SEALV_REQUIRE_VOLUME")
     if required is None:
         return
     # ismount() compares st_dev with the parent's, which is what actually
@@ -277,7 +277,7 @@ def _check_volume(problems: list[Problem]) -> None:
             "written to the container's own filesystem and lost on the next "
             "deploy",
             f"attach the volume with its mount path set to {required}, or set "
-            "$TULEN_REQUIRE_VOLUME empty to accept ephemeral storage on purpose",
+            "$SEALV_REQUIRE_VOLUME empty to accept ephemeral storage on purpose",
         ))
 
 
@@ -412,7 +412,7 @@ def require(component: str, *, db_path: Optional[Path] = None) -> None:
         )
         return
 
-    lenient = (os.environ.get("TULEN_PREFLIGHT") or "").strip().lower() == "warn"
+    lenient = (os.environ.get("SEALV_PREFLIGHT") or "").strip().lower() == "warn"
     rule = "=" * 72
     lines = [
         "",
@@ -427,12 +427,12 @@ def require(component: str, *, db_path: Optional[Path] = None) -> None:
     lines.append(rule)
     if lenient:
         lines.append(
-            "  TULEN_PREFLIGHT=warn is set, so this process is starting anyway. "
+            "  SEALV_PREFLIGHT=warn is set, so this process is starting anyway. "
             "Jobs will fail."
         )
     else:
         lines.append(
-            "  Set TULEN_PREFLIGHT=warn to start anyway (the UI will serve past "
+            "  Set SEALV_PREFLIGHT=warn to start anyway (the UI will serve past "
             "runs; new jobs will fail)."
         )
     lines.append("")

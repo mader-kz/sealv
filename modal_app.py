@@ -9,7 +9,7 @@ compute and scales to zero between sorties.
 
 Split of responsibility:
 
-    Tulen API + worker + SQLite   -> a small always-on host (Railway, Fly, a VM)
+    SEALv API + worker + SQLite   -> a small always-on host (Railway, Fly, a VM)
     CountGD inference             -> here, on a GPU, only while a job is running
 
 That split is free because `la_studio/countgd_engine.py` already runs CountGD in
@@ -44,8 +44,8 @@ APP_NAME = "tulen-countgd"
 
 # T4 is deliberate. CountGD is a Swin-B GroundingDINO derivative; it does not
 # need an A10G, which costs ~1.9x for no useful gain at this model size.
-# Override with TULEN_GPU if a sortie ever proves otherwise - and measure first.
-GPU = os.environ.get("TULEN_GPU", "T4")
+# Override with SEALV_GPU if a sortie ever proves otherwise - and measure first.
+GPU = os.environ.get("SEALV_GPU", "T4")
 
 WEIGHTS_DIR = "/weights"
 REPO_DIR = "/root/CountGD"

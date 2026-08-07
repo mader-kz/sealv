@@ -169,14 +169,14 @@ def version() -> "str | None":
 #
 # Modal runs the same model on a GPU and scales to zero between sorties, which
 # suits a workload that is idle for days and then busy for minutes. It is opt-in
-# via $TULEN_MODAL_APP so a dev box keeps working with no network and no account.
+# via $SEALV_MODAL_APP so a dev box keeps working with no network and no account.
 #
 # The local path is a subprocess because torch 2.2.1 cannot share an interpreter
 # with the transformers 5.x the rest of the tree needs. Swapping that process
 # boundary for a network one changes the transport, not the contract - both
 # return the identical dict, so nothing downstream knows which ran.
 
-MODAL_APP = (os.environ.get("TULEN_MODAL_APP") or "").strip()
+MODAL_APP = (os.environ.get("SEALV_MODAL_APP") or "").strip()
 
 
 def remote_enabled() -> bool:

@@ -1,6 +1,6 @@
-"""HTTP surface for the Tulen detection service.
+"""HTTP surface for the SEALv detection service.
 
-Section 3 of `docs/DETECTION_BACKEND_PLAN.md` is the contract Tulen already
+Section 3 of `docs/DETECTION_BACKEND_PLAN.md` is the contract SEALv already
 codes against, so the response shapes here reproduce it verbatim rather than
 improve on it.
 
@@ -61,7 +61,7 @@ _SURVEY_KEYS = {
     "tide_state", "sea_ice_pct", "operator", "notes",
 }
 
-# $TULEN_WORKSPACE, absolute, or ~/.tulen/workspace. Resolved in one place -
+# $SEALV_WORKSPACE, absolute, or ~/.sealv/workspace. Resolved in one place -
 # `preflight.workspace_path` - because the worker writes each job's frames and
 # tile crops under the media file this directory holds, and two definitions that
 # disagreed would put a run's evidence somewhere the API cannot serve it. It is
@@ -101,9 +101,9 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="Tulen detection service", lifespan=lifespan)
+app = FastAPI(title="SEALv detection service", lifespan=lifespan)
 
-# Permissive by design: this service sits behind Tulen's own front end for now,
+# Permissive by design: this service sits behind SEALv's own front end for now,
 # and Phase 5 of the plan is where auth and origin pinning arrive.
 app.add_middleware(
     CORSMiddleware,

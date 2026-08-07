@@ -1,4 +1,4 @@
-# Tulen
+# SEALv
 
 Aerial survey counting for Caspian seals. Drop in a drone still or a video and
 get back a count you can defend: a **low / best / high band**, every detection
@@ -42,12 +42,12 @@ Push a tag and CI deploys it.
 **Locally**, in a container:
 
 ```bash
-docker build -t tulen .
-docker run -p 8090:8090 -v tulen-data:/data tulen
+docker build -t sealv .
+docker run -p 8090:8090 -v sealv-data:/data sealv
 ```
 
 The UI is at <http://127.0.0.1:8090>. Weights are baked in at build time, so the
-container runs with no network. Set `TULEN_MODAL_APP` plus the two Modal token
+container runs with no network. Set `SEALV_MODAL_APP` plus the two Modal token
 variables to offload inference to a GPU instead of running it on CPU.
 
 ## What's in here
@@ -55,6 +55,16 @@ variables to offload inference to a GPU instead of running it on CPU.
 `service/` is the API, database and worker; `webapp/` is the operator UI;
 `la_studio/` is the detection engine plus the MLX prototype this grew out of;
 `modal_app.py` is the GPU side; `vendor/CountGD/` is the vendored detector.
+
+### The web platform lives on `old-codebase`
+
+This branch is the detection half. The Next.js platform — Caspian chart on
+MapLibre, sortie ingest, analytics, forecasting and reporting — is on the
+[`old-codebase`](../../tree/old-codebase) branch, with its own README.
+
+The two halves fit together: the platform reads flight tracks and plots
+observations but its detections are synthetic (`lib/mock/detections.ts`), and
+this branch is the real counting engine that fills exactly that gap.
 
 ---
 

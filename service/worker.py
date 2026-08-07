@@ -68,7 +68,7 @@ def log(message: str) -> None:
 
 def _env(name: str, default: float, cast=float):
     """Environment override that refuses to die on a typo - a worker that will
-    not start because `TULEN_JOB_LEASE_S=5m` is a survey that does not run."""
+    not start because `SEALV_JOB_LEASE_S=5m` is a survey that does not run."""
     raw = os.environ.get(name)
     if not raw:
         return default
@@ -359,7 +359,7 @@ def default_worker_id() -> str:
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m service.worker",
-        description="Claim and run Tulen detection jobs.",
+        description="Claim and run SEALv detection jobs.",
     )
     parser.add_argument(
         "--once",
@@ -382,16 +382,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument(
         "--lease",
         type=float,
-        default=_env("TULEN_JOB_LEASE_S", DEFAULT_LEASE_S),
+        default=_env("SEALV_JOB_LEASE_S", DEFAULT_LEASE_S),
         help="seconds a claim survives unrefreshed before the job is recovered "
-             f"(default {DEFAULT_LEASE_S:g}, $TULEN_JOB_LEASE_S)",
+             f"(default {DEFAULT_LEASE_S:g}, $SEALV_JOB_LEASE_S)",
     )
     parser.add_argument(
         "--max-attempts",
         type=int,
-        default=int(_env("TULEN_JOB_MAX_ATTEMPTS", DEFAULT_MAX_ATTEMPTS, int)),
+        default=int(_env("SEALV_JOB_MAX_ATTEMPTS", DEFAULT_MAX_ATTEMPTS, int)),
         help="claims allowed per job before recovery gives up and fails it "
-             f"(default {DEFAULT_MAX_ATTEMPTS}, $TULEN_JOB_MAX_ATTEMPTS)",
+             f"(default {DEFAULT_MAX_ATTEMPTS}, $SEALV_JOB_MAX_ATTEMPTS)",
     )
     args = parser.parse_args(argv)
 

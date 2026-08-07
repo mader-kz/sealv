@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tulen - container entrypoint: N detection workers plus the FastAPI app, supervised.
+# SEALv - container entrypoint: N detection workers plus the FastAPI app, supervised.
 #
 # Railway gives a service one container and attaches a volume to that one
 # container. The API and the workers share a single SQLite file over WAL, so
@@ -51,13 +51,13 @@ _here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -f "$_here/service/api.py" ]]; then
   APP_DIR="$_here"
 else
-  APP_DIR="${TULEN_APP_DIR:-$PWD}"
+  APP_DIR="${SEALV_APP_DIR:-$PWD}"
 fi
 cd "$APP_DIR" || die "cannot enter app directory: $APP_DIR"
 [[ -f service/api.py && -f service/worker.py ]] \
-  || die "no service/ package under $APP_DIR - set \$TULEN_APP_DIR to the app root"
+  || die "no service/ package under $APP_DIR - set \$SEALV_APP_DIR to the app root"
 
-PYTHON="${TULEN_PYTHON:-python}"
+PYTHON="${SEALV_PYTHON:-python}"
 command -v "$PYTHON" >/dev/null 2>&1 || die "interpreter not on PATH: $PYTHON"
 
 # Unbuffered because these logs go to a pipe, where Python would otherwise block
@@ -74,10 +74,10 @@ export PYTHONDONTWRITEBYTECODE=1
 # disagreed, jobs would be accepted into one file and polled for in another -
 # the "queued forever" failure again, this time with no crash to point at.
 # Exporting is what guarantees agreement, since `db.default_db_path()` reads
-# $TULEN_DB and `api.WORKSPACE` reads $TULEN_WORKSPACE.
-DATA_DIR="${TULEN_DATA_DIR:-/data}"
-export TULEN_DB="${TULEN_DB:-$DATA_DIR/tulen.db}"
-export TULEN_WORKSPACE="${TULEN_WORKSPACE:-$DATA_DIR/workspace}"
+# $SEALV_DB and `api.WORKSPACE` reads $SEALV_WORKSPACE.
+DATA_DIR="${SEALV_DATA_DIR:-/data}"
+export SEALV_DB="${SEALV_DB:-$DATA_DIR/sealv.db}"
+export SEALV_WORKSPACE="${SEALV_WORKSPACE:-$DATA_DIR/workspace}"
 
 PORT="${PORT:-8090}"
 [[ "$PORT" =~ ^[0-9]+$ ]] && (( PORT > 0 && PORT < 65536 )) \
@@ -92,8 +92,8 @@ WORKER_CONCURRENCY="${WORKER_CONCURRENCY:-1}"
 # Seconds to let children wind down on SIGTERM before escalating. Keep this
 # comfortably below Railway's drainingSeconds (railway.json sets 30) or the
 # platform's SIGKILL lands first and the ladder below never runs.
-SHUTDOWN_GRACE="${TULEN_SHUTDOWN_GRACE:-10}"
-SHUTDOWN_ESCALATE="${TULEN_SHUTDOWN_ESCALATE:-5}"
+SHUTDOWN_GRACE="${SEALV_SHUTDOWN_GRACE:-10}"
+SHUTDOWN_ESCALATE="${SEALV_SHUTDOWN_ESCALATE:-5}"
 
 # --------------------------------------------------------- volume + preflight
 
@@ -101,13 +101,13 @@ SHUTDOWN_ESCALATE="${TULEN_SHUTDOWN_ESCALATE:-5}"
 # create a database on the container's ephemeral layer if the mount is missing -
 # which loses every survey on the next deploy. Create the paths, then prove they
 # are writable, so a bad mount fails here instead of at the first upload.
-mkdir -p -- "$(dirname -- "$TULEN_DB")" "$TULEN_WORKSPACE" \
+mkdir -p -- "$(dirname -- "$SEALV_DB")" "$SEALV_WORKSPACE" \
   || die "cannot create directories under $DATA_DIR - either the volume is not
      mounted there, or it is not writable by uid $(id -u). Railway volumes are
      created root-owned, so a non-root USER in the Dockerfile needs the mount
      point chown-ed to it."
 
-for dir in "$(dirname -- "$TULEN_DB")" "$TULEN_WORKSPACE"; do
+for dir in "$(dirname -- "$SEALV_DB")" "$SEALV_WORKSPACE"; do
   probe="$dir/.write-probe.$$"
   if ! : >"$probe" 2>/dev/null; then
     die "not writable: $dir (volume mounted read-only, or owned by another uid?)"
@@ -117,8 +117,8 @@ done
 
 engine_state="unchecked"
 engine_detail=""
-if [[ "${TULEN_SKIP_PREFLIGHT:-0}" == "1" ]]; then
-  log "preflight skipped (TULEN_SKIP_PREFLIGHT=1)"
+if [[ "${SEALV_SKIP_PREFLIGHT:-0}" == "1" ]]; then
+  log "preflight skipped (SEALV_SKIP_PREFLIGHT=1)"
 else
   # ffmpeg is not optional: la_studio/frames.py shells out to it and raises
   # without it, so every video job would fail one at a time, at runtime.
@@ -159,7 +159,7 @@ PY
        checkpoint:   $engine_ckpt $( [[ -f "$engine_ckpt" ]] && echo '(present)' || echo '(MISSING)')
        text encoder: $engine_bert $( [[ -d "$engine_bert" ]] && echo '(present)' || echo '(MISSING)')
      The 1.6GB of weights cannot be committed to git, so the image has to fetch
-     them at build time; see the Dockerfile. Set TULEN_SKIP_PREFLIGHT=1 to boot
+     them at build time; see the Dockerfile. Set SEALV_SKIP_PREFLIGHT=1 to boot
      anyway (useful only for debugging the API in isolation)."
   fi
   engine_detail="$engine_ckpt"
@@ -167,11 +167,11 @@ fi
 
 # ------------------------------------------------------------------ start-up
 
-log "Tulen starting"
+log "SEALv starting"
 log "  app dir     : $APP_DIR"
 log "  python      : $(command -v "$PYTHON")"
-log "  database    : $TULEN_DB"
-log "  workspace   : $TULEN_WORKSPACE"
+log "  database    : $SEALV_DB"
+log "  workspace   : $SEALV_WORKSPACE"
 log "  bind        : 0.0.0.0:$PORT"
 log "  workers     : $WORKER_CONCURRENCY"
 log "  engine      : ${engine_state}${engine_detail:+ ($engine_detail)}"
@@ -195,11 +195,11 @@ declare -A CHILD_NAME=()
 track() { CHILD_PIDS+=("$1"); CHILD_NAME["$1"]="$2"; }
 
 # Workers first, so the queue has consumers before the API can put anything in
-# it. --db is passed explicitly even though $TULEN_DB would be picked up anyway:
+# it. --db is passed explicitly even though $SEALV_DB would be picked up anyway:
 # it makes the resolved path visible in `ps` and immune to a child that somehow
 # starts with a different environment.
 for (( i = 1; i <= WORKER_CONCURRENCY; i++ )); do
-  "$PYTHON" -m service.worker --worker-id "w$i" --db "$TULEN_DB" &
+  "$PYTHON" -m service.worker --worker-id "w$i" --db "$SEALV_DB" &
   track "$!" "worker w$i"
   log "started worker w$i (pid $!)"
 done

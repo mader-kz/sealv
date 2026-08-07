@@ -1,6 +1,6 @@
 # Detection Backend — Plan
 
-The counting service that Tulen (the Caspian seal survey platform) calls instead
+The counting service that SEALv (the Caspian seal survey platform) calls instead
 of `mockDetections()`.
 
 Everything below is grounded in measurements taken on real footage — a 720×1280
@@ -38,7 +38,7 @@ without a source are ones we took ourselves; see `README.md` for method.
 ## 2. Target architecture
 
 ```
-Tulen (Next.js)
+SEALv (Next.js)
    │  POST /v1/jobs        ← enqueue, returns job_id
    │  GET  /v1/jobs/{id}   ← poll status
    │  GET  /v1/jobs/{id}/events (SSE)
@@ -76,7 +76,7 @@ UI already speaks.
 
 ## 3. API contract
 
-This is the part Tulen depends on, so it is the part to agree first.
+This is the part SEALv depends on, so it is the part to agree first.
 
 ### `POST /v1/jobs`
 
@@ -144,7 +144,7 @@ This is the part Tulen depends on, so it is the part to agree first.
 integer would be false precision, and it is the single most common way a
 counting product becomes untrustworthy.
 
-**`status` per point** matches Tulen's existing `auto | validated |
+**`status` per point** matches SEALv's existing `auto | validated |
 false_positive` so operator edits round-trip without translation.
 
 ---
@@ -206,7 +206,7 @@ Fall back to the current default when altitude is absent.
 **Phase 1 — service skeleton (2–3 d)**
 Postgres schema, job queue with `FOR UPDATE SKIP LOCKED`, `POST /v1/jobs` +
 `GET /v1/jobs/{id}`, one warm CountGD worker. Images only. Returns the three-number
-count. *Done when Tulen can replace `mockDetections()` for a still.*
+count. *Done when SEALv can replace `mockDetections()` for a still.*
 
 **Phase 2 — video + consensus (2–3 d)**
 Frame sampling, per-frame detection, affine registration, consensus band, SSE
@@ -214,19 +214,19 @@ progress. Port `consensus.py` and `tiling.py` unchanged — both are tested.
 *Done when a sortie returns low/best/high.*
 
 **Phase 3 — geo + auto-config (1–2 d)**
-Ingest the DJI track (reuse Tulen's SRT parser rather than rewriting it),
+Ingest the DJI track (reuse SEALv's SRT parser rather than rewriting it),
 pixel→lat/lng per point, GSD auto-tiling. *Done when points land on the map.*
 
 **Phase 4 — verification round-trip (2 d)**
 Persist edits to the `edit` log, expose `PATCH /v1/runs/{id}/points`, recompute
-verified totals. Wire Tulen's existing bulk-validate UI to it. *Done when a
+verified totals. Wire SEALv's existing bulk-validate UI to it. *Done when a
 verified count survives a refresh.*
 
 **Phase 5 — hardening (2–3 d)**
 Auth, rate limits, object storage, retries, dead-letter, structured logs,
 Docker + CUDA image. Load test with a full sortie.
 
-Roughly **two weeks** to something Tulen can depend on. Phase 1 alone unblocks
+Roughly **two weeks** to something SEALv can depend on. Phase 1 alone unblocks
 their integration.
 
 ---
@@ -261,6 +261,6 @@ pinned stack is frozen there.*
 
 ## 8. Explicitly out of scope
 
-Model training or fine-tuning, forecasting (Tulen owns it), map rendering,
+Model training or fine-tuning, forecasting (SEALv owns it), map rendering,
 report generation, and multi-species classification. This service counts one
 target class in one piece of media and reports how confident it is.
