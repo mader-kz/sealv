@@ -24,6 +24,30 @@
 
   --good: #6aa88a;
   --bad: #c0685f;
+
+  /* shadcn/ui semantic tokens, aliased onto the tokens above so library
+     components inherit this design system instead of shipping their own.
+     `accent` is deliberately NOT bridged: here it is the amber brand colour,
+     while shadcn uses the same word for a quiet hover surface - the generated
+     components were pointed at `muted` instead. */
+  --background: var(--bg);
+  --foreground: var(--ink);
+  --card: var(--surface);
+  --card-foreground: var(--ink);
+  --popover: var(--surface-2);
+  --popover-foreground: var(--ink);
+  --primary: var(--accent);
+  --primary-foreground: var(--accent-ink);
+  --secondary: var(--surface-2);
+  --secondary-foreground: var(--ink);
+  --muted: var(--surface-2);
+  --muted-foreground: var(--ink-2);
+  --destructive: var(--bad);
+  --destructive-foreground: #ffffff;
+  --border: var(--line);
+  --input: var(--line);
+  --ring: var(--accent);
+  --radius: 0.5rem;
 }
 
 * {
