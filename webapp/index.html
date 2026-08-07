@@ -227,7 +227,7 @@
     <button id="tabMap" data-i18n="nav.map">Map</button>
     <button id="tabAnalytics" data-i18n="nav.analytics">Analytics</button>
   </nav>
-  <select id="lang" title="Language" style="margin-left:auto;background:var(--panel-2);border:1px solid var(--line);border-radius:7px;padding:5px 8px;font-size:12px;color:var(--text);outline:none;cursor:pointer"><option value="en">English</option><option value="ru">Русский</option><option value="kk">Қазақша</option></select><div class="status" style="margin-left:14px"><span class="dot" id="dot"></span><span id="statusTxt" data-i18n="st.connecting">connecting…</span></div>
+  <select id="lang" style="margin-left:auto;background:var(--panel-2);border:1px solid var(--line);border-radius:7px;padding:5px 8px;font-size:12px;color:var(--text);outline:none;cursor:pointer"><option value="en">English</option><option value="ru">Русский</option><option value="kk">Қазақша</option></select><div class="status" style="margin-left:14px"><span class="dot" id="dot"></span><span id="statusTxt" data-i18n="st.connecting">connecting…</span></div>
 </header>
 
 <!-- ============================================================ SURVEY -->
@@ -308,7 +308,7 @@
       </div>
       <div class="wrap hidden" id="wrap"><img id="img" alt=""><svg id="svg" preserveAspectRatio="none"></svg></div>
       <div class="bar hidden" id="bar"></div>
-      <div class="bar hidden" id="overlayNote" style="top:auto;bottom:14px">
+      <div class="bar hidden" id="overlayNote" style="top:auto;bottom:14px" data-i18n="overlay.refOnly">
         detections are registered onto the reference frame — not shown on this one
       </div>
     </div>
@@ -320,7 +320,7 @@
       <h2 data-i18n="sec.count">Count</h2>
       <div class="band" id="band">
         <div class="best" id="cBest">—</div>
-        <div class="lbl" id="cLbl">no run yet</div>
+        <div class="lbl" id="cLbl" data-i18n="cnt.none">no run yet</div>
         <div class="range hidden" id="cRange">
           <div><i id="cLow">—</i><u data-i18n="cnt.low">low</u></div>
           <div><i id="cHigh">—</i><u data-i18n="cnt.high">high</u></div>
@@ -407,6 +407,61 @@ const API = location.origin;
    The product name "SEALv" comes from the Russian word, not the Kazakh one. */
 const I18N = {
   en: {
+    "basis.single":"one frame",
+    "basis.singleTiles":"one frame, {n} of {total} tiles searched",
+    "basis.union":"combined from {n} frames",
+    "basis.consensus":"confirmed across {n} frames",
+    "tide.low":"low water", "tide.falling":"falling", "tide.high":"high water", "tide.rising":"rising", "tide.unknown":"unknown",
+    "gsdsrc.explicit":"entered by hand", "gsdsrc.optics":"from camera optics",
+    "gsdsrc.altitude":"from altitude", "gsdsrc.altitude_m":"from altitude",
+    "gsdsrc.sensor_width":"partly assumed", "gsdsrc.assumed_optics":"optics assumed",
+    "gsdsrc.assumed_native_width":"assumed from image width",
+    "gsdsrc.assumed_native_width_and_optics":"assumed twice over",
+    "stage.queued":"queued", "stage.starting":"starting", "stage.sampling":"reading frames",
+    "stage.detect":"finding animals", "stage.consensus":"comparing frames",
+    "stage.writing":"saving", "stage.working":"working",
+    "risk.low":"low", "risk.elevated":"elevated", "risk.high":"high",
+    "prog.frame":"frame {done} of {total}",
+    "st.polling":"live updates dropped — checking every 2 s",
+    "err.jobFailed":"the count failed",
+    "err.jobRead":"could not read the result",
+    "err.jobState":"the count is in an unexpected state: {s}",
+    "err.noCount":"the count finished but returned no number — this is a service defect",
+    "err.lostContact":"Lost contact with the service.",
+    "err.lostContactHint":"The count may still be running — reload the page to check.",
+    "toast.animals":"animal|animals",
+    "toast.refFrame":"switch to the reference frame to edit points",
+    "thumb.title":"frame {i} · {t} s · {n} found",
+    "overlay.refOnly":"points are pinned to the reference frame — not shown on this one",
+    "empty.videoHint":"Frames are read when you press Count — the filmstrip and the found animals appear then.",
+    "cnt.inconsistent":"Inconsistent: the estimate {best} falls outside its own {low}–{high} range. Do not report this figure.",
+    "cnt.spreadTxt":"the count moved by {n} {a} between frames",
+    "cnt.spreadPct":"{pct}% of the estimate",
+    "cnt.oneFrame":"One frame only, so no between-frame spread could be measured. Animals under water are not counted — treat this as a minimum.",
+    "cnt.noBandTxt":"No range was recorded for this count — do not read the number as exact.",
+    "detail.engine":"engine", "detail.threshold":"sensitivity threshold", "detail.tiling":"tiling",
+    "detail.tiles":"tiles", "detail.seconds":"seconds", "detail.points":"points",
+    "detail.tilesRejected":"tiles rejected", "detail.malformed":"malformed dropped",
+    "detail.falsePos":"false-positive risk",
+    "misc.cmpx":"cm/px", "misc.sec":" s",
+    "misc.trackPoints":"track point|track points",
+    "warn.noScale":"No scale: tiling falls back to a default and detections get no coordinates.",
+    "warn.gsdOptics":"Camera optics were assumed (DJI 1-inch). Pick your drone model or enter sensor and focal length to make the scale measured.",
+    "warn.gsdNativeWidth":"Scale assumed from image width — only valid for an uncropped original frame.",
+    "warn.gsdNativeBoth":"Scale assumed from both image width and default optics. Pick your drone model to fix this.",
+    "warn.gsdNone":"No scale recorded for this file.",
+    "warn.gsdUnrecorded":"Scale provenance not recorded — treat it as assumed.",
+    "an.tipBest":"estimate {best} (range {low}–{high})",
+    "an.chartNote":"{n} {s}. Each bar is one survey's estimate; hover for its range and water level.",
+    "an.notAdditiveHead":"Do not add these up",
+    "an.notAdditiveBody":"repeat surveys of the same haul-out see the same animals again, and counts are only comparable at a similar water level and season.",
+    "an.noSpread":"no spread",
+    "an.outsideTitle":"the estimate falls outside its own range — do not report it",
+    "an.defectWarn":"{n} count(s) marked ⚠ have an estimate outside their own range. That is a service defect, not a result.",
+    "th.site":"site", "th.surveys":"surveys", "th.runs":"counts", "th.best":"estimate",
+    "th.band":"range", "th.when":"when", "th.media":"file", "th.tide":"water",
+    "th.basis":"method", "th.seconds":"s", "th.latestBest":"latest estimate",
+    "th.latestBand":"latest range", "th.lastCaptured":"last survey",
     "nav.map":"Map",
     "map.title":"Caspian survey map",
     "map.sites":"Survey sites",
@@ -442,8 +497,8 @@ const I18N = {
     "f.tiling":"Tiling", "f.every":"Every s", "f.maxframes":"Max frames",
     "f.minsupport":"Min support",
 
-    "tide.unknown":"unknown", "tide.low":"low", "tide.falling":"falling",
-    "tide.high":"high", "tide.rising":"rising",
+    
+    
     "tile.auto":"auto (from GSD)", "tile.off":"whole frame",
 
     "note.gsd":"Altitude alone is only trustworthy on an <b>uncropped native frame</b> — give the camera's sensor width, or an explicit GSD, and scale becomes measured rather than assumed.",
@@ -464,22 +519,77 @@ const I18N = {
 
     "an.title":"Survey analytics", "an.overtime":"Counts over time",
     "an.persite":"Per site", "an.latest":"Latest runs",
-    "an.surveys":"surveys", "an.media":"media", "an.runs":"runs", "an.sites":"sites",
+    "an.surveys":"survey|surveys", "an.media":"media", "an.runs":"runs", "an.sites":"sites",
     "an.queued":"queued", "an.failed":"failed",
     "an.noRuns":"No completed runs yet. This chart is drawn from real survey data only — nothing is generated to fill it.",
     "an.noSites":"No sites registered yet.", "an.noRunsShort":"No runs yet.",
     "an.notAdditive":"{n} surveys. Each bar is one survey's best estimate; hover for its band and tide state. <b>These are not additive</b> — repeat surveys of the same haul-out count the same animals again, so there is no total here. <b>Counts are only comparable at similar tide and season</b> — a haul-out empties as the water rises.",
 
-    "th.when":"when", "th.media":"media", "th.best":"best", "th.range":"range",
-    "th.tide":"tide", "th.basis":"basis", "th.site":"site", "th.surveys":"surveys",
+    "th.range":"range",
+    
     "th.frame":"#", "th.t":"t", "th.count":"count", "th.reg":"reg",
-    "misc.noTrack":"no track", "misc.trackPoints":"track points",
+    "misc.noTrack":"no track", 
     "misc.wholeFrame":"whole frame", "misc.autoTile":"auto tile",
     "misc.gsdUnknown":"scale unknown",
     "warn.gsdAssumed":"GSD assumed from image width — only valid for an uncropped native frame.",
   },
 
   ru: {
+    "basis.single":"по одному кадру",
+    "basis.singleTiles":"по одному кадру, просмотрено {n} из {total} участков",
+    "basis.union":"объединение {n} кадров",
+    "basis.consensus":"подтверждено по {n} кадрам",
+    "tide.low":"низкая вода", "tide.falling":"вода уходит", "tide.high":"высокая вода", "tide.rising":"вода прибывает", "tide.unknown":"неизвестно",
+    "gsdsrc.explicit":"введён вручную", "gsdsrc.optics":"по оптике камеры",
+    "gsdsrc.altitude":"по высоте полёта", "gsdsrc.altitude_m":"по высоте полёта",
+    "gsdsrc.sensor_width":"частично предположен", "gsdsrc.assumed_optics":"оптика предположена",
+    "gsdsrc.assumed_native_width":"предположен по ширине кадра",
+    "gsdsrc.assumed_native_width_and_optics":"предположен дважды",
+    "stage.queued":"в очереди", "stage.starting":"запуск", "stage.sampling":"читаем кадры",
+    "stage.detect":"ищем животных", "stage.consensus":"сравниваем кадры",
+    "stage.writing":"сохраняем", "stage.working":"выполняется",
+    "risk.low":"низкий", "risk.elevated":"повышенный", "risk.high":"высокий",
+    "prog.frame":"кадр {done} из {total}",
+    "st.polling":"живая связь прервалась — проверяем каждые 2 с",
+    "err.jobFailed":"подсчёт не удался",
+    "err.jobRead":"не удалось прочитать результат",
+    "err.jobState":"подсчёт в неожиданном состоянии: {s}",
+    "err.noCount":"подсчёт завершился, но не вернул число — это дефект сервиса",
+    "err.lostContact":"Связь с сервисом потеряна.",
+    "err.lostContactHint":"Подсчёт, возможно, ещё идёт — перезагрузите страницу.",
+    "toast.animals":"животное|животных|животных",
+    "toast.refFrame":"для правки переключитесь на опорный кадр",
+    "thumb.title":"кадр {i} · {t} с · найдено {n}",
+    "overlay.refOnly":"точки привязаны к опорному кадру — на этом не показываются",
+    "empty.videoHint":"Кадры будут прочитаны после нажатия «Подсчитать» — тогда появятся лента кадров и найденные животные.",
+    "cnt.inconsistent":"Противоречие: оценка {best} выходит за собственный диапазон {low}–{high}. Не используйте эту цифру в отчёте.",
+    "cnt.spreadTxt":"между кадрами счёт менялся на {n} {a}",
+    "cnt.spreadPct":"{pct}% от оценки",
+    "cnt.oneFrame":"Кадр один, разброс между кадрами измерить не по чему. Животные под водой не посчитаны — считайте это минимумом.",
+    "cnt.noBandTxt":"Диапазон для этого подсчёта не записан — не считайте число точным.",
+    "detail.engine":"движок", "detail.threshold":"порог чувствительности", "detail.tiling":"разбиение",
+    "detail.tiles":"участков кадра", "detail.seconds":"секунд", "detail.points":"точек",
+    "detail.tilesRejected":"участков отброшено", "detail.malformed":"битых отброшено",
+    "detail.falsePos":"риск ложных находок",
+    "misc.cmpx":"см/пикс", "misc.sec":" с",
+    "misc.trackPoints":"точка маршрута|точки маршрута|точек маршрута",
+    "warn.noScale":"Масштаб неизвестен: разбиение возьмётся по умолчанию, а находки останутся без координат.",
+    "warn.gsdOptics":"Оптика камеры предположена (DJI 1-дюйм). Выберите модель дрона или введите сенсор и фокус — масштаб станет измеренным.",
+    "warn.gsdNativeWidth":"Масштаб предположен по ширине кадра — верно только для необрезанного оригинала.",
+    "warn.gsdNativeBoth":"Масштаб предположен и по ширине кадра, и по оптике по умолчанию. Выберите модель дрона.",
+    "warn.gsdNone":"Для этого файла масштаб не записан.",
+    "warn.gsdUnrecorded":"Происхождение масштаба не записано — считайте его предположенным.",
+    "an.tipBest":"оценка {best} (диапазон {low}–{high})",
+    "an.chartNote":"{n} {s}. Каждый столбик — оценка одной съёмки; наведите, чтобы увидеть диапазон и уровень воды.",
+    "an.notAdditiveHead":"Не складывайте эти числа",
+    "an.notAdditiveBody":"повторные съёмки одного лежбища видят одних и тех же животных, а сравнивать подсчёты можно только при похожем уровне воды и сезоне.",
+    "an.noSpread":"без разброса",
+    "an.outsideTitle":"оценка выходит за собственный диапазон — не используйте её в отчёте",
+    "an.defectWarn":"Подсчётов с меткой ⚠: {n} — оценка вне собственного диапазона. Это дефект сервиса, а не результат.",
+    "th.site":"участок", "th.surveys":"съёмок", "th.runs":"подсчётов", "th.best":"оценка",
+    "th.band":"диапазон", "th.when":"когда", "th.media":"файл", "th.tide":"вода",
+    "th.basis":"способ", "th.seconds":"с", "th.latestBest":"последняя оценка",
+    "th.latestBand":"последний диапазон", "th.lastCaptured":"последняя съёмка",
     "nav.map":"Карта",
     "map.title":"Карта учётов по Каспию",
     "map.sites":"Площадки учёта",
@@ -487,9 +597,9 @@ const I18N = {
     "map.hint":"колесо — масштаб, перетаскивание — сдвиг",
     "map.legSite":"площадка учёта",
     "map.legDet":"детекция",
-    "map.animals":"животных",
-    "map.surveys":"облётов",
-    "map.runs":"прогонов",
+    "map.animals":"животное|животных|животных",
+    "map.surveys":"съёмка|съёмки|съёмок",
+    "map.runs":"подсчёт|подсчёта|подсчётов",
     "map.noBand":"подсчёта ещё не было",
     "map.noSites":"Пока ни у одной площадки нет координат. Добавьте площадку с широтой и долготой или загрузите съёмку с треком DJI SRT.",
     "map.hidden":"Скрыто площадок: {n} — координаты не заданы",
@@ -515,8 +625,8 @@ const I18N = {
     "f.tiling":"Разбиение", "f.every":"Шаг, с", "f.maxframes":"Кадров максимум",
     "f.minsupport":"Мин. подтверждений",
 
-    "tide.unknown":"неизвестно", "tide.low":"отлив", "tide.falling":"убывает",
-    "tide.high":"прилив", "tide.rising":"растёт",
+    
+    
     "tile.auto":"авто (по GSD)", "tile.off":"весь кадр",
 
     "note.gsd":"Одной высоте можно доверять только для <b>необрезанного исходного кадра</b>. Укажите ширину сенсора или задайте GSD напрямую — тогда масштаб будет измерен, а не предположен.",
@@ -537,22 +647,77 @@ const I18N = {
 
     "an.title":"Аналитика учётов", "an.overtime":"Динамика численности",
     "an.persite":"По участкам", "an.latest":"Последние расчёты",
-    "an.surveys":"съёмок", "an.media":"файлов", "an.runs":"расчётов", "an.sites":"участков",
+    "an.surveys":"съёмка|съёмки|съёмок", "an.media":"файл|файла|файлов", "an.runs":"подсчёт|подсчёта|подсчётов", "an.sites":"участок|участка|участков",
     "an.queued":"в очереди", "an.failed":"с ошибкой",
     "an.noRuns":"Завершённых расчётов пока нет. График строится только по реальным данным — ничего не добавляется для заполнения.",
     "an.noSites":"Участки пока не заведены.", "an.noRunsShort":"Расчётов пока нет.",
     "an.notAdditive":"Съёмок: {n}. Каждый столбец — наиболее вероятная оценка одной съёмки; наведите курсор, чтобы увидеть диапазон и уровень воды. <b>Эти значения нельзя складывать</b>: повторные съёмки того же лежбища считают тех же животных заново, поэтому общей суммы здесь нет. <b>Сравнивать можно только съёмки при схожем уровне воды и в один сезон</b> — с приливом лежбище пустеет.",
 
-    "th.when":"когда", "th.media":"файл", "th.best":"оценка", "th.range":"диапазон",
-    "th.tide":"вода", "th.basis":"основа", "th.site":"участок", "th.surveys":"съёмок",
+    "th.range":"диапазон",
+    
     "th.frame":"№", "th.t":"время", "th.count":"кол-во", "th.reg":"привязка",
-    "misc.noTrack":"трека нет", "misc.trackPoints":"точек трека",
+    "misc.noTrack":"трека нет", 
     "misc.wholeFrame":"весь кадр", "misc.autoTile":"авторазбиение",
     "misc.gsdUnknown":"масштаб неизвестен",
     "warn.gsdAssumed":"GSD рассчитан по ширине изображения — это верно только для необрезанного исходного кадра.",
   },
 
   kk: {
+    "basis.single":"бір кадр бойынша",
+    "basis.singleTiles":"бір кадр бойынша, {total} бөліктің {n} қаралды",
+    "basis.union":"{n} кадрдың біріктірілуі",
+    "basis.consensus":"{n} кадр бойынша расталды",
+    "tide.low":"су деңгейі төмен", "tide.falling":"су қайтып барады", "tide.high":"су деңгейі жоғары", "tide.rising":"су көтеріліп жатыр", "tide.unknown":"белгісіз",
+    "gsdsrc.explicit":"қолмен енгізілген", "gsdsrc.optics":"камера оптикасы бойынша",
+    "gsdsrc.altitude":"ұшу биіктігі бойынша", "gsdsrc.altitude_m":"ұшу биіктігі бойынша",
+    "gsdsrc.sensor_width":"ішінара болжанған", "gsdsrc.assumed_optics":"оптика болжанған",
+    "gsdsrc.assumed_native_width":"кадр ені бойынша болжанған",
+    "gsdsrc.assumed_native_width_and_optics":"екі рет болжанған",
+    "stage.queued":"кезекте", "stage.starting":"іске қосылуда", "stage.sampling":"кадрлар оқылуда",
+    "stage.detect":"жануарларды іздеу", "stage.consensus":"кадрларды салыстыру",
+    "stage.writing":"сақтау", "stage.working":"орындалуда",
+    "risk.low":"төмен", "risk.elevated":"жоғарылау", "risk.high":"жоғары",
+    "prog.frame":"{total} кадрдың {done}-і",
+    "st.polling":"тікелей байланыс үзілді — әр 2 с сайын тексереміз",
+    "err.jobFailed":"есептеу сәтсіз аяқталды",
+    "err.jobRead":"нәтижені оқу мүмкін болмады",
+    "err.jobState":"есептеу күтпеген күйде: {s}",
+    "err.noCount":"есептеу аяқталды, бірақ сан қайтармады — бұл сервис ақауы",
+    "err.lostContact":"Сервиспен байланыс үзілді.",
+    "err.lostContactHint":"Есептеу әлі жүріп жатқан болуы мүмкін — бетті қайта жүктеңіз.",
+    "toast.animals":"жануар",
+    "toast.refFrame":"өңдеу үшін тірек кадрға ауысыңыз",
+    "thumb.title":"кадр {i} · {t} с · табылғаны {n}",
+    "overlay.refOnly":"нүктелер тірек кадрға бекітілген — бұл кадрда көрсетілмейді",
+    "empty.videoHint":"Кадрлар «Санау» басылғанда оқылады — сонда кадр таспасы мен табылған жануарлар шығады.",
+    "cnt.inconsistent":"Қайшылық: {best} бағасы өз {low}–{high} аралығынан тыс. Бұл санды есепке қолданбаңыз.",
+    "cnt.spreadTxt":"кадрлар арасында сан {n} {a} өзгерді",
+    "cnt.spreadPct":"бағаның {pct}%",
+    "cnt.oneFrame":"Кадр біреу, кадрлар арасындағы ауытқуды өлшеуге болмайды. Су астындағы жануарлар саналмаған — бұны минимум деп қараңыз.",
+    "cnt.noBandTxt":"Бұл есептеу үшін аралық жазылмаған — санды дәл деп қабылдамаңыз.",
+    "detail.engine":"қозғалтқыш", "detail.threshold":"сезімталдық шегі", "detail.tiling":"бөліктеу",
+    "detail.tiles":"кадр бөліктері", "detail.seconds":"секунд", "detail.points":"нүктелер",
+    "detail.tilesRejected":"қабылданбаған бөліктер", "detail.malformed":"бүлінгендері алынды",
+    "detail.falsePos":"жалған табу қаупі",
+    "misc.cmpx":"см/пикс", "misc.sec":" с",
+    "misc.trackPoints":"маршрут нүктесі",
+    "warn.noScale":"Масштаб белгісіз: бөліктеу әдепкі мәнмен жүреді, табылғандар координатсыз қалады.",
+    "warn.gsdOptics":"Камера оптикасы болжанған (DJI 1 дюйм). Дрон моделін таңдаңыз немесе сенсор мен фокусты енгізіңіз.",
+    "warn.gsdNativeWidth":"Масштаб кадр ені бойынша болжанған — тек қиылмаған түпнұсқа үшін дұрыс.",
+    "warn.gsdNativeBoth":"Масштаб кадр ені және әдепкі оптика бойынша болжанған. Дрон моделін таңдаңыз.",
+    "warn.gsdNone":"Бұл файл үшін масштаб жазылмаған.",
+    "warn.gsdUnrecorded":"Масштабтың шығу тегі жазылмаған — болжанған деп есептеңіз.",
+    "an.tipBest":"баға {best} (аралық {low}–{high})",
+    "an.chartNote":"{n} {s}. Әр баған — бір түсірілімнің бағасы; аралық пен су деңгейін көру үшін меңзеңіз.",
+    "an.notAdditiveHead":"Бұл сандарды қоспаңыз",
+    "an.notAdditiveBody":"бір жатақты қайталап түсіру сол жануарларды қайта көреді, ал салыстыру тек ұқсас су деңгейі мен маусымда дұрыс.",
+    "an.noSpread":"ауытқусыз",
+    "an.outsideTitle":"баға өз аралығынан тыс — есепке қолданбаңыз",
+    "an.defectWarn":"⚠ белгісі бар есептеулер: {n} — баға өз аралығынан тыс. Бұл сервис ақауы, нәтиже емес.",
+    "th.site":"учаске", "th.surveys":"түсірілім", "th.runs":"есептеу", "th.best":"баға",
+    "th.band":"аралық", "th.when":"қашан", "th.media":"файл", "th.tide":"су",
+    "th.basis":"әдіс", "th.seconds":"с", "th.latestBest":"соңғы баға",
+    "th.latestBand":"соңғы аралық", "th.lastCaptured":"соңғы түсірілім",
     "nav.map":"Карта",
     "map.title":"Каспий бойынша есеп картасы",
     "map.sites":"Есеп алаңдары",
@@ -588,8 +753,8 @@ const I18N = {
     "f.tiling":"Бөлшектеу", "f.every":"Қадам, с", "f.maxframes":"Кадр саны",
     "f.minsupport":"Ең аз растау",
 
-    "tide.unknown":"белгісіз", "tide.low":"қайту", "tide.falling":"төмендеуде",
-    "tide.high":"толысу", "tide.rising":"көтерілуде",
+    
+    
     "tile.auto":"авто (GSD бойынша)", "tile.off":"бүкіл кадр",
 
     "note.gsd":"Тек биіктікке <b>қиылмаған бастапқы кадр</b> үшін ғана сенуге болады. Сенсор енін көрсетіңіз немесе GSD мәнін тікелей беріңіз — сонда масштаб болжанбай, өлшенеді.",
@@ -616,10 +781,10 @@ const I18N = {
     "an.noSites":"Учаскелер әзірге тіркелмеген.", "an.noRunsShort":"Есептеулер әзірге жоқ.",
     "an.notAdditive":"Түсірілім саны: {n}. Әр баған — бір түсірілімнің ең ықтимал бағасы; диапазон мен су деңгейін көру үшін курсорды апарыңыз. <b>Бұл мәндерді қосуға болмайды</b>: сол жатақтың қайталанған түсірілімі сол жануарларды қайта санайды, сондықтан жалпы сома жоқ. <b>Тек ұқсас су деңгейі мен бір маусымдағы түсірілімдерді салыстыруға болады</b> — су көтерілгенде жатақ босайды.",
 
-    "th.when":"уақыты", "th.media":"файл", "th.best":"баға", "th.range":"диапазон",
-    "th.tide":"су", "th.basis":"негізі", "th.site":"учаске", "th.surveys":"түсірілім",
+    "th.range":"диапазон",
+    
     "th.frame":"№", "th.t":"уақыт", "th.count":"саны", "th.reg":"байланыс",
-    "misc.noTrack":"трек жоқ", "misc.trackPoints":"трек нүктесі",
+    "misc.noTrack":"трек жоқ", 
     "misc.wholeFrame":"бүкіл кадр", "misc.autoTile":"автобөлшектеу",
     "misc.gsdUnknown":"масштаб белгісіз",
     "warn.gsdAssumed":"GSD сурет ені бойынша болжанды — бұл тек қиылмаған бастапқы кадр үшін дұрыс.",
@@ -635,6 +800,44 @@ function t(key, vars){
   let s = (I18N[LANG] && I18N[LANG][key]) ?? I18N.en[key] ?? key;
   if (vars) for (const k in vars) s = s.replaceAll("{"+k+"}", vars[k]);
   return s;
+}
+
+/* Russian and Kazakh decline nouns after numerals; English mostly does not.
+   A key may hold "форма1|форма2|форма5" and tp() picks by the Slavic rule.
+   A single-form key passes through untouched - which is what Kazakh uses,
+   because Kazakh nouns do not inflect after a numeral at all. */
+function tp(n, key){
+  const forms = t(key).split("|");
+  if (forms.length === 1) return forms[0];
+  const a = Math.abs(n ?? 0) % 100, b = a % 10;
+  if (LANG === "en") return forms[(n === 1) ? 0 : forms.length - 1];
+  if (a > 10 && a < 20) return forms[forms.length - 1];
+  if (b === 1) return forms[0];
+  if (b >= 2 && b <= 4) return forms[1] ?? forms[forms.length - 1];
+  return forms[forms.length - 1];
+}
+
+/* API enums arrive as machine words (union_4_frames, altitude, low). Every
+   locale renders them through these; the raw value is the fallback, so a new
+   server-side enum degrades to visible-but-ugly rather than to a lie. */
+function _enumText(prefix, v){
+  if (v == null || v === "") return "—";
+  const k = prefix + v, s2 = t(k);
+  return s2 === k ? String(v) : s2;
+}
+const tideText = v => _enumText("tide.", v);
+const gsdSourceText = v => _enumText("gsdsrc.", v);
+const stageText = v => _enumText("stage.", v);
+const riskText = v => _enumText("risk.", v);
+function basisText(basis){
+  if (!basis) return "";
+  let m;
+  if ((m = basis.match(/^union_(\d+)_frames$/)))      return t("basis.union", {n: m[1]});
+  if ((m = basis.match(/^consensus_(\d+)_frames$/)))  return t("basis.consensus", {n: m[1]});
+  if ((m = basis.match(/^single_image_(\d+)_of_(\d+)_tiles$/)))
+    return t("basis.singleTiles", {n: m[1], total: m[2]});
+  if (basis === "single_image") return t("basis.single");
+  return basis.replace(/_/g, " ");
 }
 
 function applyI18n(){
@@ -675,16 +878,10 @@ const S = { media:null, job:null, run:null, result:null, points:[], frames:[], s
    label names what the service had to assume. */
 const GSD_TRUSTED = new Set(["explicit","optics"]);
 const GSD_WARN = {
-  assumed_optics:
-    "Camera optics assumed (DJI 1-inch, 13.2mm/8.8mm) — sensor width in px was used, "+
-    "but focal length and sensor size were not. Enter both to make this scale measured.",
-  assumed_native_width:
-    "GSD assumed from image width — only valid for an uncropped native frame.",
-  assumed_native_width_and_optics:
-    "GSD assumed from image width AND from DJI 1-inch optics — valid only for an "+
-    "uncropped native frame off that airframe. Give sensor px, sensor mm and focal mm, "+
-    "or an explicit GSD.",
-  unknown: "No scale recorded for this media.",
+  assumed_optics: "warn.gsdOptics",
+  assumed_native_width: "warn.gsdNativeWidth",
+  assumed_native_width_and_optics: "warn.gsdNativeBoth",
+  unknown: "warn.gsdNone",
 };
 
 function toast(m,ms=2600){const t=$("toast");t.textContent=m;t.classList.add("show");
@@ -765,20 +962,20 @@ async function upload(file, side){
     S.media=d; S.run=null; S.points=[]; S.frames=[]; S.shots=[]; S.job=null;
     S.result=null; S.frame=0; S.space=[d.width,d.height];
     renderDropLabel();
-    const gsdTxt = d.gsd_cm_px ? `${d.gsd_cm_px.toFixed(2)} cm/px (${d.gsd_source})` : "scale unknown";
+    const gsdTxt = d.gsd_cm_px ? `${d.gsd_cm_px.toFixed(2)} ${t("misc.cmpx")} (${gsdSourceText(d.gsd_source)})` : t("misc.gsdUnknown");
     $("mediaInfo").innerHTML =
-      `${d.filename} · ${d.width}×${d.height}${d.duration_s?` · ${d.duration_s.toFixed(1)}s`:""}<br>`+
-      `${gsdTxt} · auto tile <b>${d.tile_px||"whole frame"}</b>`+
-      (d.track_points?` · <b>${d.track_points}</b> track points`:" · no track");
+      `${d.filename} · ${d.width}×${d.height}${d.duration_s?` · ${d.duration_s.toFixed(1)}${t("misc.sec")}`:""}<br>`+
+      `${gsdTxt} · ${t("misc.autoTile")} <b>${d.tile_px||t("misc.wholeFrame")}</b>`+
+      (d.track_points?` · <b>${d.track_points}</b> ${tp(d.track_points,"misc.trackPoints")}`:` · ${t("misc.noTrack")}`);
     if(!d.gsd_cm_px)
-      $("mediaInfo").innerHTML += `<br><span style="color:var(--warn)">No scale: tiling falls back to a default and no detection can be given coordinates or a density.</span>`;
+      $("mediaInfo").innerHTML += `<br><span style="color:var(--warn)">${t("warn.noScale")}</span>`;
     // Whitelist, not blacklist. This warned on exactly one label, so the
     // `sensor_width` path — pixel width supplied, optics still assumed off a DJI
     // 1-inch airframe — printed a bare "3.29 cm/px (sensor_width)" that read as
     // measured. Anything the service has not called explicit or optics contains
     // at least one guess, and the guess is what has to be on screen.
     else if(!GSD_TRUSTED.has(d.gsd_source))
-      $("mediaInfo").innerHTML += `<br><span style="color:var(--warn)">${GSD_WARN[d.gsd_source]||"GSD provenance not recorded — treat this scale as assumed."}</span>`;
+      $("mediaInfo").innerHTML += `<br><span style="color:var(--warn)">${t(GSD_WARN[d.gsd_source]||"warn.gsdUnrecorded")}</span>`;
     const vid = d.kind==="video";
     ["rowEvery","rowFrames","rowSupport"].forEach(i=>$(i).classList.toggle("hidden",!vid));
     $("svg").innerHTML=""; $("strip").classList.add("hidden");
@@ -791,8 +988,7 @@ async function upload(file, side){
       $("img").removeAttribute("src");
       $("wrap").classList.add("hidden"); $("empty").classList.remove("hidden");
       $("empty").innerHTML=`<h3>${t("drop.loadedVideo")}</h3><p>${d.filename} · ${d.width}×${d.height}`+
-        `${d.duration_s?` · ${d.duration_s.toFixed(1)}s`:""}.<br>Frames are sampled when you press `+
-        `Count — the filmstrip and the detections appear then.</p>`;
+        `${d.duration_s?` · ${d.duration_s.toFixed(1)}${t("misc.sec")}`:""}.<br>${t("empty.videoHint")}</p>`;
     }else{
       $("img").src=API+d.url;
       $("empty").classList.add("hidden"); $("wrap").classList.remove("hidden");
@@ -821,7 +1017,7 @@ function jobParams(){
 
 async function run(){
   if(!S.media) return;
-  showErr(""); busy(true,"queued…"); resetBand();
+  showErr(""); busy(true,stageText("queued")+"…"); resetBand();
   try{
     const r=await fetch(API+"/v1/jobs",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({media_id:S.media.id,params:jobParams()})});
@@ -839,12 +1035,12 @@ function watch(jobId){
     const p=JSON.parse(e.data)||{};
     const pr=p.progress||p;
     const done=pr.frames_done??0, tot=pr.frames_total??0;
-    $("bar").innerHTML=`<span class="spin"></span><span>${pr.stage||"working"}</span>`+
-      (tot?`<span class="sep"></span><span>frame ${done}/${tot}</span>`:"");
+    $("bar").innerHTML=`<span class="spin"></span><span>${stageText(pr.stage||"working")}</span>`+
+      (tot?`<span class="sep"></span><span>${t("prog.frame",{done,total:tot})}</span>`:"");
   });
   es.addEventListener("done",()=>{es.close();S.es=null;load(jobId);});
   es.addEventListener("failed",e=>{es.close();S.es=null;busy(false);
-    let m="job failed"; try{m=(JSON.parse(e.data)||{}).error||m;}catch{}
+    let m=t("err.jobFailed"); try{m=(JSON.parse(e.data)||{}).error||m;}catch{}
     showErr(m);});
   es.onerror=()=>{ // SSE dropped — fall back to polling so a result is never lost
     es.close(); S.es=null;
@@ -853,7 +1049,7 @@ function watch(jobId){
     // every 2s forever behind a spinner that never said anything was wrong and a
     // Count button that stayed disabled until the page was reloaded.
     let fails=0;
-    busy(true,"live updates dropped — polling");
+    busy(true,t("st.polling"));
     const iv=setInterval(async()=>{
       try{
         const res=await fetch(API+`/v1/jobs/${jobId}`);
@@ -864,12 +1060,11 @@ function watch(jobId){
         else if(d.status==="failed"||d.status==="cancelled"){
           clearInterval(iv);busy(false);showErr(d.error||`job ${d.status}`);}
         else if(d.status!=="queued"&&d.status!=="running"){
-          clearInterval(iv);busy(false);showErr("job is in an unrecognised state: "+d.status);}
+          clearInterval(iv);busy(false);showErr(t("err.jobState",{s:d.status}));}
       }catch(e){
         if(++fails>=5){
           clearInterval(iv);busy(false);
-          showErr("Lost contact with the service and could not recover this job.\n"+
-                  String(e.message||e)+"\nThe job may still be running — reload to check.");
+          showErr(t("err.lostContact")+"\n"+String(e.message||e)+"\n"+t("err.lostContactHint"));
         }
       }
     },2000);
@@ -895,22 +1090,22 @@ function applySpace(r){
 async function load(jobId){
   let d;
   try{ d=await (await fetch(API+`/v1/jobs/${jobId}`)).json(); }
-  catch(e){ busy(false); showErr("could not read the job: "+String(e.message||e)); return; }
+  catch(e){ busy(false); showErr(t("err.jobRead")+": "+String(e.message||e)); return; }
   busy(false);
-  if(d.status!=="done"){ showErr(d.error||d.detail||("job "+(d.status||"is in an unknown state"))); return; }
+  if(d.status!=="done"){ showErr(d.error||d.detail||t("err.jobState",{s:d.status||"?"})); return; }
   const r=d.result;
-  if(!r||!r.count){ showErr("the job finished but returned no count"); return; }
+  if(!r||!r.count){ showErr(t("err.noCount")); return; }
   S.run=r.run_id; S.points=r.points||[]; S.result=r; S.frame=0;
   applySpace(r);
   renderBand(r); renderDetail(r); renderFrames(r,d.media_id,d.job_id); draw();
   $("verifySect").classList.remove("hidden");
-  toast(`${fmt(r.count.best)} ${$("target").value} · ${r.seconds?.toFixed?.(1)??"?"}s`);
+  toast(`${fmt(r.count.best)} ${tp(r.count.best,"toast.animals")} · ${r.seconds?.toFixed?.(1)??"?"}${t("misc.sec")}`);
   refreshStats();
 }
 
 function busy(on,txt){
   $("bar").classList.toggle("hidden",!on);
-  if(on)$("bar").innerHTML=`<span class="spin"></span><span>${txt||"working"}</span>`;
+  if(on)$("bar").innerHTML=`<span class="spin"></span><span>${txt||stageText("working")}</span>`;
   $("runBtn").disabled=on||!S.media;
 }
 
@@ -956,8 +1151,7 @@ function renderBand(r){
 
   const sp=$("cSpread"); sp.classList.remove("hidden","measured");
   if(broken){
-    sp.textContent=`Inconsistent: best (${fmt(c.best)}) falls outside its own `+
-      `${fmt(c.low)}–${fmt(c.high)} band. Do not report this figure.`;
+    sp.textContent=t("cnt.inconsistent",{best:fmt(c.best),low:fmt(c.low),high:fmt(c.high)});
   }else if(hasBand && c.low!==c.high){
     const pct = c.best ? Math.round((c.high-c.low)/c.best*100) : null;
     sp.classList.add("measured");
@@ -965,18 +1159,16 @@ function renderBand(r){
     // 367/367/548 is +181/-0, and writing that as "±49%" claims a lower bound
     // of 187 that nothing measured - overstating the uncertainty is the same
     // class of error as understating it.
-    sp.textContent=`spread ${fmt(c.high-c.low)} animals`+
-      (pct!=null?` (${pct}% of best)`:"")+` between frames`;
+    sp.textContent=t("cnt.spreadTxt",{n:fmt(c.high-c.low),a:tp(c.high-c.low,"toast.animals")})+
+      (pct!=null?` (${t("cnt.spreadPct",{pct})})`:"");
   }else if(hasBand){
-    sp.textContent="One frame, so no spread could be measured — this is not a "+
-      "±0 count. Recall is unquantified: treat it as a floor.";
+    sp.textContent=t("cnt.oneFrame");
   }else{
-    sp.textContent="No band reported for this run — the count below cannot be "+
-      "read as an exact figure.";
+    sp.textContent=t("cnt.noBandTxt");
   }
 
   $("cBasis").classList.remove("hidden");
-  $("cBasis").textContent=(c.basis||"").replace(/_/g," ")+(edited?` · model said ${fmt(c.best)}`:"");
+  $("cBasis").textContent=basisText(c.basis)+(edited?` · ${t("cnt.modelSaid",{n:fmt(c.best)})}`:"");
   const cav=r.caveats||[];
   $("caveatSect").classList.toggle("hidden",!cav.length);
   if(cav.length) $("caveatBox").innerHTML=t("cnt.floor")+"<br>"+cav.map(c=>"· "+c).join("<br>");
@@ -985,23 +1177,23 @@ function renderBand(r){
 function renderDetail(r){
   const q=r.quality||{}, e=r.engine||{};
   const rows=[
-    ["engine", e.name+(e.version?" "+e.version:"")],
-    ["threshold", e.threshold],
-    ["tiling", e.tiling?e.tiling+"px":"whole frame"],
-    ["tiles", q.tiles??"—"],
-    ["seconds", r.seconds?.toFixed?.(1)??"—"],
-    ["points", (r.points||[]).length],
+    [t("detail.engine"), e.name+(e.version?" "+e.version:"")],
+    [t("detail.threshold"), e.threshold],
+    [t("detail.tiling"), e.tiling?e.tiling+"px":t("misc.wholeFrame")],
+    [t("detail.tiles"), q.tiles??"—"],
+    [t("detail.seconds"), r.seconds?.toFixed?.(1)??"—"],
+    [t("detail.points"), (r.points||[]).length],
   ];
-  if(q.tiles_rejected) rows.push(["tiles rejected", q.tiles_rejected]);
-  if(q.malformed_dropped) rows.push(["malformed dropped", q.malformed_dropped]);
+  if(q.tiles_rejected) rows.push([t("detail.tilesRejected"), q.tiles_rejected]);
+  if(q.malformed_dropped) rows.push([t("detail.malformed"), q.malformed_dropped]);
   /* An "elevated" false-positive verdict nobody sees is the same as no verdict.
      The reasons ride in the tooltip because the label on its own is an
      adjective, and this product does not ship unexplained adjectives. */
   if(q.false_positive_risk){
     const why=(q.false_positive_basis||[]).join(" · ");
-    rows.push(["false positives",
+    rows.push([t("detail.falsePos"),
       `<span title="${why.replace(/"/g,"&quot;")}" style="color:${
-        q.false_positive_risk==="low"?"var(--dim)":"var(--danger)"}">${q.false_positive_risk}</span>`]);
+        q.false_positive_risk==="low"?"var(--dim)":"var(--danger)"}">${riskText(q.false_positive_risk)}</span>`]);
   }
   $("detailKv").innerHTML=rows.map(([k,v])=>`<div><span>${k}</span><b>${v}</b></div>`).join("");
   $("detailSect").classList.remove("hidden");
@@ -1046,7 +1238,7 @@ function renderFrames(r, mediaId, jobId){
     draw();
   };
   $("strip").innerHTML=shots.map((f,i)=>
-    `<div class="thumb" data-i="${i}" title="frame ${f.index} · ${(f.t??0).toFixed(1)}s · ${fmt(f.count)} detected">`+
+    `<div class="thumb" data-i="${i}" title="${t("thumb.title",{i:f.index,t:(f.t??0).toFixed(1),n:fmt(f.count)})}">`+
     `<img src="${f.src}" loading="lazy" alt=""><b>${fmt(f.count)}</b></div>`).join("");
   [...$("strip").children].forEach(t=>t.onclick=()=>pick(+t.dataset.i));
   pick(Math.min(S.frame||0,shots.length-1));
@@ -1097,7 +1289,7 @@ async function stageClick(e){
   if(!S.verify||!S.run) return;
   // Editing a frame the consensus is not registered to would write points into a
   // coordinate space the run does not use.
-  if(!isReferenceFrame()){ toast("switch to the reference frame to edit"); return; }
+  if(!isReferenceFrame()){ toast(t("toast.refFrame")); return; }
   const svg=$("svg"),b=svg.getBoundingClientRect();
   if(!b.width||!b.height) return;
   const vb=(svg.getAttribute("viewBox")||"0 0 1000 1000").split(/\s+/).map(Number);
@@ -1143,15 +1335,14 @@ async function refreshStats(){
   $("statCards").innerHTML=[
     ["an.surveys",tot.surveys],["an.media",tot.media],["an.runs",tot.runs],
     ["an.sites",tot.sites],["an.queued",tot.jobs_queued],["an.failed",tot.jobs_failed],
-  ].map(([k,v])=>`<div class="card"><b>${fmt(v)}</b><span>${t(k)}</span></div>`).join("");
+  ].map(([k,v])=>`<div class="card"><b>${fmt(v)}</b><span>${tp(v??0,k)}</span></div>`).join("");
 
   const ot=d.over_time||[];
   $("overTime").innerHTML = ot.length
     ? `<div class="chart">${(()=>{const mx=Math.max(...ot.map(o=>o.high||o.best||0),1);
-        return ot.map(o=>`<div class="b" style="height:${Math.max(2,(o.best||0)/mx*100)}%" title="${(o.captured_at||"").slice(0,16)} — best ${o.best} (band ${o.low}–${o.high})${o.tide_state?" · tide "+o.tide_state:""}">${ot.length<=12?`<em>${o.best}</em>`:""}</div>`).join("");})()}</div>
-       <div class="note">${ot.length} surveys. Each bar is one survey's best estimate; hover for its band and tide state.
-       <b>These are not additive</b> — repeat surveys of the same haul-out count the same animals again, so there is no total here.
-       <b>Counts are only comparable at similar tide and season</b> — a haul-out empties as the water rises.</div>`
+        return ot.map(o=>`<div class="b" style="height:${Math.max(2,(o.best||0)/mx*100)}%" title="${(o.captured_at||"").slice(0,16)} — ${t("an.tipBest",{best:o.best,low:o.low,high:o.high})}${o.tide_state?" · "+tideText(o.tide_state):""}">${ot.length<=12?`<em>${o.best}</em>`:""}</div>`).join("");})()}</div>
+       <div class="note">${t("an.chartNote",{n:ot.length,s:tp(ot.length,"an.surveys")})}
+       <b>${t("an.notAdditiveHead")}</b> — ${t("an.notAdditiveBody")}</div>`
     : `<div class="note">${t("an.noRuns")}</div>`;
 
   // The API reports `latest` as a nested band and `runs` as a count; reading
@@ -1159,11 +1350,11 @@ async function refreshStats(){
   // em-dash on every row while the real numbers sat unused in the payload.
   const ps=d.per_site||[];
   $("perSite").innerHTML = ps.length
-    ? `<table><thead><tr><th>site</th><th>surveys</th><th>runs</th><th>latest best</th><th>latest band</th><th>last captured</th></tr></thead><tbody>`+
+    ? `<table><thead><tr><th>${t("th.site")}</th><th>${t("th.surveys")}</th><th>${t("th.runs")}</th><th>${t("th.latestBest")}</th><th>${t("th.latestBand")}</th><th>${t("th.lastCaptured")}</th></tr></thead><tbody>`+
       ps.map(s=>{
         const l=s.latest||{};
         const band = (l.low!=null&&l.high!=null)
-          ? (l.low===l.high?`${fmt(l.low)} · no spread`:`${fmt(l.low)}–${fmt(l.high)}`) : "—";
+          ? (l.low===l.high?`${fmt(l.low)} · ${t("an.noSpread")}`:`${fmt(l.low)}–${fmt(l.high)}`) : "—";
         return `<tr><td>${s.name||s.site_id||"—"}</td><td>${fmt(s.surveys)}</td><td>${fmt(s.runs)}</td>
           <td style="color:var(--accent)">${l.best!=null?fmt(l.best):"—"}</td>
           <td style="color:var(--dim)">${band}</td>
@@ -1176,16 +1367,16 @@ async function refreshStats(){
   const outside = r => r.low!=null&&r.high!=null&&r.best!=null&&(r.best<r.low||r.best>r.high);
   const bad = lr.filter(outside).length;
   $("latestRuns").innerHTML = lr.length
-    ? `<table><thead><tr><th>when</th><th>media</th><th>best</th><th>band</th><th>tide</th><th>basis</th><th>s</th></tr></thead><tbody>`+
+    ? `<table><thead><tr><th>${t("th.when")}</th><th>${t("th.media")}</th><th>${t("th.best")}</th><th>${t("th.band")}</th><th>${t("th.tide")}</th><th>${t("th.basis")}</th><th>${t("th.seconds")}</th></tr></thead><tbody>`+
       lr.map(r=>`<tr><td>${(r.created_at||"").slice(0,16)}</td>
         <td style="color:var(--muted)">${r.filename||"—"}</td>
-        <td style="color:${outside(r)?"var(--danger)":"var(--accent)"}"${outside(r)?' title="best falls outside its own band — do not report"':""}>${fmt(r.best)}${outside(r)?" ⚠":""}</td>
+        <td style="color:${outside(r)?"var(--danger)":"var(--accent)"}"${outside(r)?` title="${t('an.outsideTitle')}"`:""}>${fmt(r.best)}${outside(r)?" ⚠":""}</td>
         <td style="color:var(--dim)">${fmt(r.low)}–${fmt(r.high)}</td>
-        <td style="color:var(--dim)">${r.tide_state||"—"}</td>
-        <td style="color:var(--dim)">${(r.basis||"").replace(/_/g," ")}</td>
+        <td style="color:var(--dim)">${tideText(r.tide_state)}</td>
+        <td style="color:var(--dim)">${basisText(r.basis)}</td>
         <td style="color:var(--dim)">${r.seconds?.toFixed?.(1)??"—"}</td></tr>`).join("")+
       `</tbody></table>`+
-      (bad?`<div class="warn" style="margin-top:10px">${bad} run(s) marked ⚠ report a best estimate outside their own low–high band. Those counts are not defensible — treat them as a service defect, not a result.</div>`:"")
+      (bad?`<div class="warn" style="margin-top:10px">${t("an.defectWarn",{n:bad})}</div>`:"")
     : `<div class="note">${t("an.noRunsShort")}</div>`;
 }
 
@@ -1401,10 +1592,10 @@ function renderMap(){
     mapTip(`<b>${esc(s.name || "—")}</b>` +
       (s.region ? `<div style="color:var(--dim)">${esc(s.region)}</div>` : "") +
       (b.best != null
-        ? `<div style="margin-top:5px;color:var(--accent)">${fmt(b.best)} ${t("map.animals")}</div>
+        ? `<div style="margin-top:5px;color:var(--accent)">${fmt(b.best)} ${tp(b.best,"map.animals")}</div>
            <div style="color:var(--dim)">${fmt(b.low)}–${fmt(b.high)}</div>`
         : `<div style="margin-top:5px;color:var(--dim)">${t("map.noBand")}</div>`) +
-      `<div style="margin-top:5px;color:var(--dim)">${fmt(s.surveys)} ${t("map.surveys")} · ${fmt(s.runs)} ${t("map.runs")}</div>`, ev);
+      `<div style="margin-top:5px;color:var(--dim)">${fmt(s.surveys)} ${tp(s.surveys,"map.surveys")} · ${fmt(s.runs)} ${tp(s.runs,"map.runs")}</div>`, ev);
   };
   $("mapSites").onmousemove = ev => { if (ev.target.closest("[data-site]")) mapTip(null, ev); };
   $("mapSites").onmouseout = () => mapTip(null);
@@ -1417,7 +1608,7 @@ function renderMap(){
   $("mapNote").innerHTML = notes.join("<br>");
 
   $("mapSiteList").innerHTML = geo.length
-    ? `<table><thead><tr><th>site</th><th>best</th><th>band</th><th>runs</th></tr></thead><tbody>` +
+    ? `<table><thead><tr><th>${t("th.site")}</th><th>${t("th.best")}</th><th>${t("th.band")}</th><th>${t("th.runs")}</th></tr></thead><tbody>` +
       geo.slice().sort((a, b2) => (best(b2) || 0) - (best(a) || 0)).map(s => {
         const b = s.latest || {};
         return `<tr><td>${esc(s.name || "—")}</td>

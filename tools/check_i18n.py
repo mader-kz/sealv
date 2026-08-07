@@ -63,8 +63,14 @@ def _keys(block: str) -> set[str]:
 
     Depth-aware so a nested object (none today, but the format invites one)
     cannot contribute phantom keys to the parent's set.
+
+    Duplicates are a hard failure, not a dedup: in a JS object literal the
+    LAST occurrence wins, so a stale key lower in the block silently overrides
+    a fixed one above it. That exact failure shipped once - a legacy
+    "tide.low" beat its replacement - and nothing in the page ever errors.
     """
     found: set[str] = set()
+    dupes: list[str] = []
     depth = 0
     i = 0
     n = len(block)
@@ -87,8 +93,16 @@ def _keys(block: str) -> set[str]:
                 while after < n and block[after] in " \t\n\r":
                     after += 1
                 if after < n and block[after] == ":":
-                    found.add(block[start:i])
+                    key = block[start:i]
+                    if key in found:
+                        dupes.append(key)
+                    found.add(key)
         i += 1
+    if dupes:
+        raise ValueError(
+            f"duplicate key(s) {sorted(set(dupes))} - the later value silently "
+            f"overrides the earlier one"
+        )
     return found
 
 
@@ -104,7 +118,10 @@ def load() -> tuple[dict[str, set[str]], set[str]]:
     defined: dict[str, set[str]] = {}
     for m in re.finditer(r"(?m)^\s{2}([a-z]{2}):\s*\{", table):
         start, end = _span(table, table.index("{", m.end() - 1))
-        defined[m.group(1)] = _keys(table[start : end + 1])
+        try:
+            defined[m.group(1)] = _keys(table[start : end + 1])
+        except ValueError as exc:
+            raise ValueError(f"locale '{m.group(1)}': {exc}") from None
 
     used = set(re.findall(r'data-i18n(?:-ph)?="([^"]+)"', src))
     # t("...") is how JS-rendered strings reach the table; those never appear as
@@ -114,7 +131,11 @@ def load() -> tuple[dict[str, set[str]], set[str]]:
 
 
 def main() -> int:
-    defined, used = load()
+    try:
+        defined, used = load()
+    except ValueError as exc:
+        print(f"i18n FAIL  {exc}")
+        return 1
     if BASE not in defined:
         print(f"FAIL: no '{BASE}' locale found in {PAGE.name}")
         return 1
