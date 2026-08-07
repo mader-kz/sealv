@@ -163,6 +163,40 @@
   .chart .b:hover{background:var(--accent)}
   .chart .b em{position:absolute;top:-18px;left:50%;transform:translateX(-50%);
     font-style:normal;font-family:var(--mono);font-size:10.5px;color:var(--muted);white-space:nowrap}
+  /* ----------------------------------------------------------------- map */
+  /* The coastline is embedded, not tiled from a server. A survey tool that
+     goes blank without a network is useless in the field, and a demo that
+     depends on venue wi-fi is a demo that can fail in front of people. */
+  .mapwrap{padding:22px;display:grid;grid-template-columns:minmax(0,1fr) 290px;
+           gap:18px;min-height:0;overflow:hidden}
+  .mapstage{position:relative;background:#0a0d10;border:1px solid var(--line);
+            border-radius:12px;overflow:hidden;min-height:0}
+  .mapstage svg{display:block;width:100%;height:100%;cursor:grab;touch-action:none}
+  .mapstage svg.drag{cursor:grabbing}
+  .mapside{overflow-y:auto;display:flex;flex-direction:column;gap:14px;min-height:0}
+  .maptip{position:absolute;pointer-events:none;background:var(--panel-2);
+          border:1px solid var(--line);border-radius:8px;padding:8px 10px;
+          font-size:12px;opacity:0;transition:opacity .1s;max-width:240px;z-index:5;
+          box-shadow:0 6px 22px rgba(0,0,0,.5)}
+  .mapbar{position:absolute;left:12px;bottom:12px;display:flex;gap:8px;
+          align-items:center;font-size:11px;color:var(--dim)}
+  .mapbar button{background:var(--panel-2);border:1px solid var(--line);color:var(--text);
+                 border-radius:6px;padding:4px 9px;font-size:11px;cursor:pointer;
+                 font-family:var(--sans)}
+  .mapbar button:hover{border-color:var(--dim)}
+  .maplegend{position:absolute;right:12px;top:12px;display:flex;flex-direction:column;
+             gap:5px;font-size:11px;color:var(--muted);background:rgba(10,13,16,.82);
+             border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+  .maplegend i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px}
+  .water{fill:#0e2434;stroke:#215070;vector-effect:non-scaling-stroke;stroke-width:1}
+  .grat{stroke:#161d25;vector-effect:non-scaling-stroke;stroke-width:1;fill:none}
+  .site{fill:var(--accent);fill-opacity:.7;stroke:#06090c;
+        vector-effect:non-scaling-stroke;stroke-width:1;cursor:pointer}
+  .site:hover{fill-opacity:1}
+  .site.nocount{fill:var(--dim)}
+  .det{fill:var(--warn);fill-opacity:.85;pointer-events:none}
+  .sitelbl{fill:#9fb0c2;font-family:var(--sans);pointer-events:none;text-anchor:middle}
+
   .analytics{padding:22px;overflow-y:auto;display:flex;flex-direction:column;gap:22px}
   .analytics h1{margin:0;font-size:18px;font-weight:640;letter-spacing:-.02em}
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}
@@ -190,6 +224,7 @@
   </div>
   <nav>
     <button id="tabSurvey" class="on" data-i18n="nav.survey">Survey</button>
+    <button id="tabMap" data-i18n="nav.map">Map</button>
     <button id="tabAnalytics" data-i18n="nav.analytics">Analytics</button>
   </nav>
   <select id="lang" title="Language" style="margin-left:auto;background:var(--panel-2);border:1px solid var(--line);border-radius:7px;padding:5px 8px;font-size:12px;color:var(--text);outline:none;cursor:pointer"><option value="en">English</option><option value="ru">Русский</option><option value="kk">Қазақша</option></select><div class="status" style="margin-left:14px"><span class="dot" id="dot"></span><span id="statusTxt" data-i18n="st.connecting">connecting…</span></div>
@@ -331,6 +366,32 @@
   </div>
 </main>
 
+<main id="view-map">
+  <div class="mapwrap">
+    <div class="mapstage" id="mapStage">
+      <svg id="mapSvg" preserveAspectRatio="xMidYMid meet" aria-label="Caspian survey map"></svg>
+      <div class="maplegend">
+        <div><i style="background:var(--accent)"></i><span data-i18n="map.legSite">survey site</span></div>
+        <div><i style="background:var(--warn)"></i><span data-i18n="map.legDet">detection</span></div>
+      </div>
+      <div class="mapbar">
+        <button id="mapReset" data-i18n="map.reset">Reset view</button>
+        <span data-i18n="map.hint">scroll to zoom, drag to pan</span>
+      </div>
+      <div class="maptip" id="mapTip"></div>
+    </div>
+    <div class="mapside">
+      <h1 style="margin:0;font-size:18px;font-weight:640;letter-spacing:-.02em"
+          data-i18n="map.title">Caspian survey map</h1>
+      <div class="note" id="mapNote"></div>
+      <div class="panel">
+        <h3 data-i18n="map.sites">Survey sites</h3>
+        <div id="mapSiteList"></div>
+      </div>
+    </div>
+  </div>
+</main>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -346,6 +407,21 @@ const API = location.origin;
    The product name "SEALv" comes from the Russian word, not the Kazakh one. */
 const I18N = {
   en: {
+    "nav.map":"Map",
+    "map.title":"Caspian survey map",
+    "map.sites":"Survey sites",
+    "map.reset":"Reset view",
+    "map.hint":"scroll to zoom, drag to pan",
+    "map.legSite":"survey site",
+    "map.legDet":"detection",
+    "map.animals":"animals",
+    "map.surveys":"surveys",
+    "map.runs":"runs",
+    "map.noBand":"not counted yet",
+    "map.noSites":"No site has coordinates yet. Add a site with a latitude and longitude, or upload media carrying a DJI SRT track.",
+    "map.hidden":"{n} site(s) hidden — no coordinates recorded",
+    "map.detGeo":"{n} of {total} detections in this run carry coordinates",
+    "map.detNone":"No detection in this run has coordinates — the media carried no GPS track.",
     "lang.name":"English",
     "brand.sub":"Caspian Seal Survey",
     "nav.survey":"Survey", "nav.analytics":"Analytics",
@@ -404,6 +480,21 @@ const I18N = {
   },
 
   ru: {
+    "nav.map":"Карта",
+    "map.title":"Карта учётов по Каспию",
+    "map.sites":"Площадки учёта",
+    "map.reset":"Сбросить вид",
+    "map.hint":"колесо — масштаб, перетаскивание — сдвиг",
+    "map.legSite":"площадка учёта",
+    "map.legDet":"детекция",
+    "map.animals":"животных",
+    "map.surveys":"облётов",
+    "map.runs":"прогонов",
+    "map.noBand":"подсчёта ещё не было",
+    "map.noSites":"Пока ни у одной площадки нет координат. Добавьте площадку с широтой и долготой или загрузите съёмку с треком DJI SRT.",
+    "map.hidden":"Скрыто площадок: {n} — координаты не заданы",
+    "map.detGeo":"Координаты есть у {n} из {total} детекций этого прогона",
+    "map.detNone":"Ни у одной детекции этого прогона нет координат — в съёмке не было GPS-трека.",
     "lang.name":"Русский",
     "brand.sub":"Учёт каспийского тюленя",
     "nav.survey":"Съёмка", "nav.analytics":"Аналитика",
@@ -462,6 +553,21 @@ const I18N = {
   },
 
   kk: {
+    "nav.map":"Карта",
+    "map.title":"Каспий бойынша есеп картасы",
+    "map.sites":"Есеп алаңдары",
+    "map.reset":"Көріністі қалпына келтіру",
+    "map.hint":"дөңгелек — масштаб, сүйреу — жылжыту",
+    "map.legSite":"есеп алаңы",
+    "map.legDet":"детекция",
+    "map.animals":"жануар",
+    "map.surveys":"ұшу",
+    "map.runs":"есептеу",
+    "map.noBand":"есептеу әлі болған жоқ",
+    "map.noSites":"Әзірге бірде-бір алаңның координаты жоқ. Ендік пен бойлықты көрсетіп алаң қосыңыз немесе DJI SRT тректі түсірілім жүктеңіз.",
+    "map.hidden":"Жасырылған алаң: {n} — координаттар берілмеген",
+    "map.detGeo":"Осы есептеудегі {total} детекцияның {n} координатқа ие",
+    "map.detNone":"Бұл есептеудегі бірде-бір детекцияда координат жоқ — түсірілімде GPS трек болмаған.",
     "lang.name":"Қазақша",
     "brand.sub":"Каспий итбалығының есебі",
     "nav.survey":"Түсірілім", "nav.analytics":"Талдау",
@@ -585,6 +691,10 @@ function toast(m,ms=2600){const t=$("toast");t.textContent=m;t.classList.add("sh
   clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove("show"),ms);}
 function showErr(m){$("errSect").classList.toggle("hidden",!m);$("errBox").textContent=m||"";}
 const fmt = n => (n==null?"—":Number(n).toLocaleString());
+// Site names arrive from POST /v1/sites and land in innerHTML on the map, so
+// they are operator-supplied text going into markup - escaped, not trusted.
+const esc = s => String(s ?? "").replace(/[&<>"']/g,
+  c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
 /* The no-media copy is stashed because the video branch of upload() replaces it
    with a "frames appear after the count" message. */
@@ -1025,10 +1135,14 @@ async function stageClick(e){
 /* ----------------------------------------------------------- analytics */
 async function refreshStats(){
   let d; try{ d=await (await fetch(API+"/v1/stats")).json(); }catch{ return; }
-  const t=d.totals||{};
+  S.stats = d;   // the map renders from this same payload
+  // `tot`, not `t`: a local named `t` shadows the i18n function in this scope,
+  // which is how this block shipped broken - it threw on an undefined name and
+  // took the rest of refreshStats with it, so every panel below stayed empty.
+  const tot=d.totals||{};
   $("statCards").innerHTML=[
-    ["an.surveys",t2.surveys],["an.media",t2.media],["an.runs",t2.runs],
-    ["an.sites",t2.sites],["an.queued",t2.jobs_queued],["an.failed",t2.jobs_failed],
+    ["an.surveys",tot.surveys],["an.media",tot.media],["an.runs",tot.runs],
+    ["an.sites",tot.sites],["an.queued",tot.jobs_queued],["an.failed",tot.jobs_failed],
   ].map(([k,v])=>`<div class="card"><b>${fmt(v)}</b><span>${t(k)}</span></div>`).join("");
 
   const ot=d.over_time||[];
@@ -1075,14 +1189,260 @@ async function refreshStats(){
     : `<div class="note">${t("an.noRunsShort")}</div>`;
 }
 
+
+/* ------------------------------------------------------------------- map */
+/* The coastline is embedded, not fetched from a tile server. It is the
+   Caspian's own outline from Natural Earth 10m land, clipped to the basin and
+   simplified to about 1 km - 12 KB, which is less than a single map tile and,
+   more to the point, still there when the network is not. A survey tool that
+   goes blank in the field, or a demo that dies on venue wi-fi, is worse than a
+   plainer map that always draws. */
+const CASPIAN = [[[54.747,40.996],[54.678,41.065],[54.701,41.068],[54.767,41.037],[54.72,41.08],[54.733,41.098],[54.716,41.115],[54.636,41.133],[54.635,41.163],[54.6,41.192],[54.4,41.309],[54.295,41.347],[54.191,41.407],[54.145,41.46],[54.074,41.488],[54.03,41.569],[54.009,41.765],[53.932,41.884],[53.899,41.905],[53.917,42.007],[53.907,42.063],[53.819,42.124],[53.768,42.136],[53.725,42.126],[53.682,42.144],[53.375,42.106],[53.297,42.079],[53.22,42.081],[53.164,42.104],[52.96,41.984],[52.937,41.955],[52.821,41.765],[52.782,41.726],[52.769,41.676],[52.785,41.663],[52.831,41.701],[52.881,41.698],[52.917,41.674],[52.896,41.63],[52.899,41.566],[52.813,41.379],[52.844,41.24],[52.91,41.123],[52.875,41.05],[52.848,41.078],[52.851,41.163],[52.813,41.222],[52.813,41.263],[52.761,41.378],[52.723,41.394],[52.694,41.445],[52.646,41.458],[52.562,41.519],[52.56,41.544],[52.588,41.583],[52.593,41.646],[52.56,41.688],[52.53,41.691],[52.438,41.749],[52.491,41.902],[52.474,41.963],[52.434,42.0],[52.437,42.058],[52.402,42.093],[52.436,42.18],[52.485,42.202],[52.594,42.335],[52.601,42.389],[52.643,42.428],[52.676,42.538],[52.663,42.613],[52.618,42.678],[52.576,42.699],[52.564,42.742],[52.574,42.75],[52.6,42.698],[52.663,42.668],[52.71,42.585],[52.741,42.638],[52.736,42.701],[52.713,42.731],[52.629,42.75],[52.625,42.775],[52.471,42.826],[52.357,42.832],[52.321,42.819],[52.3,42.791],[52.273,42.799],[52.169,42.887],[52.058,42.878],[51.933,42.835],[51.912,42.842],[51.803,42.959],[51.772,43.031],[51.711,43.091],[51.676,43.1],[51.679,43.16],[51.651,43.191],[51.54,43.175],[51.509,43.154],[51.46,43.169],[51.276,43.154],[51.266,43.188],[51.313,43.311],[51.315,43.462],[51.279,43.518],[51.273,43.559],[51.218,43.593],[51.207,43.624],[51.156,43.625],[51.115,43.661],[51.023,43.801],[50.991,43.867],[50.991,43.908],[50.902,44.011],[50.861,44.025],[50.847,44.189],[50.781,44.236],[50.696,44.264],[50.345,44.311],[50.255,44.351],[50.23,44.391],[50.238,44.484],[50.225,44.568],[50.238,44.586],[50.254,44.558],[50.268,44.571],[50.311,44.662],[50.498,44.626],[50.617,44.64],[50.627,44.624],[50.73,44.621],[50.757,44.605],[50.784,44.633],[50.873,44.629],[50.96,44.57],[51.005,44.566],[51.009,44.551],[50.991,44.545],[51.007,44.529],[51.143,44.485],[51.225,44.5],[51.292,44.552],[51.366,44.56],[51.382,44.56],[51.374,44.528],[51.471,44.532],[51.56,44.511],[51.574,44.524],[51.554,44.55],[51.439,44.61],[51.319,44.596],[51.292,44.614],[51.234,44.719],[51.096,44.797],[51.05,44.803],[50.962,44.864],[50.966,44.907],[50.994,44.936],[50.954,44.952],[50.959,44.979],[51.065,44.997],[51.107,45.032],[51.197,45.066],[51.273,45.025],[51.275,45.057],[51.243,45.101],[51.258,45.135],[51.244,45.162],[51.309,45.257],[51.397,45.333],[51.416,45.39],[51.457,45.347],[51.544,45.335],[51.7,45.392],[51.758,45.457],[51.792,45.405],[51.878,45.395],[51.94,45.367],[52.009,45.395],[52.094,45.382],[52.519,45.409],[52.91,45.313],[53.002,45.32],[53.108,45.3],[53.261,45.343],[53.266,45.361],[53.248,45.37],[53.143,45.384],[53.112,45.406],[53.036,45.419],[52.755,45.517],[52.732,45.554],[52.746,45.639],[52.792,45.663],[52.859,45.765],[52.954,45.83],[53.082,46.005],[53.077,46.048],[53.114,46.098],[53.157,46.272],[53.157,46.342],[53.128,46.394],[53.033,46.471],[53.102,46.444],[53.075,46.476],[53.082,46.512],[53.018,46.479],[52.998,46.485],[52.997,46.505],[53.04,46.574],[53.042,46.555],[53.072,46.545],[53.096,46.568],[53.108,46.622],[53.118,46.602],[53.142,46.635],[53.184,46.635],[53.205,46.656],[53.208,46.695],[53.188,46.718],[53.106,46.737],[53.084,46.853],[53.052,46.898],[52.992,46.895],[52.92,46.957],[52.783,46.944],[52.615,46.95],[52.537,46.989],[52.456,47.001],[52.427,46.99],[52.419,46.944],[52.357,46.894],[52.262,46.87],[52.189,46.884],[52.183,46.862],[52.224,46.848],[52.245,46.81],[52.113,46.813],[52.0,46.891],[52.019,46.937],[51.999,46.941],[51.961,46.886],[51.941,46.88],[51.854,46.895],[51.896,46.931],[51.806,46.909],[51.744,46.927],[51.676,46.979],[51.696,47.021],[51.68,47.057],[51.636,47.049],[51.611,46.989],[51.592,46.987],[51.527,47.053],[51.213,47.121],[51.103,47.08],[50.971,47.06],[50.905,47.019],[50.847,47.037],[50.838,47.01],[50.741,46.906],[50.73,46.923],[50.752,46.975],[50.678,46.933],[50.616,46.936],[50.607,46.868],[50.569,46.829],[50.552,46.835],[50.578,46.878],[50.503,46.864],[50.43,46.897],[50.384,46.818],[50.367,46.807],[50.374,46.854],[50.34,46.813],[50.299,46.802],[50.231,46.726],[50.213,46.728],[50.223,46.761],[50.213,46.766],[50.169,46.749],[50.034,46.635],[49.963,46.629],[49.882,46.576],[49.84,46.581],[49.817,46.54],[49.771,46.567],[49.757,46.532],[49.703,46.56],[49.703,46.519],[49.623,46.583],[49.627,46.519],[49.608,46.527],[49.579,46.499],[49.558,46.534],[49.481,46.561],[49.469,46.594],[49.472,46.547],[49.504,46.499],[49.493,46.5],[49.457,46.51],[49.462,46.533],[49.429,46.555],[49.421,46.54],[49.389,46.544],[49.305,46.588],[49.313,46.562],[49.379,46.51],[49.394,46.478],[49.333,46.485],[49.298,46.524],[49.278,46.525],[49.304,46.466],[49.367,46.43],[49.367,46.389],[49.25,46.469],[49.223,46.471],[49.292,46.396],[49.168,46.409],[49.216,46.38],[49.227,46.328],[49.296,46.275],[49.299,46.252],[49.16,46.292],[49.142,46.31],[49.168,46.328],[49.15,46.336],[49.076,46.286],[49.059,46.252],[49.105,46.241],[49.115,46.151],[49.069,46.192],[49.042,46.196],[48.935,46.142],[48.955,46.108],[48.932,46.085],[48.899,46.148],[48.88,46.156],[48.887,46.108],[48.839,46.149],[48.874,46.078],[48.86,46.074],[48.819,46.125],[48.791,46.128],[48.828,46.088],[48.818,46.056],[48.782,46.097],[48.714,46.13],[48.702,46.115],[48.679,46.12],[48.664,46.09],[48.627,46.087],[48.688,46.067],[48.729,46.02],[48.647,45.971],[48.651,45.961],[48.752,45.966],[48.742,45.914],[48.791,45.841],[48.765,45.852],[48.721,45.838],[48.716,45.814],[48.687,45.849],[48.71,45.882],[48.63,45.91],[48.594,45.958],[48.555,45.967],[48.51,45.941],[48.466,45.94],[48.394,45.868],[48.357,45.869],[48.407,45.852],[48.399,45.835],[48.289,45.837],[48.277,45.786],[48.221,45.765],[48.243,45.71],[48.18,45.74],[48.148,45.743],[48.134,45.724],[48.079,45.752],[48.007,45.701],[47.969,45.732],[47.897,45.694],[47.859,45.724],[47.835,45.66],[47.852,45.642],[47.818,45.608],[47.752,45.691],[47.665,45.708],[47.619,45.759],[47.56,45.772],[47.555,45.744],[47.592,45.745],[47.626,45.709],[47.609,45.639],[47.661,45.622],[47.646,45.592],[47.654,45.559],[47.615,45.57],[47.586,45.626],[47.541,45.666],[47.482,45.669],[47.433,45.694],[47.455,45.717],[47.503,45.717],[47.385,45.75],[47.428,45.676],[47.551,45.628],[47.572,45.567],[47.542,45.537],[47.509,45.571],[47.51,45.594],[47.494,45.585],[47.538,45.506],[47.501,45.48],[47.497,45.43],[47.381,45.411],[47.46,45.391],[47.384,45.299],[47.37,45.186],[47.297,45.187],[47.201,44.97],[47.166,44.967],[47.146,44.929],[47.099,44.956],[47.112,44.87],[47.078,44.785],[47.024,44.843],[47.003,44.922],[46.984,44.893],[47.01,44.83],[46.962,44.765],[46.924,44.772],[46.868,44.74],[46.831,44.696],[46.792,44.706],[46.746,44.654],[46.722,44.655],[46.708,44.57],[46.723,44.549],[46.68,44.528],[46.711,44.432],[46.773,44.395],[46.852,44.398],[47.026,44.36],[47.055,44.328],[47.078,44.264],[47.122,44.223],[47.18,44.203],[47.222,44.231],[47.246,44.212],[47.29,44.093],[47.358,44.021],[47.433,43.876],[47.462,43.86],[47.441,43.819],[47.489,43.816],[47.503,43.771],[47.445,43.738],[47.434,43.716],[47.451,43.682],[47.428,43.668],[47.394,43.606],[47.366,43.621],[47.38,43.56],[47.405,43.544],[47.404,43.511],[47.424,43.504],[47.448,43.518],[47.465,43.552],[47.478,43.644],[47.507,43.686],[47.503,43.715],[47.534,43.776],[47.544,43.865],[47.596,43.901],[47.702,43.874],[47.644,43.83],[47.602,43.766],[47.491,43.463],[47.493,43.296],[47.51,43.292],[47.57,43.334],[47.586,43.3],[47.565,43.268],[47.486,43.213],[47.482,43.127],[47.453,43.081],[47.462,43.021],[47.53,42.962],[47.59,42.943],[47.622,42.905],[47.702,42.862],[47.727,42.663],[47.752,42.637],[47.868,42.585],[47.993,42.42],[48.096,42.35],[48.222,42.175],[48.304,42.103],[48.387,41.937],[48.416,41.915],[48.553,41.876],[48.655,41.801],[48.866,41.585],[48.904,41.523],[48.941,41.505],[48.994,41.44],[49.028,41.431],[49.136,41.275],[49.154,41.166],[49.195,41.057],[49.243,40.997],[49.382,40.867],[49.449,40.831],[49.471,40.836],[49.539,40.788],[49.51,40.699],[49.539,40.654],[49.724,40.581],[49.817,40.565],[49.938,40.587],[50.052,40.584],[50.109,40.527],[50.238,40.496],[50.276,40.437],[50.336,40.406],[50.361,40.365],[50.388,40.221],[50.323,40.297],[50.253,40.336],[50.128,40.359],[49.984,40.324],[49.956,40.352],[49.893,40.369],[49.84,40.338],[49.847,40.314],[49.819,40.292],[49.577,40.217],[49.504,40.165],[49.497,40.095],[49.433,40.063],[49.484,39.989],[49.424,39.935],[49.443,39.873],[49.417,39.844],[49.421,39.81],[49.395,39.782],[49.424,39.71],[49.384,39.69],[49.318,39.621],[49.285,39.522],[49.296,39.477],[49.409,39.386],[49.397,39.345],[49.407,39.324],[49.367,39.351],[49.407,39.289],[49.306,39.347],[49.247,39.311],[49.238,39.17],[49.203,39.034],[49.119,38.975],[49.079,38.963],[49.052,38.981],[49.065,39.015],[49.125,39.028],[49.148,39.083],[49.116,39.11],[49.069,39.111],[49.059,39.173],[49.022,39.188],[48.968,39.184],[48.935,39.124],[48.936,39.053],[48.953,39.032],[48.922,38.935],[48.868,38.864],[48.832,38.871],[48.835,38.819],[48.863,38.757],[48.875,38.243],[48.949,37.967],[48.945,37.903],[48.987,37.842],[48.994,37.777],[49.065,37.679],[49.206,37.582],[49.442,37.495],[49.826,37.454],[49.934,37.474],[49.969,37.46],[49.935,37.454],[50.196,37.389],[50.227,37.365],[50.223,37.329],[50.245,37.279],[50.322,37.153],[50.479,37.035],[51.005,36.768],[51.089,36.737],[51.909,36.583],[52.094,36.603],[52.259,36.651],[52.779,36.74],[53.116,36.822],[53.448,36.882],[53.886,36.906],[53.958,36.92],[54.007,36.953],[54.004,36.915],[53.948,36.899],[53.818,36.875],[53.609,36.877],[53.664,36.863],[53.636,36.857],[53.701,36.817],[53.889,36.794],[54.014,36.821],[54.033,36.846],[54.034,36.949],[54.028,36.966],[53.994,36.979],[54.02,37.028],[53.98,37.094],[53.923,37.258],[53.9,37.468],[53.825,37.745],[53.807,38.032],[53.866,38.265],[53.863,38.381],[53.828,38.504],[53.836,38.606],[53.863,38.679],[53.927,38.774],[53.917,38.804],[53.983,38.916],[53.897,38.974],[53.86,39.035],[53.787,39.042],[53.767,39.031],[53.722,39.111],[53.712,39.104],[53.732,39.057],[53.702,39.079],[53.698,39.152],[53.732,39.173],[53.702,39.175],[53.725,39.242],[53.66,39.2],[53.674,39.193],[53.684,39.083],[53.636,39.139],[53.623,39.192],[53.602,39.193],[53.609,39.236],[53.598,39.242],[53.568,39.193],[53.588,39.303],[53.561,39.283],[53.581,39.33],[53.554,39.324],[53.562,39.353],[53.533,39.33],[53.452,39.318],[53.437,39.338],[53.389,39.311],[53.403,39.338],[53.293,39.33],[53.297,39.349],[53.239,39.365],[53.15,39.344],[53.198,39.324],[53.17,39.272],[53.181,39.189],[53.161,39.18],[53.137,39.321],[53.085,39.4],[53.178,39.516],[53.242,39.636],[53.276,39.665],[53.314,39.659],[53.249,39.608],[53.211,39.55],[53.217,39.525],[53.427,39.536],[53.492,39.481],[53.568,39.468],[53.581,39.478],[53.561,39.502],[53.574,39.527],[53.615,39.495],[53.684,39.522],[53.716,39.509],[53.736,39.518],[53.712,39.543],[53.629,39.571],[53.656,39.593],[53.633,39.618],[53.572,39.616],[53.564,39.653],[53.533,39.68],[53.54,39.632],[53.471,39.696],[53.444,39.701],[53.458,39.673],[53.43,39.687],[53.43,39.668],[53.451,39.632],[53.417,39.65],[53.43,39.763],[53.393,39.758],[53.382,39.769],[53.415,39.782],[53.499,39.866],[53.485,39.885],[53.537,39.896],[53.526,39.913],[53.574,39.968],[53.492,39.975],[53.402,40.007],[53.283,39.94],[53.172,39.997],[53.126,39.975],[53.054,39.968],[53.082,39.995],[52.975,39.974],[52.944,39.982],[52.914,40.022],[52.896,39.998],[52.92,39.965],[52.93,39.896],[53.054,39.769],[53.006,39.783],[53.04,39.742],[52.995,39.78],[52.953,39.847],[52.917,39.858],[52.884,39.945],[52.738,40.054],[52.768,40.154],[52.699,40.274],[52.702,40.312],[52.75,40.518],[52.863,40.658],[52.868,40.694],[52.828,40.711],[52.833,40.746],[52.868,40.756],[52.862,40.79],[52.923,40.941],[52.917,41.085],[52.961,41.061],[52.958,41.016],[53.012,40.955],[53.04,40.886],[53.074,40.865],[53.122,40.872],[53.065,40.844],[53.119,40.77],[53.182,40.768],[53.266,40.817],[53.245,40.775],[53.331,40.776],[53.37,40.835],[53.399,40.763],[53.483,40.737],[53.555,40.774],[53.563,40.853],[53.587,40.892],[53.625,40.887],[53.657,40.865],[53.65,40.845],[53.671,40.811],[53.65,40.784],[53.676,40.726],[53.725,40.688],[53.705,40.65],[53.721,40.626],[53.863,40.626],[53.948,40.674],[54.011,40.658],[54.088,40.682],[54.095,40.698],[54.054,40.715],[54.171,40.73],[54.232,40.728],[54.218,40.69],[54.253,40.677],[54.404,40.674],[54.363,40.688],[54.43,40.721],[54.318,40.722],[54.269,40.84],[54.273,40.872],[54.248,40.875],[54.25,40.891],[54.332,40.927],[54.466,40.866],[54.438,40.817],[54.591,40.827],[54.64,40.839],[54.709,40.885],[54.756,40.948],[54.747,40.996]]];
+const MBB = [45.0, 35.0, 57.5, 49.0];              // lng0 lat0 lng1 lat1
+const MKX = Math.cos(42 * Math.PI / 180);          // standard parallel, so the
+const MW  = (MBB[2] - MBB[0]) * MKX;               // basin is not stretched
+const MH  = MBB[3] - MBB[1];                       // east-west at this latitude
+const MV  = { k: 1, tx: 0, ty: 0 };
+let mapBuilt = false;
+
+const mproj = (lng, lat) => [(lng - MBB[0]) * MKX, MBB[3] - lat];
+const mfix  = n => n.toFixed(3);
+
+function mapRingPath(ring){
+  let d = "";
+  for (let i = 0; i < ring.length; i++){
+    const [x, y] = mproj(ring[i][0], ring[i][1]);
+    d += (i ? "L" : "M") + mfix(x) + " " + mfix(y);
+  }
+  return d + "Z";
+}
+
+function svgUser(ev){
+  const svg = $("mapSvg"), p = svg.createSVGPoint();
+  p.x = ev.clientX; p.y = ev.clientY;
+  return p.matrixTransform(svg.getScreenCTM().inverse());
+}
+
+/* Markers must keep their on-screen size while the map zooms, otherwise a site
+   dot becomes a blob at 10x. Radii and label sizes are therefore stored as
+   their unzoomed value and divided by k on every view change. */
+function applyMapView(){
+  const g = $("mapZoom");
+  if (!g) return;
+  g.setAttribute("transform", `translate(${mfix(MV.tx)} ${mfix(MV.ty)}) scale(${MV.k.toFixed(4)})`);
+  const inv = 1 / MV.k;
+  g.querySelectorAll("[data-r]").forEach(el =>
+    el.setAttribute("r", (+el.dataset.r * inv).toFixed(4)));
+
+  // Labels are decluttered greedily, biggest colony first: a label is drawn
+  // only if its box misses every box already placed. Because the boxes shrink
+  // as k grows, zooming in reveals the crowded northern sites instead of
+  // leaving them permanently stacked on top of each other.
+  // Markers seed the obstacle list, not just other labels: checking labels
+  // against each other alone still let a name sit squarely on someone else's
+  // dot, which reads as a mislabelled site rather than as a crowded one.
+  const placed = [...g.querySelectorAll("[data-r]")].map(c => {
+    const r = +c.getAttribute("r"), cx = +c.getAttribute("cx"), cy = +c.getAttribute("cy");
+    return { site: c.dataset.site || "", box: [cx - r, cy - r, cx + r, cy + r] };
+  });
+  const labels = [...g.querySelectorAll("[data-fs]")]
+    .sort((a, b) => (+b.dataset.rank) - (+a.dataset.rank));
+  for (const el of labels) {
+    const fs = +el.dataset.fs * inv;
+    const dy = +el.dataset.dy * inv;
+    el.setAttribute("font-size", fs.toFixed(4));
+    el.setAttribute("dy", dy.toFixed(4));
+    // The box is asymmetric because the text hangs off a baseline: glyphs rise
+    // about 0.72em above it and drop about 0.2em below. Treating it as
+    // symmetric made every label overlap its own marker and hid all of them.
+    const cx = +el.getAttribute("x"), base = +el.getAttribute("y") + dy;
+    const hw = el.textContent.length * fs * 0.30;
+    const box = [cx - hw, base - fs * 0.72, cx + hw, base + fs * 0.20];
+    const mine = el.dataset.site || "";
+    const clash = placed.some(o =>
+      o.site !== mine &&                       // a site never hides its own name
+      box[0] < o.box[2] && box[2] > o.box[0] &&
+      box[1] < o.box[3] && box[3] > o.box[1]);
+    el.style.display = clash ? "none" : "";
+    if (!clash) placed.push({ site: mine, box });
+  }
+}
+
+/* The Caspian is tall and the survey sites sit on one shore, so opening on the
+   whole basin spends most of the pane on water nobody flew over. The default
+   view frames the data; "Reset view" returns to it, and zooming out from there
+   still reaches the full sea. */
+let MFIT = null;
+function fitMapToSites(geo){
+  if (!geo.length){ MFIT = { k: 1, tx: 0, ty: 0 }; return; }
+  const xs = [], ys = [];
+  for (const s of geo){ const [x, y] = mproj(s.lng, s.lat); xs.push(x); ys.push(y); }
+  const bw = Math.max(0.6, Math.max(...xs) - Math.min(...xs));
+  const bh = Math.max(0.6, Math.max(...ys) - Math.min(...ys));
+  const k = Math.max(1, Math.min(12, Math.min(MW / bw, MH / bh) * 0.62));
+  const cx = (Math.max(...xs) + Math.min(...xs)) / 2;
+  const cy = (Math.max(...ys) + Math.min(...ys)) / 2;
+  MFIT = { k, tx: MW / 2 - cx * k, ty: MH / 2 - cy * k };
+}
+function resetMapView(){
+  const f = MFIT || { k: 1, tx: 0, ty: 0 };
+  MV.k = f.k; MV.tx = f.tx; MV.ty = f.ty;
+  applyMapView();
+}
+
+function wireMapZoom(){
+  const svg = $("mapSvg");
+  svg.addEventListener("wheel", ev => {
+    ev.preventDefault();
+    const p = svgUser(ev);
+    const nk = Math.max(1, Math.min(60, MV.k * (ev.deltaY < 0 ? 1.18 : 1 / 1.18)));
+    const rf = nk / MV.k;
+    // Keep the point under the cursor fixed, which is what makes wheel-zoom
+    // feel like a map rather than like a slider.
+    MV.tx = p.x - (p.x - MV.tx) * rf;
+    MV.ty = p.y - (p.y - MV.ty) * rf;
+    MV.k  = nk;
+    applyMapView();
+  }, { passive: false });
+
+  let last = null;
+  svg.addEventListener("pointerdown", ev => {
+    last = svgUser(ev); svg.classList.add("drag");
+    try { svg.setPointerCapture(ev.pointerId); } catch {}
+  });
+  svg.addEventListener("pointermove", ev => {
+    if (!last) return;
+    const p = svgUser(ev);
+    MV.tx += p.x - last.x; MV.ty += p.y - last.y;
+    last = p; applyMapView();
+  });
+  const drop = ev => {
+    last = null; svg.classList.remove("drag");
+    try { svg.releasePointerCapture(ev.pointerId); } catch {}
+  };
+  svg.addEventListener("pointerup", drop);
+  svg.addEventListener("pointercancel", drop);
+}
+
+function buildMap(){
+  const svg = $("mapSvg");
+  svg.setAttribute("viewBox", `0 0 ${mfix(MW)} ${mfix(MH)}`);
+  let grat = "";
+  for (let lng = 46; lng <= 57; lng += 2){
+    const a = mproj(lng, MBB[1]), b = mproj(lng, MBB[3]);
+    grat += `M${mfix(a[0])} ${mfix(a[1])}L${mfix(b[0])} ${mfix(b[1])}`;
+  }
+  for (let lat = 36; lat <= 48; lat += 2){
+    const a = mproj(MBB[0], lat), b = mproj(MBB[2], lat);
+    grat += `M${mfix(a[0])} ${mfix(a[1])}L${mfix(b[0])} ${mfix(b[1])}`;
+  }
+  svg.innerHTML =
+    `<g id="mapZoom">` +
+      `<path class="grat" d="${grat}"/>` +
+      `<path class="water" d="${CASPIAN.map(mapRingPath).join("")}"/>` +
+      `<g id="mapDet"></g><g id="mapSites"></g>` +
+    `</g>`;
+  mapBuilt = true;
+  wireMapZoom();
+  applyMapView();
+}
+
+function mapTip(html, ev){
+  const tip = $("mapTip"), stage = $("mapStage");
+  if (!html){ tip.style.opacity = 0; return; }
+  const r = stage.getBoundingClientRect();
+  tip.innerHTML = html;
+  tip.style.opacity = 1;
+  tip.style.left = Math.min(r.width - 250, ev.clientX - r.left + 14) + "px";
+  tip.style.top  = Math.max(6, ev.clientY - r.top - 10) + "px";
+}
+
+function renderMap(){
+  if (!mapBuilt) buildMap();
+  const sites = (S.stats && S.stats.per_site) || [];
+  const geo = sites.filter(s => Number.isFinite(s.lat) && Number.isFinite(s.lng));
+  const hidden = sites.length - geo.length;
+
+  const best = s => (s.latest && s.latest.best != null) ? s.latest.best : null;
+  const peak = Math.max(1, ...geo.map(s => best(s) || 0));
+
+  $("mapSites").innerHTML = geo.map(s => {
+    const [x, y] = mproj(s.lng, s.lat);
+    const b = best(s);
+    // Area, not radius, tracks the count - radius would exaggerate a big
+    // colony into looking an order of magnitude larger than it is.
+    const r = b == null ? 0.10 : 0.10 + 0.26 * Math.sqrt(b / peak);
+    return `<circle class="site${b == null ? " nocount" : ""}" cx="${mfix(x)}" cy="${mfix(y)}"
+              data-r="${r.toFixed(4)}" r="${r.toFixed(4)}" data-site="${s.site_id}"></circle>
+            <text class="sitelbl" x="${mfix(x)}" y="${mfix(y)}" data-fs="0.20" font-size="0.20"
+              data-rank="${b == null ? 0 : b}" data-site="${s.site_id}"
+              data-dy="${(-r - 0.10).toFixed(4)}" dy="${(-r - 0.10).toFixed(4)}">${esc(s.name || "")}</text>`;
+  }).join("");
+
+  // Recomputed per render: sites can appear after the first stats fetch, and a
+  // view fitted to an empty list would strand the map on the wrong framing.
+  const hadFit = !!MFIT;
+  fitMapToSites(geo);
+  if (!hadFit) resetMapView();
+
+  const pts = (S.points || []).filter(p =>
+    p.status !== "false_positive" && Number.isFinite(p.lat) && Number.isFinite(p.lng));
+  $("mapDet").innerHTML = pts.map(p => {
+    const [x, y] = mproj(p.lng, p.lat);
+    return `<circle class="det" cx="${mfix(x)}" cy="${mfix(y)}" data-r="0.035" r="0.035"></circle>`;
+  }).join("");
+
+  applyMapView();
+
+  $("mapSites").onmouseover = ev => {
+    const c = ev.target.closest("[data-site]"); if (!c) return;
+    const s = geo.find(g => String(g.site_id) === c.dataset.site); if (!s) return;
+    const b = s.latest || {};
+    mapTip(`<b>${esc(s.name || "—")}</b>` +
+      (s.region ? `<div style="color:var(--dim)">${esc(s.region)}</div>` : "") +
+      (b.best != null
+        ? `<div style="margin-top:5px;color:var(--accent)">${fmt(b.best)} ${t("map.animals")}</div>
+           <div style="color:var(--dim)">${fmt(b.low)}–${fmt(b.high)}</div>`
+        : `<div style="margin-top:5px;color:var(--dim)">${t("map.noBand")}</div>`) +
+      `<div style="margin-top:5px;color:var(--dim)">${fmt(s.surveys)} ${t("map.surveys")} · ${fmt(s.runs)} ${t("map.runs")}</div>`, ev);
+  };
+  $("mapSites").onmousemove = ev => { if (ev.target.closest("[data-site]")) mapTip(null, ev); };
+  $("mapSites").onmouseout = () => mapTip(null);
+
+  const notes = [];
+  if (!geo.length) notes.push(t("map.noSites"));
+  if (hidden > 0) notes.push(t("map.hidden", { n: hidden }));
+  const total = (S.points || []).filter(p => p.status !== "false_positive").length;
+  if (total) notes.push(pts.length ? t("map.detGeo", { n: pts.length, total }) : t("map.detNone"));
+  $("mapNote").innerHTML = notes.join("<br>");
+
+  $("mapSiteList").innerHTML = geo.length
+    ? `<table><thead><tr><th>site</th><th>best</th><th>band</th><th>runs</th></tr></thead><tbody>` +
+      geo.slice().sort((a, b2) => (best(b2) || 0) - (best(a) || 0)).map(s => {
+        const b = s.latest || {};
+        return `<tr><td>${esc(s.name || "—")}</td>
+          <td style="color:var(--accent)">${b.best != null ? fmt(b.best) : "—"}</td>
+          <td style="color:var(--dim)">${b.low != null ? fmt(b.low) + "–" + fmt(b.high) : "—"}</td>
+          <td style="color:var(--dim)">${fmt(s.runs)}</td></tr>`;
+      }).join("") + `</tbody></table>`
+    : `<div class="note">${t("map.noSites")}</div>`;
+}
+
 /* ---------------------------------------------------------------- init */
 function show(v){
-  const s=v==="survey";
-  $("view-survey").classList.toggle("on",s);
-  $("view-analytics").classList.toggle("on",!s);
-  $("tabSurvey").classList.toggle("on",s);
-  $("tabAnalytics").classList.toggle("on",!s);
-  if(!s) refreshStats();
+  for (const [name, main, tab] of [["survey","view-survey","tabSurvey"],
+                                   ["map","view-map","tabMap"],
+                                   ["analytics","view-analytics","tabAnalytics"]]){
+    $(main).classList.toggle("on", v===name);
+    $(tab).classList.toggle("on", v===name);
+  }
+  // Both non-survey views read /v1/stats. refreshStats caches it onto S, and
+  // renderMap runs after it so the map never draws from a stale or absent
+  // payload on the first switch.
+  // The map draws either way. Chaining it to a successful stats fetch is how a
+  // single broken panel took the whole view down once already; an unreachable
+  // service should cost the site markers, not the coastline.
+  if (v!=="survey") refreshStats().catch(()=>{}).finally(()=>{ if (v==="map") renderMap(); });
 }
 
 wireDrop();
@@ -1090,7 +1450,9 @@ $("runBtn").onclick=run;
 $("verifyBtn").onclick=toggleVerify;
 $("wrap").addEventListener("click",stageClick);
 $("tabSurvey").onclick=()=>show("survey");
+$("tabMap").onclick=()=>show("map");
 $("tabAnalytics").onclick=()=>show("analytics");
+$("mapReset").onclick=resetMapView;
 document.getElementById("lang").value = LANG;
 document.getElementById("lang").onchange = e => setLang(e.target.value);
 applyI18n();
