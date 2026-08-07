@@ -1,0 +1,118 @@
+@import 'maplibre-gl/dist/maplibre-gl.css';
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ---------------------------------------------------------------
+   TULEN design tokens — one neutral ramp, one accent. Nothing else.
+   Chrome stays quiet so the data on the map is the only loud thing.
+   --------------------------------------------------------------- */
+:root {
+  --bg: #0a0a0b;
+  --surface: #101012;
+  --surface-2: #17171a;
+  --line: #232327;
+  --line-soft: #1a1a1d;
+
+  --ink: #ececee;
+  --ink-2: #9c9ca4;
+  --ink-3: #64646c;
+
+  --accent: #e0a13c;
+  --accent-soft: #e0a13c1f;
+  --accent-ink: #17120a;
+
+  --good: #6aa88a;
+  --bad: #c0685f;
+}
+
+* {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-size: 13px;
+  line-height: 1.45;
+  overflow: hidden;
+  letter-spacing: -0.005em;
+}
+
+/* Tabular numerals everywhere numbers matter — no jitter on live counters */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* The one label style. Used once per section, never stacked. */
+.label {
+  font-size: 10px;
+  line-height: 1;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+input,
+button,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+a:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+::selection {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #2a2a2f;
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3a3a41;
+  background-clip: padding-box;
+}
+
+/* MapLibre */
+.maplibregl-ctrl-bottom-right,
+.maplibregl-ctrl-bottom-left {
+  display: none;
+}
+.maplibregl-popup-content {
+  background: var(--surface) !important;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: var(--ink);
+  font-size: 12px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.5);
+}
+.maplibregl-popup-tip {
+  border-top-color: var(--surface) !important;
+}
