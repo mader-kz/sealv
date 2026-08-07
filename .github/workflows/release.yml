@@ -1,0 +1,147 @@
+name: Release
+
+# Tag -> verify -> deploy -> publish. Pushing `v1.2.0` is the whole trigger.
+#
+#     python3 tools/release_notes.py v1.2.0 --scaffold   # write the notes
+#     git add docs/releases/v1.2.0.md && git commit
+#     git tag v1.2.0 && git push origin main --tags
+#
+# Deliberate ordering: the GitHub Release is created LAST, after Railway reports
+# the new version healthy. A release is an announcement, and announcing a
+# version that failed to deploy is worse than not announcing it. If the deploy
+# breaks, the tag exists but no release does - re-run the job after fixing.
+
+on:
+  push:
+    tags: ['v*.*.*']
+  # Re-run a deploy for an existing tag without cutting a new version.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to (re)deploy, e.g. v1.2.0'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Same gate as every branch push. A tag gets no shortcut.
+  verify:
+    uses: ./.github/workflows/ci.yml
+
+  # Runs alongside `verify` rather than after it, because it is the check most
+  # likely to fail and the cheapest to fix - better to learn in 20 seconds that
+  # the notes are missing than after a full build.
+  notes:
+    name: Bilingual release notes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - id: tag
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "releasing $tag from $(git rev-parse --short HEAD)"
+      - name: Validate structure
+        run: python3 tools/release_notes.py "${{ steps.tag.outputs.tag }}" --check
+
+  deploy:
+    name: Deploy to Railway
+    needs: [verify, notes]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Gives the deploy its own protection rules and holds RAILWAY_TOKEN. Add
+    # required reviewers here if a release should ever need a human to approve.
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      # Fail on the missing secret rather than on a confusing CLI error forty
+      # lines into a log.
+      - name: Credentials present
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          [ -n "$RAILWAY_TOKEN" ] || {
+            echo "::error::secrets.RAILWAY_TOKEN is unset. Create a *project* \
+          token (Railway -> project -> Settings -> Tokens); an account token \
+          fails with 'Project Token not found'."; exit 1; }
+          [ -n "${{ vars.RAILWAY_SERVICE }}" ] || {
+            echo "::error::vars.RAILWAY_SERVICE is unset - set it to the service \
+          name exactly as it appears in Railway."; exit 1; }
+
+      # Pinned. `curl | sh` from an installer URL would let the deploy step
+      # change under us between two runs of the same tag.
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli@5.30.4
+
+      # No `-y` here, on purpose: with nothing linked, `-y` makes `up` CREATE a
+      # new project and deploy into it, which would look like success while
+      # publishing to an empty project nobody is watching. The project comes
+      # from the token; the service is named explicitly.
+      - name: Deploy
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: railway up --ci --service "${{ vars.RAILWAY_SERVICE }}"
+
+      # `railway up --ci` returns when the BUILD finishes, not when the new
+      # container is serving. Without this the release could be published while
+      # the old version is still answering, or while the new one is crash-looping.
+      # Skipped when the URL is unset so a fresh project still deploys.
+      - name: Wait for the new version to answer
+        if: vars.RAILWAY_HEALTHCHECK_URL != ''
+        run: |
+          url="${{ vars.RAILWAY_HEALTHCHECK_URL }}"
+          echo "polling $url"
+          for i in $(seq 1 60); do
+            code=$(curl -fsS -o /tmp/health.json -w '%{http_code}' "$url" 2>/dev/null) || code=000
+            if [ "$code" = "200" ]; then
+              echo "healthy after ${i}0s:"; cat /tmp/health.json; exit 0
+            fi
+            printf '  %2ds  http %s\n' "$((i * 10))" "$code"
+            sleep 10
+          done
+          echo "::error::$url never returned 200 in 10 minutes - the deploy \
+          built but is not serving. Check the Railway deploy logs."
+          exit 1
+
+  release:
+    name: Publish GitHub Release
+    needs: [notes, deploy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Render notes
+        id: body
+        run: python3 tools/release_notes.py "${{ needs.notes.outputs.tag }}" > /tmp/notes.md
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.notes.outputs.tag }}
+        run: |
+          # Idempotent: a re-run after a failed deploy edits the existing release
+          # instead of erroring out on a duplicate.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --notes-file /tmp/notes.md --latest
+          else
+            gh release create "$TAG" --title "$TAG" --notes-file /tmp/notes.md --latest
+          fi
+          echo "Release $TAG points at $(git rev-list -1 "$TAG")"

@@ -1,0 +1,156 @@
+name: CI
+
+# The gate. Runs on every push and pull request, and is called by release.yml so
+# that a tag is held to exactly the same bar as a branch - no separate,
+# quietly-weaker path to production.
+#
+# What it deliberately does NOT do is build the Docker image. That build pulls
+# ~1.6 GB of model weights and installs torch; doing it here would take ten
+# minutes to reproduce a build Railway is about to run anyway. Railway's build IS
+# the check - `railway up --ci` streams it and fails the release job if it
+# breaks. Duplicating it would cost time and prove nothing new.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Code gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # release_notes.py resolves the previous tag for the compare link, and
+          # a shallow clone has no tags at all.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # --------------------------------------------------------------- guards
+      # Three files in this tree are individually larger than GitHub's 100 MB
+      # blob limit. A rejected push is the good outcome; the bad one is a 1.2 GB
+      # blob landing in history, where removing it means rewriting every commit
+      # after it. This fails the build long before that can happen.
+      - name: No oversized blobs, no weights in git
+        run: |
+          fail=0
+          limit=$((50 * 1024 * 1024))
+          while IFS= read -r f; do
+            [ -f "$f" ] || continue
+            # `wc -c` rather than stat: stat's size flag differs between GNU and
+            # BSD, so this is the form that runs identically on the runner and on
+            # the macOS laptop where it gets tested before being trusted.
+            sz=$(wc -c < "$f")
+            if [ "$sz" -gt "$limit" ]; then
+              echo "::error file=$f::tracked file is $((sz / 1024 / 1024)) MB - \
+          nothing in this repo should be. Weights are fetched during the Docker build."
+              fail=1
+            fi
+          done < <(git ls-files)
+
+          for p in \
+            yolo11x.pt \
+            vendor/CountGD/checkpoints/checkpoint_best_regular.pth \
+            vendor/CountGD/checkpoints/bert-base-uncased/model.safetensors
+          do
+            if ! git check-ignore -q "$p"; then
+              echo "::error::$p is no longer covered by .gitignore"
+              fail=1
+            fi
+          done
+          [ "$fail" -eq 0 ] && echo "no oversized blobs; weight paths still ignored"
+          exit $fail
+
+      # A non-executable entrypoint is a container that will not boot, and the
+      # mode bit is the kind of thing a checkout on the wrong filesystem drops
+      # silently. Cheap to assert, expensive to debug at deploy time.
+      - name: Entrypoint is executable
+        run: |
+          git ls-files -s docker-entrypoint.sh | grep -q '^100755' \
+            || { echo "::error::docker-entrypoint.sh is not committed executable \
+          (chmod +x, then git update-index --chmod=+x docker-entrypoint.sh)"; exit 1; }
+          echo "docker-entrypoint.sh is committed 100755"
+
+      # ---------------------------------------------------------------- tests
+      - name: Byte-compile every module
+        run: python -m compileall -q service la_studio tools modal_app.py
+
+      # These two carry real assertion suites and need nothing but the standard
+      # library, so they run before a single dependency is installed - if they
+      # break, the failure is about this code and not about a wheel.
+      - name: Self-tests
+        run: |
+          python service/db.py
+          python service/geo.py
+
+      # Just enough to import the service surface. Not the full image pin set:
+      # torch is only ever loaded by the CountGD subprocess (or by Modal), and
+      # nothing imported here reaches it.
+      - name: Install import-time dependencies
+        run: |
+          python -m pip install --quiet --disable-pip-version-check \
+            fastapi 'uvicorn[standard]' python-multipart pillow numpy
+
+      - name: Every module imports
+        run: |
+          python - <<'PY'
+          import importlib, sys
+          mods = ["service.api", "service.detect", "service.worker",
+                  "service.preflight", "service.contract", "service.db",
+                  "service.geo", "la_studio.countgd_engine"]
+          bad = []
+          for m in mods:
+              try:
+                  importlib.import_module(m)
+              except Exception as exc:
+                  bad.append(f"::error::{m} fails to import: {type(exc).__name__}: {exc}")
+          if bad:
+              print("\n".join(bad)); sys.exit(1)
+          print(f"{len(mods)} modules import cleanly")
+          PY
+
+      - name: Locale parity (en / ru / kk)
+        run: python tools/check_i18n.py
+
+      # --------------------------------------------------------- deploy config
+      # railway.json is only ever read by Railway, so a typo in it surfaces as a
+      # deploy that silently ignores the setting rather than as an error.
+      - name: Deploy config is coherent
+        run: |
+          python - <<'PY'
+          import json, pathlib, sys
+          cfg = json.loads(pathlib.Path("railway.json").read_text())
+          problems = []
+          if cfg.get("build", {}).get("builder") != "DOCKERFILE":
+              problems.append("build.builder must be DOCKERFILE")
+          dockerfile = cfg.get("build", {}).get("dockerfilePath", "Dockerfile")
+          if not pathlib.Path(dockerfile).is_file():
+              problems.append(f"dockerfilePath {dockerfile!r} does not exist")
+          hc = cfg.get("deploy", {}).get("healthcheckPath")
+          if not hc:
+              problems.append("deploy.healthcheckPath is unset - a bad release "
+                              "would go live without being noticed")
+          elif f'"{hc}"' not in pathlib.Path("service/api.py").read_text():
+              problems.append(f"healthcheckPath {hc!r} has no route in service/api.py")
+          if cfg.get("deploy", {}).get("requiredMountPath") != "/data":
+              problems.append("deploy.requiredMountPath must be /data - the "
+                              "database and workspace live on the volume")
+          if problems:
+              print("\n".join(f"::error::railway.json: {p}" for p in problems))
+              sys.exit(1)
+          print(f"railway.json ok (healthcheck {hc}, volume /data)")
+          PY
