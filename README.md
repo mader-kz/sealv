@@ -12,15 +12,74 @@
 
 ---
 
+## How to use it
+
+Open the app — [platform-smth.vercel.app](https://platform-smth.vercel.app) or `npm run dev` on `localhost:3000`. You land on an empty Caspian chart with two buttons.
+
+### 1. Get some data on the map
+
+Pick whichever fits — you don't need a drone, a video file, or an internet download for either:
+
+| Button | What it does |
+|---|---|
+| **Load test data** | Drops in 16 synthetic sorties across the Kazakh Caspian sites. Instant, no files involved. Everything it creates is named `TEST_*.MP4` and carries a small `test` pill, so it's never confused with real footage. |
+| **Upload footage** | Opens the ingest panel for real video. |
+
+Inside the ingest panel there are three ways in:
+
+- **Use the sample clip** — one click. A real 38-second drone video with GPS in its metadata ships with the app, so you can try the genuine ingest path without finding a file first.
+- **Drop footage, or click to browse** — your own video. An `.MP4` on its own works if it has GPS inside; otherwise pair it with a matching `.SRT` or `.JSON` track (same filename).
+- **Pin path manually** — for video with no GPS at all. Click along the map to draw the flight path, then confirm.
+
+Either way you'll see a line like:
+
+```
+FIELD_0001.MP4 · location read from video at 44.8500, 50.3500 · 40 track points · 9 seals counted
+```
+
+That's the whole idea: **Tulen reads where the video was shot, counts the seals in it, and puts that number on the map at that spot.**
+
+### 2. Read the map
+
+Each white dot is one sortie, labelled with its seal count. Overlapping labels are hidden as you zoom out so the chart stays readable — the dots stay. Along the top-left you can toggle **Satellite**, **Tracks**, **Counts**, **Cluster**, and **Heat**.
+
+Click any dot — or any row in the footage list — to open it.
+
+### 3. Inspect a sortie
+
+The right panel leads with the count, then confidence, then the video itself (playable), its region, duration, GPS source, and coordinates. **Export JSON** saves the record; the copy button next to it grabs the coordinates.
+
+### 4. Dig into the numbers
+
+The icons down the left rail:
+
+| Icon | Panel | What it's for |
+|---|---|---|
+| Map | Chart | Where you started |
+| Footage | List | Every sortie, filterable, with CSV export |
+| Analytics | Dashboard | Totals, seals per month, breakdown by region, group sizes, forecast — plus **PDF** export |
+| Detections | Table | The working view: correct a count inline, mark false positives, bulk-validate, export CSV |
+
+If you have more than one sortie, a **timeline** appears along the bottom. Drag its handles to narrow the date window — the map, the footage list, and every chart update together. **Reset** clears it.
+
+### Worth knowing
+
+- **Nothing is uploaded anywhere.** Video is read in your browser; no server, no database. See [Is there a backend?](#is-there-a-backend).
+- **A refresh clears everything.** State is in memory, so treat a session as disposable — export before you close the tab.
+- **Seal counts are simulated for now.** The detector isn't wired up yet. Everything else — the location, the track, the duration, the map placement — is real, read from the file. Counts are seeded from the footage ID, and uploads get a fresh random ID, so **ingesting the same video twice gives two different counts**. That's expected until a real detector replaces `mockDetections()`; don't read meaning into a count changing between runs.
+
+---
+
 ## Table of Contents
 
+- [How to use it](#how-to-use-it)
 - [Features](#features)
 - [Tech Stack](#tech-stack)
 - [Project Structure](#project-structure)
 - [Getting Started](#getting-started)
 - [Usage](#usage)
   - [Ingest Footage](#ingest-footage)
-  - [Demo Data](#demo-data)
+  - [Test Data](#test-data)
   - [Map & Layers](#map--layers)
   - [Workbench](#workbench)
   - [Analytics & Forecast](#analytics--forecast)
@@ -45,7 +104,7 @@
 | **MP4 metadata scan** | Reads the first 2 MB + last 512 KB of the video as text to find XMP/QuickTime GPS without extra dependencies |
 | **Water-aware tracks** | Every track is snapped to the Caspian water mask — land points are nudged toward the sea centre, synthetic tracks are generated when only a single fix exists |
 | **Interactive chart** | MapLibre GL dark chart centred on the Caspian (Aktau ≈ 51.18 E / 43.65 N) with footprints, detections, clusters, heatmap, and satellite toggle |
-| **Detections** | Deterministic per-video count (2–26 seals, seeded by footage ID) with confidence and bbox — status `auto` / `validated` / `false_positive` |
+| **Detections** | Simulated per-video count (2–26 seals, seeded by footage ID — so re-ingesting the same file yields a different count) with confidence and bbox — status `auto` / `validated` / `false_positive` |
 | **Timeline** | Brush-filter all data by observation date range |
 | **Workbench** | Search, sort, and filter detections; bulk validate / flag false positives; inline count editing; CSV export |
 | **Analytics Dashboard** | KPIs, monthly trend, region breakdown, group-size histogram, and a 6-month + 3-month forecast |
@@ -180,14 +239,14 @@ npm run lint
 
 Each ingested video becomes a `Footage` record with a `TrackPoint[]` track, a single whole-video `Detection` (count = total seals in that sortie), and a `center` used for map placement.
 
-### Demo Data
+### Test Data
 
 With no footage loaded the map shows a centred call-to-action:
 
-- **Upload** — open the ingest panel
+- **Upload footage** — open the ingest panel
 - **Load test data** — seeds 16 synthetic sorties around 8 Kazakh Caspian sites (Kendirli, Tyuleniy, Bautino, Kulaly, Aktau, Durneva, Mangystau) plus 8 offshore extras via `store/useFootageStore.ts#seedTestData`. Every seeded sortie is named `TEST_*.MP4` and tagged `source: "test"`, and carries a `test` pill in the footage list and inspector — so synthetic data is never mistaken for a real survey. Uploaded footage carries neither.
 
-Demo tracks are generated with `generateSeedTrack()` (30–40 km synthetic paths, always on water).
+Test tracks are generated with `generateSeedTrack()` (30–40 km synthetic paths, always on water).
 
 ### Map & Layers
 
