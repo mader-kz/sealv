@@ -28,22 +28,69 @@ export default function RightInspector({ compact }: { compact?: boolean }){
   }
 
   const det = f.detections[0] || null;
-  const totalSeals = det?.count ?? 0;
+  /* With the real engine a sortie holds one detection PER ANIMAL, so the
+     headline is the band's best estimate; summing detections is the fallback
+     for test data, which never carries a band. */
+  const totalSeals = f.band?.best ?? f.detections.reduce((s, d) => s + d.count, 0);
+  const hasRange = !!f.band && f.band.low != null && f.band.high != null && f.band.low !== f.band.high;
+  const meanConf = f.detections.length
+    ? f.detections.reduce((s, d) => s + d.confidence, 0) / f.detections.length : null;
 
   return (
     <div className={shell}>
       {/* The count is the answer this product exists to give — so it leads. */}
       <div className="px-4 pt-4 pb-3.5 border-b border-line">
-        <div className="flex items-baseline gap-2">
-          <span className="text-hero tnum font-medium leading-none">{totalSeals}</span>
-          <span className="text-sm text-ink2">seals counted</span>
-        </div>
-        <div className="flex items-center gap-2 mt-2.5">
+        {f.status === "error" ? (
+          <div>
+            <div className="text-sm text-bad font-medium">count failed</div>
+            <div className="text-2xs text-ink3 mt-1 break-words">{f.error}</div>
+          </div>
+        ) : f.status === "processing" ? (
+          <div className="flex items-baseline gap-2">
+            <span className="text-hero tnum font-medium leading-none text-ink3 animate-pulse">…</span>
+            <span className="text-sm text-ink2">counting</span>
+          </div>
+        ) : (
+          <div className="flex items-baseline gap-2">
+            <span className="text-hero tnum font-medium leading-none">{totalSeals}</span>
+            <span className="text-sm text-ink2">seals counted</span>
+          </div>
+        )}
+
+        {/* The range is not decoration: frames of the same colony disagree,
+            and a single integer would be false precision. Test data has no
+            band, so this strip only appears over a real count. */}
+        {hasRange && f.band && (
+          <div className="mt-3">
+            <div className="relative h-1.5 rounded-full bg-surface2">
+              <div className="absolute inset-y-0 rounded-full bg-accent-soft"
+                   style={{ left: "6%", right: "6%" }} />
+              <div className="absolute top-1/2 -translate-y-1/2 h-3 w-0.5 rounded bg-accent"
+                   style={{ left: `${6 + 88 * (((f.band.best ?? 0) - (f.band.low ?? 0)) / Math.max(1, (f.band.high ?? 1) - (f.band.low ?? 0)))}%` }} />
+            </div>
+            <div className="flex justify-between mt-1 text-2xs tnum text-ink3">
+              <span>{f.band.low}</span>
+              <span className="text-ink2">range between frames</span>
+              <span>{f.band.high}</span>
+            </div>
+          </div>
+        )}
+
+        <div className="flex items-center flex-wrap gap-2 mt-2.5">
           {f.source==="test" && <Pill tone="accent">test data</Pill>}
-          {det && <Pill tone="neutral">{(det.confidence*100).toFixed(0)}% confidence</Pill>}
+          {f.band?.basis && <Pill tone="neutral">{f.band.basis.replace(/_/g, " ")}</Pill>}
+          {meanConf != null && f.status === "ready" && !f.band && (
+            <Pill tone="neutral">{(meanConf*100).toFixed(0)}% confidence</Pill>
+          )}
           {det?.status === "validated" && <Pill tone="good">Validated</Pill>}
           {det?.status === "false_positive" && <Pill tone="bad">False positive</Pill>}
-          <span className="text-2xs text-ink3">whole video</span>
+          {f.band ? (
+            <span className="text-2xs text-ink3">
+              {f.unplaced ? `${f.detections.length} on map · ${f.unplaced} without coordinates` : `${f.detections.length} on map`}
+            </span>
+          ) : (
+            <span className="text-2xs text-ink3">whole video</span>
+          )}
         </div>
       </div>
 
