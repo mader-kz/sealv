@@ -1394,17 +1394,34 @@ async def media_job_frame(media_id: str, job_id: str, name: str):
 
 # ------------------------------------------------------------------ webapp
 
-# The front end is served from the same origin as the API so a deployment is one
-# process. CORS above still stands for running the UI from a separate dev server.
+# Two frontends, one origin, so a deployment stays one process and the field
+# box needs no CORS story:
+#   /          the SEALv platform - static export of frontend/ (Next.js)
+#   /operator  the operator webapp - single-file verify/QA tool
+# The platform is a BUILD ARTIFACT (frontend/out); when it is absent - a dev
+# checkout that never ran `npm run build` - the root falls back to the
+# operator app rather than a 404, because a working tool beats a build lecture.
 WEBAPP = Path(__file__).resolve().parent.parent / "webapp"
+PLATFORM = Path(__file__).resolve().parent.parent / "frontend" / "out"
+
+
+@app.get("/operator")
+async def operator_index():
+    index = WEBAPP / "index.html"
+    if not index.is_file():
+        raise HTTPException(404, "operator webapp missing")
+    return FileResponse(index)
 
 
 @app.get("/")
-async def webapp_index():
-    index = WEBAPP / "index.html"
-    if not index.is_file():
-        raise HTTPException(404, "webapp not built")
-    return FileResponse(index)
+async def platform_index():
+    index = PLATFORM / "index.html"
+    if index.is_file():
+        return FileResponse(index)
+    fallback = WEBAPP / "index.html"
+    if fallback.is_file():
+        return FileResponse(fallback)
+    raise HTTPException(404, "no frontend built")
 
 
 # One error envelope, whoever raised it.
@@ -1451,3 +1468,13 @@ async def validation_error(_: Request, exc: RequestValidationError):
     if len(errors) > 3:
         summary += f" (+{len(errors) - 3} more)"
     return _error(summary, 422, errors)
+
+
+# The platform's static assets (/_next/*, /samples/*). Mounted last: declared
+# routes always win over a mount, so /v1, /healthz and /operator stay routes
+# while every other path resolves against the export - including client-side
+# 404s, which Next ships as its own page.
+from fastapi.staticfiles import StaticFiles  # noqa: E402
+
+if PLATFORM.is_dir():
+    app.mount("/", StaticFiles(directory=str(PLATFORM), html=True), name="platform")
