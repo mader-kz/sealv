@@ -31,6 +31,14 @@ export type Footage = {
   status: "processing" | "ready" | "error";
   source: "srt" | "json" | "manual" | "injected" | "test";
   videoUrl?: string; // object URL
+  /* The honest answer of a real count: a low/best/high range with the method
+     that produced it. Absent on test data - the mock never had one, and
+     inventing a range for synthetic sorties would defeat its point. */
+  band?: { low: number | null; best: number | null; high: number | null; basis: string };
+  /* Animals the engine found but could not georeference (no flight track).
+     They are in the count; they are not on the map. The UI must say so. */
+  unplaced?: number;
+  error?: string;
 };
 
 export type MapLayerState = {

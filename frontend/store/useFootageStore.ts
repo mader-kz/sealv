@@ -18,6 +18,7 @@ type Store = {
   setPinMode: (v: boolean) => void;
   setPinPoints: (pts: TrackPoint[]) => void;
   setTimeRange: (r: [number, number]) => void;
+  completeFootage: (id: string, patch: Partial<Footage>) => void;
   updateDetection: (id: string, patch: Partial<Pick<Detection, "count" | "status">>) => void;
   bulkUpdateDetections: (ids: string[], patch: Partial<Pick<Detection, "count" | "status">>) => void;
   seedTestData: () => void;
@@ -39,6 +40,18 @@ export const useFootageStore = create<Store>((set, get) => ({
   setPinMode: (v) => set({ pinMode: v }),
   setPinPoints: (pts) => set({ pinPoints: pts }),
   setTimeRange: (r) => set({ timeRange: r }),
+  /* The real pipeline lands here: a footage that went up as "processing"
+     gets its engine result - detections, band, status - swapped in atomically
+     across both lists, so the map never shows a half-updated sortie. */
+  completeFootage: (id, patch) => set(s => {
+    const dets = patch.detections;
+    return {
+      footages: s.footages.map(f => f.id === id ? { ...f, ...patch } : f),
+      detections: dets
+        ? [...s.detections.filter(d => d.footageId !== id), ...dets]
+        : s.detections,
+    };
+  }),
   updateDetection: (id, patch) => set(s=> ({
     detections: s.detections.map(d=> d.id===id ? { ...d, ...patch } : d),
     footages: s.footages.map(f=> ({ ...f, detections: f.detections.map(d=> d.id===id ? { ...d, ...patch } : d) })),

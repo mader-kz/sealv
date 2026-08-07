@@ -4,7 +4,8 @@ import { useFootageStore } from "@/store/useFootageStore";
 import { parseSRT, validateTrackInCaspian } from "@/lib/parsers/srt";
 import { parseJSONSidecar } from "@/lib/parsers/json";
 import { parseMP4Metadata } from "@/lib/parsers/mp4";
-import { mockDetections } from "@/lib/mock/detections";
+import { uploadMedia, createJob, watchJob, pointsToDetections } from "@/lib/api";
+import { toast } from "sonner";
 import { snapToWater, isWater } from "@/lib/caspian";
 import type { Footage, TrackPoint } from "@/lib/types";
 import Icon from "@/components/ui/Icon";
@@ -39,6 +40,7 @@ export default function Dropzone(){
   const [drag, setDrag] = useState(false);
   const [log, setLog] = useState<string>("");
   const addFootage = useFootageStore(s=>s.addFootage);
+  const completeFootage = useFootageStore(s=>s.completeFootage);
   const pinMode = useFootageStore(s=>s.pinMode);
   const setPinMode = useFootageStore(s=>s.setPinMode);
   const pinPoints = useFootageStore(s=>s.pinPoints);
@@ -46,6 +48,45 @@ export default function Dropzone(){
   const fileRef = useRef<HTMLInputElement>(null);
   const [pendingVideo, setPendingVideo] = useState<{ file: File, url: string, name: string }|null>(null);
   const [loadingSample, setLoadingSample] = useState(false);
+
+  /* The real count. Upload -> queue -> follow to completion -> swap the
+     engine's result into the store. Runs detached from processFiles so a
+     4-frame video counting for 40s never blocks the next drop. */
+  const countForReal = useCallback(async (
+    id: string, media: File, sidecar: File | null, footage: Footage,
+  ) => {
+    try {
+      const up = await uploadMedia(media, sidecar);
+      const jobId = await createJob(up.id);
+      const result = await watchJob(jobId, p => {
+        const t = p.frames_total ?? 0;
+        setLog(`${footage.filename} · ${p.stage ?? "working"}${t ? ` · frame ${p.frames_done ?? 0}/${t}` : ""}`);
+      });
+      const { placed, unplaced } = pointsToDetections(id, result.points ?? []);
+      const best = result.count?.best ?? null;
+      let detections = placed;
+      if (placed.length === 0 && best != null && best > 0) {
+        // Engine counted, geo did not resolve (a still, or a track the
+        // service could not use): one aggregate marker at the sortie centre
+        // carries the whole count, the way the platform always drew it.
+        detections = [{
+          id: `${id}-agg`, footageId: id, t: 0,
+          lat: footage.center.lat, lng: footage.center.lng,
+          count: best, confidence: 1, status: "auto" as const,
+        }];
+      }
+      completeFootage(id, { status: "ready", detections, band: result.count, unplaced });
+      const bandTxt = result.count && result.count.low !== result.count.high
+        ? ` (range ${result.count.low}–${result.count.high})` : "";
+      toast.success(`${footage.filename}: ${best ?? "?"} seals${bandTxt}`);
+      setLog(`${footage.filename} · ${best ?? "?"} seals counted${unplaced ? ` · ${unplaced} without coordinates` : ""}`);
+    } catch (e: any) {
+      const msg = String(e?.message ?? e);
+      completeFootage(id, { status: "error", error: msg });
+      toast.error(`${footage.filename}: ${msg}`);
+      setLog(`${footage.filename} · count failed: ${msg}`);
+    }
+  }, [completeFootage]);
 
   const processFiles = useCallback(async (files: FileList | File[])=>{
     const arr = Array.from(files as FileList);
@@ -59,6 +100,7 @@ export default function Dropzone(){
 
     for(const [base, group] of byBase){
       const video = group.find(f=> /\.(mp4|mov|avi|mkv|webm)$/i.test(f.name));
+      const image = group.find(f=> /\.(jpe?g|png|tiff?|webp)$/i.test(f.name));
       const srt = group.find(f=> /\.srt$/i.test(f.name));
       const json = group.find(f=> /\.json$/i.test(f.name));
       const sidecarText = srt ? await srt.text() : json ? await json.text() : null;
@@ -73,6 +115,18 @@ export default function Dropzone(){
       } else if (json && sidecarText) {
         try { track = parseJSONSidecar(sidecarText); source="json"; parseInfo=`${track.length} track points`; }
         catch(e:any){ setLog(`Could not read the JSON sidecar: ${e.message}`); continue; }
+      } else if (image && pinMode && pinPoints.length >= 1) {
+        // A still has no flight track. One pinned point is its location; the
+        // whole count aggregates onto that marker, exactly as honest as the
+        // engine result allows without per-animal coordinates.
+        const p0 = pinPoints[0];
+        track = [{ t: 0, lat: p0.lat, lng: p0.lng, alt: 75 }];
+        source = "manual";
+        parseInfo = "photo · location pinned on the map";
+        setPinPoints([]); setPinMode(false);
+      } else if (image) {
+        setLog(`${image.name}: a photo has no flight track — turn on Pin mode, click where it was taken, then drop it again.`);
+        continue;
       } else if (pinMode && pinPoints.length >=2) {
         // use pin track: distribute proportionally across duration
         const duration = 90;
@@ -123,7 +177,7 @@ export default function Dropzone(){
       // reports a synthesized number (the mock track is always ~90s), which is
       // wrong for any real file.
       const realDuration = video ? await readVideoDuration(video) : null;
-      const duration = realDuration ?? Math.max(60, Math.ceil(track[track.length-1].t + 5));
+      const duration = image ? 0 : (realDuration ?? Math.max(60, Math.ceil(track[track.length-1].t + 5)));
 
       // Re-scale the track onto the real timeline so t values stay meaningful.
       if (realDuration && track.length > 1) {
@@ -133,26 +187,36 @@ export default function Dropzone(){
 
       const id = `up-${genId()}`;
       const center = track[Math.floor(track.length/2)];
+      const media = video ?? image ?? null;
       const footage: Footage = {
         id,
-        filename: video ? video.name : `${base}.MP4`,
-        size: video ? video.size : 0,
+        filename: media ? media.name : `${base}.MP4`,
+        size: media ? media.size : 0,
         duration,
         uploadedAt: new Date().toISOString(),
         track,
         detections: [],
         center: { lat: center.lat, lng: center.lng },
         region: center.lat > 44.5 ? "KZ-East" : center.lat > 43.4 ? "KZ-South" : "KZ-North",
-        status: "ready",
+        status: "processing",
         source,
         videoUrl: video ? URL.createObjectURL(video) : undefined,
       };
-      footage.detections = mockDetections(track, id);
       addFootage(footage);
-      setLog(`${footage.filename} · ${parseInfo} · ${footage.detections.reduce((s,d)=>s+d.count,0)} seals counted`);
       setPendingVideo(null);
+
+      if (!media) {
+        // A sidecar with no media: the track can be drawn, but there is
+        // nothing to count. Say so instead of inventing numbers for it.
+        completeFootage(id, { status: "error", error: "no video or photo in this drop — the track was drawn but nothing could be counted" });
+        setLog(`${base}: track only, nothing to count.`);
+        continue;
+      }
+
+      setLog(`${footage.filename} · ${parseInfo} · counting…`);
+      countForReal(id, media, srt ?? json ?? null, footage);
     }
-  },[addFootage, pinMode, pinPoints, setPinMode, setPinPoints]);
+  },[addFootage, completeFootage, countForReal, pinMode, pinPoints, setPinMode, setPinPoints]);
 
   const onDrop = useCallback((e:React.DragEvent)=>{
     e.preventDefault(); setDrag(false);
@@ -195,7 +259,7 @@ export default function Dropzone(){
         <div className="text-xs text-ink3 mt-1 leading-relaxed">
           MP4 with a matching .SRT or .JSON track — or a bare MP4 with embedded GPS
         </div>
-        <input ref={fileRef} type="file" multiple accept=".mp4,.mov,.avi,.mkv,.webm,.srt,.json" onChange={onInput} className="hidden" />
+        <input ref={fileRef} type="file" multiple accept=".mp4,.mov,.avi,.mkv,.webm,.jpg,.jpeg,.png,.tif,.tiff,.webp,.srt,.json" onChange={onInput} className="hidden" />
       </div>
 
       {/* Nothing to source, nothing to install — a real GPS-tagged clip shipped
