@@ -30,6 +30,7 @@
 - [Scripts](#scripts)
 - [Configuration](#configuration)
 - [Samples](#samples)
+- [Is there a backend?](#is-there-a-backend)
 - [Deployment](#deployment)
 
 ---
@@ -116,11 +117,11 @@ project_hack2/
 ├── store/
 │   └── useFootageStore.ts      # Zustand store — footages, detections, layers, timeRange
 ├── tools/
-│   └── inject-srt.js           # CLI: generate DJI-style SRT + JSON sidecars for any MP4
+│   └── inject-srt.js           # CLI: generate a GPS-tagged test MP4 + SRT/JSON sidecars
 ├── samples/
-│   ├── DJI_0100.MP4            # Placeholder video (0 B — sidecars carry the data)
-│   ├── DJI_0100.srt            # 1 Hz DJI SRT cues
-│   └── DJI_0100.json           # JSON sidecar { track: [...] }
+│   ├── TEST_0100.MP4           # Real 3s clip with GPS in its metadata
+│   ├── TEST_0100.srt           # 1 Hz DJI SRT cues
+│   └── TEST_0100.json          # JSON sidecar { track: [...] }
 ├── public/                     # Static assets
 ├── next.config.js
 ├── tailwind.config.js          # Content globs + token → Tailwind mapping
@@ -171,10 +172,10 @@ npm run lint
 ### Ingest Footage
 
 1. Click **Ingest** (top-right of the map) or drag files onto the dropzone.
-2. Accepted combinations (grouped by basename, e.g. `DJI_0100`):
-   - `DJI_0100.MP4` + `DJI_0100.SRT` — DJI SRT cues parsed via `lib/parsers/srt.ts`
-   - `DJI_0100.MP4` + `DJI_0100.JSON` — JSON sidecar via `lib/parsers/json.ts`
-   - `DJI_0100.MP4` alone — embedded GPS scanned via `lib/parsers/mp4.ts`
+2. Accepted combinations (grouped by basename, e.g. `TEST_0100`):
+   - `TEST_0100.MP4` + `TEST_0100.SRT` — DJI SRT cues parsed via `lib/parsers/srt.ts`
+   - `TEST_0100.MP4` + `TEST_0100.JSON` — JSON sidecar via `lib/parsers/json.ts`
+   - `TEST_0100.MP4` alone — embedded GPS scanned via `lib/parsers/mp4.ts`
 3. If no GPS is found, the dropzone prompts you to **pin the flight path** on the map (click to add points, confirm to create the sortie).
 
 Each ingested video becomes a `Footage` record with a `TrackPoint[]` track, a single whole-video `Detection` (count = total seals in that sortie), and a `center` used for map placement.
@@ -184,7 +185,7 @@ Each ingested video becomes a `Footage` record with a `TrackPoint[]` track, a si
 With no footage loaded the map shows a centred call-to-action:
 
 - **Upload** — open the ingest panel
-- **Load demo data** — seeds 16 sorties around 8 Kazakh Caspian sites (Kendirli, Tyuleniy, Bautino, Kulaly, Aktau, Durneva, Mangystau) plus 8 offshore extras via `store/useFootageStore.ts#seedDemo`
+- **Load test data** — seeds 16 synthetic sorties around 8 Kazakh Caspian sites (Kendirli, Tyuleniy, Bautino, Kulaly, Aktau, Durneva, Mangystau) plus 8 offshore extras via `store/useFootageStore.ts#seedTestData`. Every seeded sortie is named `TEST_*.MP4` and tagged `source: "test"`, and carries a `test` pill in the footage list and inspector — so synthetic data is never mistaken for a real survey. Uploaded footage carries neither.
 
 Demo tracks are generated with `generateSeedTrack()` (30–40 km synthetic paths, always on water).
 
@@ -271,14 +272,28 @@ Aliases: `lat`/`latitude`, `lng`/`lon`/`longitude`, `t`/`time`, `alt`/`altitude`
 
 ### MP4 embedded GPS
 
-`parseMP4Metadata()` scans head + tail bytes for:
+`parseMP4Metadata()` reads the head + tail bytes and looks for:
 
+- the binary **3GPP `loci` box** — fixed-point lat/lng, what ffmpeg and many Android cameras write. No text search can find this one, so it is decoded from the raw bytes.
 - `GPS(lat,lng)` and `[latitude:] [longitude:]` in DJI XMP
 - `<GPSLatitude>` / `<GPSLongitude>` XML tags
 - `com.apple.quicktime.location` (ISO 6709: `+43.1234+051.1234/`)
 - `exif:GPSLatitude` / `exif:GPSLongitude`
 
 If ≥ 3 fixes are found a track is built; with a single fix a 40-point synthetic track (~30 km) is generated around the snapped water location.
+
+It returns `MP4Location`, not a bare array:
+
+```ts
+type MP4Location = {
+  track: TrackPoint[] | null;             // ready to ingest
+  found: { lat, lng } | null;             // first fix, wherever on earth it is
+  outsideSurveyArea: boolean;             // GPS exists, just not in the Caspian
+  fixes: number;
+};
+```
+
+`found` is reported even when the coordinates fall outside the Caspian survey area, so a video that plainly has GPS is never described as having none — the ingest log says *"GPS found at 43.2380, 76.9450 — outside the Caspian survey area"* and offers manual pinning instead.
 
 ---
 
@@ -307,7 +322,7 @@ All generated and ingested tracks are snapped through this mask so seals never a
 | `npm run build` | Production build (`next build`) |
 | `npm start` | Serve production build on port 3000 |
 | `npm run lint` | ESLint (`next lint`) |
-| `npm run inject-srt` | `node tools/inject-srt.js` — generate SRT/JSON sidecars |
+| `npm run inject-srt` | `node tools/inject-srt.js` — generate a GPS-tagged test MP4 + sidecars |
 
 ### `tools/inject-srt.js`
 
@@ -315,10 +330,10 @@ Generate DJI-style sidecars for any video (useful when the drone did not write G
 
 ```bash
 # Single video — writes <video>.srt + <video>.json beside it
-node tools/inject-srt.js samples/DJI_0100.MP4 --lat 44.85 --lng 50.35 --duration 120
+node tools/inject-srt.js samples/TEST_0100.MP4 --lat 44.85 --lng 50.35 --duration 120
 
 # Centre shorthand
-node tools/inject-srt.js samples/DJI_0100.MP4 --center 44.85,50.35 --duration 90
+node tools/inject-srt.js samples/TEST_0100.MP4 --center 44.85,50.35 --duration 90
 
 # Demo mode — create N flights in a folder (defaults to ./samples)
 node tools/inject-srt.js --center 43.65,51.18 --out ./samples --count 3 --duration 90
@@ -360,17 +375,37 @@ Design tokens (`app/globals.css`):
 
 ## Samples
 
-`samples/` ships one placeholder flight to exercise the parsers without a real drone file:
+`samples/` ships test flights so both ingest paths can be exercised without a drone:
 
-- `DJI_0100.MP4` — 0-byte placeholder (video bytes not needed for the demo)
-- `DJI_0100.srt` — 1 Hz GPS cues around Tyuleniy
-- `DJI_0100.json` — `{ track: [...] }` sidecar with the same path
+- `TEST_0100.MP4` — a **real, playable** 3-second clip with the GPS fix written into its container metadata (`loci` box). Drop this one on its own to test location-from-video.
+- `TEST_0100.srt` — 1 Hz DJI-style GPS cues
+- `TEST_0100.json` — `{ track: [...] }` sidecar with the same path
 
-Drop all three into the ingest zone together (grouped by basename `DJI_0100`) or regenerate them:
+Drop the `.MP4` alone to test embedded-GPS extraction, or the `.MP4` + `.SRT` together (grouped by basename) to test the sidecar path. Regenerate with:
 
 ```bash
-node tools/inject-srt.js samples/DJI_0100.MP4 --lat 44.85 --lng 50.35 --duration 90
+node tools/inject-srt.js --out ./samples --count 3 --duration 90
 ```
+
+Encoding the real MP4 needs `ffmpeg` on PATH; without it the generator falls back to a 0-byte placeholder and warns, and only the sidecar path will work.
+
+---
+
+## Is there a backend?
+
+Not yet — and nothing here needs one.
+
+Everything runs in the browser. Video files are read locally with `File.slice()` (only the first 2 MB and last 512 KB, so a 4 GB file costs nothing), the flight track is parsed client-side, state lives in Zustand in memory, and CSV/JSON/PDF exports are generated as blobs. No bytes leave the machine, and there is no database. Refreshing the page clears everything.
+
+A backend becomes necessary for three things, in roughly this order:
+
+| Need | Why the browser can't do it | Shape |
+|---|---|---|
+| **Real seal detection** | Decoding and running a model over every frame is far too heavy for the client | `POST /api/detect` (multipart video) → `Detection[]` in the existing shape. Swap the `mockDetections()` calls in `store/useFootageStore.ts` and `components/upload/Dropzone.tsx` — nothing else changes. |
+| **Persistence** | State is in memory; a refresh wipes it | Postgres/SQLite behind `/api/footage` + object storage for the video files |
+| **Multi-user** | No accounts, no sharing | Auth + per-survey ownership |
+
+The detector is the only one that blocks the core flow, and it is deliberately isolated behind one function boundary so it can be dropped in without touching the map, dashboards, or ingest UI.
 
 ---
 

@@ -8,10 +8,56 @@
  * Creates:
  *   input.srt  (DJI-style 1Hz GPS cues)
  *   input.json (sidecar JSON track)
- * If no input given, creates 3 demo flights around Aktau sector.
+ * If no input given, creates test flights around the Aktau sector — including a
+ * real, playable MP4 with the GPS fix written into its metadata (needs ffmpeg),
+ * so the "drop a bare MP4 and it finds the location" path can be exercised.
  */
 const fs = require('fs');
 const path = require('path');
+const { execFileSync } = require('child_process');
+
+function hasFfmpeg(){
+  try { execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' }); return true; }
+  catch { return false; }
+}
+
+/** ISO 6709 as ffmpeg/QuickTime write it: +43.6500+051.1800/ */
+function iso6709(lat, lng){
+  const f = (v, pad) => (v<0?'-':'+') + Math.abs(v).toFixed(4).padStart(pad, '0');
+  return `${f(lat,7)}${f(lng,8)}/`;
+}
+
+/**
+ * Write a real 3-second MP4 carrying the GPS fix in its container metadata.
+ * Falls back to an empty placeholder when ffmpeg isn't installed — the sidecar
+ * .srt/.json path still works in that case.
+ */
+function writeVideoWithGPS(outPath, lat, lng, duration){
+  const loc = iso6709(lat, lng);
+  try {
+    if(!hasFfmpeg()) throw new Error('ffmpeg not installed');
+    encode(outPath, loc, lat, lng, duration);
+    return true;
+  } catch (e) {
+    console.warn(`  ! could not encode ${path.basename(outPath)}: ${e.message.split('\n')[0]}`);
+    if(!fs.existsSync(outPath)) fs.writeFileSync(outPath, Buffer.from([]));
+    return false;
+  }
+}
+
+function encode(outPath, loc, lat, lng, duration){
+  execFileSync('ffmpeg', [
+    '-y', '-loglevel', 'error',
+    // Plain colour source — no drawtext filter, which many ffmpeg builds omit.
+    '-f', 'lavfi', '-i', 'color=c=#0d1b26:s=640x360:d=3',
+    '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-t', '3',
+    '-metadata', `location=${loc}`,
+    '-metadata', `location-eng=${loc}`,
+    '-metadata', `comment=GPS(${lat.toFixed(6)},${lng.toFixed(6)},75.0) test footage, duration ${duration}s`,
+    '-movflags', '+faststart',
+    outPath,
+  ], { stdio: 'ignore' });
+}
 
 function parseArgs() {
   const args = process.argv.slice(2);
@@ -135,12 +181,14 @@ function writeForVideo(videoPath, opts){
       const c = centers[i % centers.length];
       const lat = c[0] + (Math.random()-0.5)*0.15;
       const lng = c[1] + (Math.random()-0.5)*0.15;
-      const base = `DJI_${String(100+i).padStart(4,'0')}.MP4`;
-      const fakeVideo = path.join(out, base);
-      // create empty placeholder mp4 if not exists
-      if (!fs.existsSync(fakeVideo)) fs.writeFileSync(fakeVideo, Buffer.from([]));
-      writeForVideo(fakeVideo, { ...opts, lat, lng });
+      const base = `TEST_${String(100+i).padStart(4,'0')}.MP4`;
+      const videoPath = path.join(out, base);
+      fs.mkdirSync(out, { recursive: true });
+      const real = writeVideoWithGPS(videoPath, lat, lng, opts.duration || 120);
+      console.log(`✓ ${base} ${real ? '(playable, GPS in metadata)' : '(empty placeholder — install ffmpeg for a real one)'}`);
+      writeForVideo(videoPath, { ...opts, lat, lng });
     }
-    console.log(`\nDemo: ${opts.count} flights created in ${out}/ — upload the .MP4 + .SRT together (or just .SRT + .MP4).`);
+    console.log(`\n${opts.count} test flight(s) in ${out}/`);
+    console.log(`Drop the .MP4 on its own to test location-from-video, or the .MP4 + .SRT together to test the sidecar path.`);
   }
 })();

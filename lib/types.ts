@@ -29,7 +29,7 @@ export type Footage = {
   center: { lat: number; lng: number };
   region: string;
   status: "processing" | "ready" | "error";
-  source: "srt" | "json" | "manual" | "injected";
+  source: "srt" | "json" | "manual" | "injected" | "test";
   videoUrl?: string; // object URL
 };
 

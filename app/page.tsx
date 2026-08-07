@@ -39,7 +39,7 @@ export default function Page(){
   const footages = useFootageStore(s=>s.footages);
   const selectedId = useFootageStore(s=>s.selectedId);
   const detections = useFootageStore(s=>s.detections);
-  const seedDemo = useFootageStore(s=>s.seedDemo);
+  const seedTestData = useFootageStore(s=>s.seedTestData);
 
   useEffect(()=>{ if(selectedId) setRightPane("inspector"); },[selectedId]);
   // Open the footage list once there's something in it — while empty, the
@@ -75,8 +75,8 @@ export default function Page(){
             <CaspianMap onMapReady={m=>{ mapRef.m=m; }} />
 
             {/* Running total — one line, top-right, out of the map's way */}
-            {!empty && (
-              <div className="absolute top-3 right-3 z-10 flex items-center gap-2">
+            <div className="absolute top-3 right-3 z-30 flex items-center gap-2">
+              {!empty && (
                 <div className="flex items-baseline gap-1.5 bg-surface/95 backdrop-blur border border-line rounded h-7 px-2.5">
                   <span className="text-sm tnum text-ink">{totalSeals}</span>
                   <span className="text-2xs text-ink3">seals</span>
@@ -84,13 +84,19 @@ export default function Page(){
                   <span className="text-sm tnum text-ink">{footages.length}</span>
                   <span className="text-2xs text-ink3">sorties</span>
                 </div>
-                <Button icon="plus" onClick={()=> setShowUpload(v=>!v)}>Ingest</Button>
-              </div>
-            )}
+              )}
+              <Button
+                icon="plus"
+                variant={showUpload ? "primary" : "default"}
+                onClick={()=> setShowUpload(v=>!v)}
+              >
+                Ingest
+              </Button>
+            </div>
 
             {/* Ingest panel */}
             {showUpload && (
-              <div className="absolute top-[52px] right-3 z-20 w-[320px] bg-surface border border-line rounded-lg shadow-pop overflow-hidden">
+              <div className="absolute top-[52px] right-3 z-30 w-[320px] bg-surface border border-line rounded-lg shadow-pop overflow-hidden">
                 <div className="h-9 px-3 pr-1.5 flex items-center justify-between border-b border-line">
                   <span className="label">Ingest footage</span>
                   <IconButton name="close" onClick={()=> setShowUpload(false)} title="Close" />
@@ -102,7 +108,7 @@ export default function Page(){
             )}
 
             {/* Empty state — the one thing to do, centered on the map */}
-            {empty && (
+            {empty && !showUpload && (
               <div className="absolute inset-0 z-20 grid place-items-center bg-bg">
                 <div className="text-center max-w-[320px] px-6">
                   <Icon name="upload" size={22} className="text-ink3 mx-auto" />
@@ -113,9 +119,9 @@ export default function Page(){
                   </p>
                   <div className="flex items-center justify-center gap-1.5 mt-4">
                     <Button variant="primary" icon="upload" onClick={()=> setShowUpload(true)}>
-                      Upload
+                      Upload footage
                     </Button>
-                    <Button onClick={seedDemo}>Load demo data</Button>
+                    <Button onClick={seedTestData}>Load test data</Button>
                   </div>
                 </div>
               </div>

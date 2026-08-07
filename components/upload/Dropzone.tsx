@@ -12,6 +12,25 @@ import { Button } from "@/components/ui/primitives";
 
 function genId(){ return Math.random().toString(36).slice(2,9); }
 
+/** Read the real playback duration out of the file. Resolves null if the
+ *  browser can't decode it (unsupported codec, or a placeholder file). */
+function readVideoDuration(file: File): Promise<number | null> {
+  return new Promise(resolve => {
+    if (file.size === 0) return resolve(null);
+    const url = URL.createObjectURL(file);
+    const el = document.createElement("video");
+    const done = (v: number | null) => { URL.revokeObjectURL(url); resolve(v); };
+    const timer = setTimeout(()=> done(null), 5000);
+    el.preload = "metadata";
+    el.onloadedmetadata = () => {
+      clearTimeout(timer);
+      done(Number.isFinite(el.duration) && el.duration > 0 ? Math.round(el.duration) : null);
+    };
+    el.onerror = () => { clearTimeout(timer); done(null); };
+    el.src = url;
+  });
+}
+
 export default function Dropzone(){
   const [drag, setDrag] = useState(false);
   const [log, setLog] = useState<string>("");
@@ -60,14 +79,20 @@ export default function Dropzone(){
         // try MP4 internal metadata first (location from video)
         setLog(`Scanning ${video.name} for embedded GPS…`);
         try{
-          const mp4Track = await parseMP4Metadata(video);
-          if(mp4Track && mp4Track.length>0){
-            track = mp4Track;
+          const res = await parseMP4Metadata(video);
+          if(res.track && res.track.length>0){
+            track = res.track;
             source="injected";
-            parseInfo = `${track.length} points from embedded GPS`;
+            const at = res.found ? ` at ${res.found.lat.toFixed(4)}, ${res.found.lng.toFixed(4)}` : "";
+            parseInfo = `location read from video${at} · ${track.length} track points`;
+          } else if(res.outsideSurveyArea && res.found){
+            // The video plainly has GPS — say where, rather than claiming none.
+            setPendingVideo({ file: video, url: URL.createObjectURL(video), name: video.name });
+            setLog(`${video.name}: GPS found at ${res.found.lat.toFixed(4)}, ${res.found.lng.toFixed(4)} — outside the Caspian survey area, so it can't be plotted. Pin the path on the map to place it manually.`);
+            continue;
           } else {
             setPendingVideo({ file: video, url: URL.createObjectURL(video), name: video.name });
-            setLog(`No GPS in ${video.name}. Pin the flight path on the map, then confirm.`);
+            setLog(`No GPS found in ${video.name}. Pin the flight path on the map, then confirm.`);
             continue;
           }
         }catch(e:any){
@@ -89,8 +114,18 @@ export default function Dropzone(){
         parseInfo += ` · ${offWater} pts snapped to water`;
       }
 
-      // derive duration: track max t or video duration estimate
-      const duration = Math.max(60, Math.ceil(track[track.length-1].t + 5));
+      // Prefer the video's own duration. Falling back to the track's time span
+      // reports a synthesized number (the mock track is always ~90s), which is
+      // wrong for any real file.
+      const realDuration = video ? await readVideoDuration(video) : null;
+      const duration = realDuration ?? Math.max(60, Math.ceil(track[track.length-1].t + 5));
+
+      // Re-scale the track onto the real timeline so t values stay meaningful.
+      if (realDuration && track.length > 1) {
+        const span = track[track.length-1].t || 1;
+        track = track.map(p=> ({ ...p, t: (p.t/span) * realDuration }));
+      }
+
       const id = `up-${genId()}`;
       const center = track[Math.floor(track.length/2)];
       const footage: Footage = {

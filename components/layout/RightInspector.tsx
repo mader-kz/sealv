@@ -39,6 +39,7 @@ export default function RightInspector({ compact }: { compact?: boolean }){
           <span className="text-sm text-ink2">seals counted</span>
         </div>
         <div className="flex items-center gap-2 mt-2.5">
+          {f.source==="test" && <Pill tone="accent">test data</Pill>}
           {det && <Pill tone="neutral">{(det.confidence*100).toFixed(0)}% confidence</Pill>}
           {det?.status === "validated" && <Pill tone="good">Validated</Pill>}
           {det?.status === "false_positive" && <Pill tone="bad">False positive</Pill>}

@@ -20,7 +20,7 @@ type Store = {
   setTimeRange: (r: [number, number]) => void;
   updateDetection: (id: string, patch: Partial<Pick<Detection, "count" | "status">>) => void;
   bulkUpdateDetections: (ids: string[], patch: Partial<Pick<Detection, "count" | "status">>) => void;
-  seedDemo: () => void;
+  seedTestData: () => void;
   clearAll: () => void;
 };
 
@@ -51,17 +51,20 @@ export const useFootageStore = create<Store>((set, get) => ({
     }));
   },
   clearAll: () => set({ footages: [], detections: [], selectedId: null, pinPoints: [] }),
-  seedDemo: () => {
+  // Synthetic sample flights so the UI can be exercised without real footage.
+  // Everything created here is tagged source:"test" and named TEST_* so it is
+  // never mistaken for an actual survey.
+  seedTestData: () => {
     if (get().footages.length > 0) return;
     const demo: Footage[] = KZ_SITES.slice(0,8).map((site, idx)=> {
       const duration = 90 + Math.random()*80;
       const track = generateSeedTrack({lat: site.lat, lng: site.lng}, duration, 40);
-      const id = `demo-${site.id.toLowerCase()}-${idx}`;
+      const id = `test-${site.id.toLowerCase()}-${idx}`;
       const dets = mockDetections(track, id);
       const center = track[Math.floor(track.length/2)];
       return {
         id,
-        filename: `DJI_${String(102+idx).padStart(4,"0")}.MP4`,
+        filename: `TEST_${String(102+idx).padStart(4,"0")}.MP4`,
         size: 180000000 + Math.floor(Math.random()*200000000),
         duration: Math.round(duration),
         uploadedAt: new Date(Date.now() - idx*86400000*3 - Math.random()*86400000).toISOString(),
@@ -70,23 +73,23 @@ export const useFootageStore = create<Store>((set, get) => ({
         center: { lat: center.lat, lng: center.lng },
         region: site.region,
         status: "ready" as const,
-        source: "injected" as const,
+        source: "test" as const,
       };
     });
     const extras = Array.from({length: 8}, (_,i)=>{
       const lat = 42.5 + Math.random()*3;
       const lng = 50.0 + Math.random()*2.5;
-      const id = `demo-extra-${i}`;
+      const id = `test-extra-${i}`;
       const track = generateSeedTrack({lat,lng}, 80+Math.random()*60, 35);
       const dets = mockDetections(track, id);
       const center = track[Math.floor(track.length/2)];
       return {
         id,
-        filename: `DJI_${String(200+i).padStart(4,"0")}.MP4`,
+        filename: `TEST_${String(200+i).padStart(4,"0")}.MP4`,
         size: 150000000 + Math.floor(Math.random()*150000000),
         duration: Math.round(80+Math.random()*60),
         uploadedAt: new Date(Date.now() - (8+i)*86400000).toISOString(),
-        track, detections: dets, center, region: "KZ-South" as const, status: "ready" as const, source: "injected" as const
+        track, detections: dets, center, region: "KZ-South" as const, status: "ready" as const, source: "test" as const
       } as Footage;
     });
     const all = [...demo, ...extras];

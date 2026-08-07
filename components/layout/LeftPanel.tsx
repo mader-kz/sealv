@@ -1,7 +1,7 @@
 "use client";
 import { useMemo, useState } from "react";
 import { useFootageStore } from "@/store/useFootageStore";
-import { Button, Field, Stat, SectionHead } from "@/components/ui/primitives";
+import { Button, Field, Stat, SectionHead, Pill } from "@/components/ui/primitives";
 import Icon from "@/components/ui/Icon";
 
 export default function LeftPanel(){
@@ -10,7 +10,7 @@ export default function LeftPanel(){
   const selectedId = useFootageStore(s=>s.selectedId);
   const select = useFootageStore(s=>s.select);
   const remove = useFootageStore(s=>s.removeFootage);
-  const seedDemo = useFootageStore(s=>s.seedDemo);
+  const seedTestData = useFootageStore(s=>s.seedTestData);
   const clearAll = useFootageStore(s=>s.clearAll);
   const [q, setQ] = useState("");
   const timeRange = useFootageStore(s=>s.timeRange);
@@ -53,7 +53,7 @@ export default function LeftPanel(){
           <Button icon="download" onClick={exportCSV} title="Export filtered as CSV" />
         </div>
         {footages.length===0 ? (
-          <Button variant="primary" full onClick={seedDemo}>Load demo data</Button>
+          <Button variant="primary" full onClick={seedTestData}>Load test data</Button>
         ) : (
           <button onClick={clearAll} className="text-2xs text-ink3 hover:text-ink transition-colors">
             Clear all footage
@@ -82,7 +82,9 @@ export default function LeftPanel(){
             >
               {active && <span className="absolute left-0 top-0 bottom-0 w-px bg-accent" />}
               <div className="flex items-baseline gap-2">
-                <span className="text-sm font-mono truncate text-ink flex-1">{f.filename}</span>
+                <span className="text-sm font-mono truncate text-ink">{f.filename}</span>
+                {f.source==="test" && <Pill>test</Pill>}
+                <span className="flex-1" />
                 <span className="tnum text-sm text-ink">{sealCount}</span>
                 <span className="text-2xs text-ink3">seals</span>
                 <button
