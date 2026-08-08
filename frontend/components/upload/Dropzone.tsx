@@ -4,8 +4,8 @@ import { useFootageStore } from "@/store/useFootageStore";
 import { parseSRT, validateTrackInCaspian } from "@/lib/parsers/srt";
 import { parseJSONSidecar } from "@/lib/parsers/json";
 import { parseMP4Metadata } from "@/lib/parsers/mp4";
-import { uploadMedia, createJob, watchJob, pointsToDetections } from "@/lib/api";
-import { footprintM2 } from "@/lib/analytics/area";
+import { uploadMedia, createJob, watchJob, pointsToDetections, framesUsed } from "@/lib/api";
+import { sortieAreaM2 } from "@/lib/analytics/area";
 import { toast } from "sonner";
 import { snapToWater, isWater } from "@/lib/caspian";
 import type { Footage, TrackPoint } from "@/lib/types";
@@ -98,10 +98,20 @@ export default function Dropzone(){
       completeFootage(id, {
         status: "ready", detections, band: result.count, unplaced,
         runId: result.run_id, mediaId: up.id, pixels,
-        caveats: result.caveats ?? [],
+        /* A list the service actually sent, or nothing. `[]` renders as
+           "clean run - no caveats", and a run whose completeness was never
+           measured must not be certified clean here and then confess after an
+           F5, when hydrate() reads the same run and says so. Same rule on both
+           paths. */
+        caveats: Array.isArray(result.caveats) ? result.caveats : undefined,
         gsdCmPx: up.gsd_cm_px ?? null,
         gsdSource: up.gsd_source ?? null,
-        areaM2: footprintM2({ widthPx: up.width, heightPx: up.height, gsdCmPx: up.gsd_cm_px }),
+        /* Per-FRAME footprint times the frames counted: a video's surveyed
+           area is not the ground under one of its frames. */
+        areaM2: sortieAreaM2({
+          widthPx: up.width, heightPx: up.height, gsdCmPx: up.gsd_cm_px,
+          frames: framesUsed(result.quality, up.kind),
+        }),
       });
       const bandTxt = result.count && result.count.low != null && result.count.high != null && result.count.low !== result.count.high
         ? ` (${t("misc.range", { low: result.count.low, high: result.count.high })})` : "";
@@ -237,7 +247,6 @@ export default function Dropzone(){
         track,
         detections: [],
         center: { lat: center.lat, lng: center.lng },
-        region: center.lat > 44.5 ? "KZ-East" : center.lat > 43.4 ? "KZ-South" : "KZ-North",
         status: "processing",
         source,
         videoUrl: video ? URL.createObjectURL(video) : undefined,

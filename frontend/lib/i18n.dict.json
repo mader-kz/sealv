@@ -146,7 +146,7 @@
     "dash.perSortie": "Ұшу бойынша есеп",
     "dash.lastN": "соңғы {n}",
     "dash.repeatSurveys": "Қайталама түсірілімдер",
-    "dash.repeatBasis": "соңғы ұшу алдыңғысымен салыстырылған",
+    "dash.repeatBasis": "соңғы ұшу алдыңғысымен салыстырылған; орталықтары {km} км шегіндегі ұшулар бір жатақ саналады",
     "dash.repeatNone": "Әр учаскеде бір ұшудан — әзірге салыстыратын ештеңе жоқ.",
     "dash.groupSizeHint": "{r} м шегіндегі жануарлар — бір топ",
     "dash.noPlaced": "Бұл аралықта координатасы бар нүкте жоқ.",
@@ -174,10 +174,10 @@
     "rep.noData": "Есепке кіретін ұшу жоқ.",
     "rep.page": "бет {n} / {total}",
     "stat.surveyed": "Зерттелген",
-    "dash.assumedGsd": "{n} болжамды масштаб бойынша",
+    "dash.assumedGsd": "{n} ұшуда масштаб өлшенбей, болжалды алынған",
     "dash.aggregateOnly": "{n} ұшу тек жиынтық белгі берді — ол жануарлардың жеке координаталары жоқ.",
-    "btn.exportGeojson": "GeoJSON экспорттау",
-    "rep.totalNote": "Ұшулар бойынша қосынды: екі ұшуда кездескен итбалық екі рет есептеледі."
+    "rep.totalNote": "Ұшулар бойынша қосынды: екі ұшуда кездескен итбалық екі рет есептеледі.",
+    "dash.nothingToVerify": "Тексеретін нүкте әзірге жоқ — расталған да, қабылданбаған да ештеңе жоқ."
   },
   "ru": {
     "brand.sub": "Учёт каспийского тюленя",
@@ -326,7 +326,7 @@
     "dash.perSortie": "Подсчёты по вылетам",
     "dash.lastN": "последние {n}",
     "dash.repeatSurveys": "Повторные съёмки",
-    "dash.repeatBasis": "последний вылет к предыдущему",
+    "dash.repeatBasis": "последний вылет к предыдущему; вылеты с центрами в пределах {km} км считаются одним участком",
     "dash.repeatNone": "На каждом участке по одному вылету — сравнивать пока не с чем.",
     "dash.groupSizeHint": "животные в пределах {r} м — одна группа",
     "dash.noPlaced": "В этом окне нет точек с координатами.",
@@ -354,10 +354,10 @@
     "rep.noData": "Нет вылетов для отчёта.",
     "rep.page": "стр. {n} из {total}",
     "stat.surveyed": "Обследовано",
-    "dash.assumedGsd": "{n} по предполагаемому масштабу",
+    "dash.assumedGsd": "у {n} вылет(ов) масштаб не измерен, а предположен",
     "dash.aggregateOnly": "{n} вылет(ов) дали только сводный маркер — у этих животных нет отдельных координат.",
-    "btn.exportGeojson": "Экспорт GeoJSON",
-    "rep.totalNote": "Сумма по вылетам: тюлень, снятый в двух вылетах, учтён дважды."
+    "rep.totalNote": "Сумма по вылетам: тюлень, снятый в двух вылетах, учтён дважды.",
+    "dash.nothingToVerify": "Проверять пока нечего — ни одна точка не подтверждена и не отклонена."
   },
   "en": {
     "brand.sub": "Caspian seal survey",
@@ -506,7 +506,7 @@
     "dash.perSortie": "Counts per sortie",
     "dash.lastN": "last {n}",
     "dash.repeatSurveys": "Repeat surveys",
-    "dash.repeatBasis": "latest sortie against the one before it",
+    "dash.repeatBasis": "latest sortie against the one before it; sorties whose centres are within {km} km count as one site",
     "dash.repeatNone": "One survey per site — nothing to compare yet.",
     "dash.groupSizeHint": "animals within {r} m = one group",
     "dash.noPlaced": "No points with coordinates in this window.",
@@ -534,9 +534,9 @@
     "rep.noData": "No sorties in this report.",
     "rep.page": "page {n} of {total}",
     "stat.surveyed": "Surveyed",
-    "dash.assumedGsd": "{n} from an assumed scale",
+    "dash.assumedGsd": "{n} sortie(s) rest on an assumed scale, not a measured one",
     "dash.aggregateOnly": "{n} sortie(s) contributed only an aggregate marker — those animals have no individual coordinates.",
-    "btn.exportGeojson": "Export GeoJSON",
-    "rep.totalNote": "Sum over sorties: an animal seen on two sorties is counted twice."
+    "rep.totalNote": "Sum over sorties: an animal seen on two sorties is counted twice.",
+    "dash.nothingToVerify": "Nothing to review yet — no point has been verified or rejected."
   }
 }

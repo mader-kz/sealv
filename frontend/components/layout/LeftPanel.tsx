@@ -81,14 +81,18 @@ export default function LeftPanel(){
   return (
     <div className="w-[340px] shrink-0 bg-surface flex flex-col overflow-hidden h-full">
       {/* Headline numbers — figures first, no boxed KPI grid */}
-      <div className="px-4 pt-4 pb-3.5 flex gap-6">
-        <Stat label={t("stat.seals")} value={totalSeals} />
-        <Stat label={t("stat.sorties")} value={filteredByTime.length} />
+      {/* The two counts keep their intrinsic width and only the area column
+          absorbs the squeeze: in Kazakh these labels are long enough that an
+          even three-way split truncated the seal total itself to "1…" — the
+          one number the whole product exists to report. */}
+      <div className="px-4 pt-4 pb-3.5 flex gap-5">
+        <div className="shrink-0"><Stat label={t("stat.seals")} value={totalSeals} /></div>
+        <div className="shrink-0"><Stat label={t("stat.sorties")} value={filteredByTime.length} /></div>
         {/* stat.surveyed, not the analytics panel's longer stat.area: three
             figures share 340px here and a truncated label helps nobody. The
             sub-line is not optional: a sum over the sorties that HAVE a scale,
             printed bare, reads as the whole survey. */}
-        <Stat label={t("stat.surveyed")} value={areaText} sub={areaSub} />
+        <div className="min-w-0 flex-1"><Stat label={t("stat.surveyed")} value={areaText} sub={areaSub} /></div>
       </div>
 
       <div className="px-3 pb-3 space-y-2 border-b border-line">

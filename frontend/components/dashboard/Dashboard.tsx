@@ -3,8 +3,9 @@ import { useMemo } from "react";
 import { useFootageStore } from "@/store/useFootageStore";
 import { Button, IconButton, SectionHead, Stat } from "@/components/ui/primitives";
 import { totalAreaM2, formatArea } from "@/lib/analytics/area";
+import { countOf } from "@/lib/analytics/count";
 import { groupSizes, histogram } from "@/lib/analytics/groups";
-import { groupIntoSites, siteSeries } from "@/lib/analytics/surveys";
+import { groupIntoSites, siteSeries, SITE_RADIUS_M } from "@/lib/analytics/surveys";
 import { localeFor, useT } from "@/lib/i18n";
 import type { Footage } from "@/lib/types";
 
@@ -16,12 +17,6 @@ import type { Footage } from "@/lib/types";
 const GROUP_RADIUS_M = 5; // animals closer together than this are one group
 const BARS = 20;          // a 380px column cannot draw more bars honestly
 const H = 64;             // chart height, px
-
-/** One sortie's count: the engine's best estimate, falling back to the sum of
- *  its surviving detections for footage that carries no band (test data). */
-function countOf(f: Footage) {
-  return f.band?.best ?? f.detections.filter(d=>d.status!=="false_positive").reduce((s,d)=>s+d.count,0);
-}
 
 export default function Dashboard({ onClose }: { onClose?: ()=>void }){
   const { t, tp, lang } = useT();
@@ -54,6 +49,13 @@ export default function Dashboard({ onClose }: { onClose?: ()=>void }){
      them could be measured at all. */
   const area = useMemo(()=> totalAreaM2(filtered.f), [filtered.f]);
   const areaText = area.known ? formatArea(area.m2, lang) : null;
+  /* Both qualifications, when both apply: sorties with no scale at all are
+     missing from the total, and sorties whose scale the service ASSUMED (a
+     guessed sensor width or lens) put a guess inside it. */
+  const areaCaveat = [
+    area.unknown ? t("dash.noGsd", { n: area.unknown }) : null,
+    area.assumed ? t("dash.assumedGsd", { n: area.assumed }) : null,
+  ].filter(Boolean).join(" · ") || undefined;
 
   /* Chronological, one bar per sortie — the latest BARS of them. */
   const bars = useMemo(()=>{
@@ -77,18 +79,23 @@ export default function Dashboard({ onClose }: { onClose?: ()=>void }){
       .sort((a,b)=> b.series.length - a.series.length),
   [filtered.f]);
 
-  const byRegion = useMemo(()=>{
-    const m: Record<string, number> = {};
-    for(const f of filtered.f) m[f.region] = (m[f.region]||0) + countOf(f);
-    return Object.entries(m).sort((a,b)=>b[1]-a[1]);
-  },[filtered.f]);
-
   /* Group size is spatial, not a field on a detection: the engine counts one
      animal per point, so grouping has to come from the coordinates. Only
-     placed points can take part — an animal with no lat/lng has no neighbours. */
+     placed points can take part — an animal with no lat/lng has no neighbours.
+
+     count !== 1 is the aggregate marker a sortie gets when the engine counted
+     but geo did not resolve: ONE synthetic point at the sortie centre carrying
+     the whole band. Feeding it in made a haul-out of 562 animals render as a
+     single group of size 1. It is not expanded into 562 fabricated
+     coordinates either — it is excluded, and the panel says how many sorties
+     could only contribute one. */
   const placed = useMemo(
-    ()=> shown.filter(d=> Number.isFinite(d.lat) && Number.isFinite(d.lng)),
+    ()=> shown.filter(d=> d.count===1 && Number.isFinite(d.lat) && Number.isFinite(d.lng)),
     [shown],
+  );
+  const aggregateOnly = useMemo(
+    ()=> filtered.f.filter(f=> f.detections.some(d=> d.status!=="false_positive" && d.count>1)).length,
+    [filtered.f],
   );
   const bins = useMemo(()=> histogram(groupSizes(placed, GROUP_RADIUS_M)), [placed]);
   const maxBin = Math.max(...bins.map(b=> b.count), 1);
@@ -122,10 +129,12 @@ export default function Dashboard({ onClose }: { onClose?: ()=>void }){
         <div className="px-4 py-4 grid grid-cols-3 gap-4 border-b border-line">
           <Stat label={t("stat.seals")} value={totalSeals} />
           <Stat label={t("stat.sorties")} value={filtered.f.length} />
+          {/* A measured scale and a guessed one must not print identically:
+              the sub-line names whichever caveat applies to this total. */}
           <Stat
             label={t("stat.area")}
             value={areaText ? t("dash.areaHa", { v: areaText }) : "—"}
-            sub={area.unknown ? t("dash.noGsd", { n: area.unknown }) : undefined}
+            sub={areaCaveat}
           />
         </div>
 
@@ -179,7 +188,15 @@ export default function Dashboard({ onClose }: { onClose?: ()=>void }){
         {/* Repeat surveys — the only comparison this data can support */}
         <div className="px-4 py-4 border-b border-line">
           <SectionHead title={t("dash.repeatSurveys")} />
-          {repeats.length>0 && <p className="text-2xs text-ink3 mt-1">{t("dash.repeatBasis")}</p>}
+          {/* Both halves of "the same site, again": the time comparison AND the
+              radius that decides what counts as the same site. Two sorties
+              1.9 km apart are one haul-out here, and a reader who is shown a
+              Δ has to be told that. */}
+          {repeats.length>0 && (
+            <p className="text-2xs text-ink3 mt-1">
+              {t("dash.repeatBasis", { km: SITE_RADIUS_M/1000 })}
+            </p>
+          )}
           <div className="mt-2.5 space-y-2">
             {filtered.f.length===0 && <p className="text-sm text-ink3">{t("dash.noSorties")}</p>}
             {filtered.f.length>0 && repeats.length===0 && (
@@ -189,11 +206,11 @@ export default function Dashboard({ onClose }: { onClose?: ()=>void }){
               const d = series[series.length-1].delta;
               return (
                 <div key={site.id} className="flex items-baseline justify-between gap-3 text-xs">
-                  <span className="text-ink2 truncate">
-                    {site.footages[0].region}{" "}
-                    <span className="font-mono tnum text-ink3">
-                      {site.centroid.lat.toFixed(2)}, {site.centroid.lng.toFixed(2)}
-                    </span>
+                  {/* The site's measured centroid, not a made-up region name:
+                      these sorties are grouped BY that centroid, so it is the
+                      one label that is actually true of all of them. */}
+                  <span className="text-ink2 truncate font-mono tnum">
+                    {site.centroid.lat.toFixed(2)}, {site.centroid.lng.toFixed(2)}
                   </span>
                   <span className="tnum text-ink3 shrink-0">
                     {series.length} {tp(series.length, "unit.sorties")}
@@ -211,27 +228,11 @@ export default function Dashboard({ onClose }: { onClose?: ()=>void }){
           </div>
         </div>
 
-        {/* Region */}
-        <div className="px-4 py-4 border-b border-line">
-          <SectionHead title={t("dash.byRegion")} />
-          <div className="mt-3 space-y-2.5">
-            {byRegion.length===0 && <p className="text-sm text-ink3">{t("dash.noSorties")}</p>}
-            {byRegion.map(([region, seals])=>{
-              const pct = totalSeals ? Math.round(seals/totalSeals*100) : 0;
-              return (
-                <div key={region}>
-                  <div className="flex items-baseline justify-between text-xs mb-1">
-                    <span className="text-ink2">{region}</span>
-                    <span className="tnum text-ink">{seals} <span className="text-ink3">{pct}%</span></span>
-                  </div>
-                  <div className="h-1 bg-line-soft rounded-full overflow-hidden">
-                    <div className="h-full bg-ink2 rounded-full" style={{ width:`${pct}%` }} />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
+        {/* No "By region" section. It charted `center.lat > 44.5 ? "KZ-East" …`
+            — a latitude bucket with a toponym printed on it — as if the survey
+            had been broken down by place. Sorties are identified by their
+            measured centroid; a real regional breakdown needs the service's
+            site table, and until it is wired through, nothing goes here. */}
 
         {/* Group size — measured off the coordinates, not off a count field */}
         <div className="px-4 py-4 border-b border-line">
@@ -240,7 +241,12 @@ export default function Dashboard({ onClose }: { onClose?: ()=>void }){
             right={<span className="text-2xs text-ink3">{t("dash.groupSizeHint", { r: GROUP_RADIUS_M })}</span>}
           />
           {placed.length===0
-            ? <p className="text-sm text-ink3 mt-2.5">{t("dash.noPlaced")}</p>
+            ? (
+              <p className="text-sm text-ink3 mt-2.5">
+                {t("dash.noPlaced")}
+                {aggregateOnly>0 && <> {t("dash.aggregateOnly", { n: aggregateOnly })}</>}
+              </p>
+            )
             : (
               <div className="mt-3 flex gap-2">
                 {bins.map(b=>(
@@ -259,15 +265,23 @@ export default function Dashboard({ onClose }: { onClose?: ()=>void }){
             )}
         </div>
 
-        {/* Verification — 0% is a fact worth printing, not a gap to hide */}
+        {/* Verification. 0% over points that exist is a fact worth printing, not
+            a gap to hide. 0% over NO points is a different claim — it reads as
+            "someone reviewed these and signed off on none" when the truth is
+            that there is nothing to review — so the empty set says so instead,
+            the same absent-vs-empty distinction the caveats section makes. */}
         <div className="px-4 py-4 border-b border-line">
           <SectionHead title={t("dash.verification")} />
-          <p className="text-sm text-ink2 mt-2.5">
-            {t("dash.verifiedShare", { n: validated, pct: verifiedPct })}
-          </p>
-          <div className="h-1 bg-line-soft rounded-full overflow-hidden mt-2">
-            <div className="h-full bg-ink2 rounded-full" style={{ width:`${verifiedPct}%` }} />
-          </div>
+          {shown.length===0
+            ? <p className="text-sm text-ink3 mt-2.5">{t("dash.nothingToVerify")}</p>
+            : <>
+                <p className="text-sm text-ink2 mt-2.5">
+                  {t("dash.verifiedShare", { n: validated, pct: verifiedPct })}
+                </p>
+                <div className="h-1 bg-line-soft rounded-full overflow-hidden mt-2">
+                  <div className="h-full bg-ink2 rounded-full" style={{ width:`${verifiedPct}%` }} />
+                </div>
+              </>}
         </div>
 
         {/* Notes — measured facts in sentences, no interpretation */}
@@ -279,7 +293,8 @@ export default function Dashboard({ onClose }: { onClose?: ()=>void }){
               : <>
                   {areaText ? t("dash.notesArea", { a: areaText }) : t("dash.notesNoArea")}
                   {shown.length>0 && <> {t("dash.notesVerifiedPct", { n: validated, total: shown.length, pct: verifiedPct })}</>}
-                  {largest && <> {t("dash.notesLargestSortie", { x: countOf(largest), region: largest.region })}</>}
+                  {/* Named by its file, not by an invented region. */}
+                  {largest && <> {t("dash.notesLargestSortie", { x: countOf(largest), sortie: largest.filename })}</>}
                 </>}
           </p>
         </div>

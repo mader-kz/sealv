@@ -471,6 +471,61 @@ def _caveats(quality: dict, band: Optional[dict] = None) -> list[str]:
     return out
 
 
+_LEDGER_MISSING = (
+    "this run's quality ledger is missing or unreadable, so the completeness "
+    "checks never ran - the absence of caveats here is unknown, not clean"
+)
+
+
+def _quality_ledger(raw: Any) -> Optional[dict]:
+    """The run's quality ledger as a dict, or None when it was never written or
+    cannot be parsed. NULL and `{}` are different claims and must stay apart:
+    an empty ledger is a run whose counters all came back clean, a missing one
+    is a run nobody measured. Raw SQL hands the column over as text, db.py
+    hands it over already parsed, so both shapes are accepted here.
+    """
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except ValueError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    return None
+
+
+def _caveats_for(quality: Optional[dict], band: Optional[dict]) -> list[str]:
+    """`_caveats`, plus the one caveat a missing ledger is itself.
+
+    Every endpoint that hands a band to a caller goes through here, so a fresh
+    run and the same run rebuilt from /v1/stats after a reload can never make
+    two different claims about the same numbers.
+    """
+    out = _caveats(quality or {}, band)
+    if quality is None:
+        out.append(_LEDGER_MISSING)
+    return out
+
+
+def _frames_counted(quality: Optional[dict], kind: Optional[str]) -> Optional[int]:
+    """How many frames the count was actually assembled from.
+
+    A still is one look, so one frame. A video's ledger lists the frames that
+    survived into the consensus. None means the run never said - and a sortie
+    whose frame count is unknown has an unknown surveyed area, not a
+    one-frame one.
+    """
+    if kind == "image":
+        return 1
+    used = (quality or {}).get("frames_used")
+    if isinstance(used, list):
+        return len(used)
+    if isinstance(used, int) and used >= 1:
+        return used
+    return None
+
+
 def _run_result(conn: sqlite3.Connection, run: dict) -> dict:
     """The `result` block of GET /v1/jobs/{id}, exactly as §3 of the plan has it.
 
@@ -479,7 +534,7 @@ def _run_result(conn: sqlite3.Connection, run: dict) -> dict:
     count and whether it registered, which is precisely the per-frame report.
     """
     engine_params = run.get("engine_params") or {}
-    quality = run.get("quality") or {}
+    quality = _quality_ledger(run.get("quality"))
     count = {
         "best": run.get("count_best"),
         "low": run.get("count_low"),
@@ -492,10 +547,10 @@ def _run_result(conn: sqlite3.Connection, run: dict) -> dict:
         # Non-empty means part of the media was never counted, or the band
         # itself cannot be trusted. A caller showing the band without showing
         # these is showing a number it cannot defend.
-        "caveats": _caveats(quality, count),
-        "per_frame": quality.get("frames") or [],
+        "caveats": _caveats_for(quality, count),
+        "per_frame": (quality or {}).get("frames") or [],
         "points": db.get_points(conn, run["id"]),
-        "quality": quality,
+        "quality": quality or {},
         "engine": {
             "name": run.get("engine"),
             "version": engine_params.get("version"),
@@ -1349,23 +1404,18 @@ async def stats():
                 run = dict(row)
                 # Raw SQL bypasses db.py's JSON column handling, so the ledger
                 # arrives as text and is parsed here. A malformed one costs this
-                # row its caveats, never the whole dashboard.
-                raw = run.pop("quality", None)
-                quality: Optional[dict] = None
-                if isinstance(raw, dict):
-                    quality = raw
-                elif isinstance(raw, str):
-                    try:
-                        parsed = json.loads(raw)
-                    except ValueError:
-                        parsed = None
-                    quality = parsed if isinstance(parsed, dict) else None
+                # row its caveats, never the whole dashboard. The same helper
+                # the job endpoint uses, so the two can never drift into telling
+                # a caller two different things about one run.
+                quality = _quality_ledger(run.pop("quality", None))
 
                 # The band check inside `_caveats` reads no counters, so it still
                 # runs on a ledgerless row - an incoherent band is a service
-                # defect and must surface wherever the number does.
-                caveats = _caveats(
-                    quality or {},
+                # defect and must surface wherever the number does. A NULL or
+                # unreadable ledger adds its own caveat: rendering [] would read
+                # downstream as "clean run", a claim this row cannot support.
+                caveats = _caveats_for(
+                    quality,
                     {
                         "low": run["low"],
                         "best": run["best"],
@@ -1373,16 +1423,11 @@ async def stats():
                         "basis": run["basis"],
                     },
                 )
-                if quality is None:
-                    # NULL or unreadable ledger. Returning [] here would render
-                    # downstream as "clean run - no caveats", which is a claim
-                    # this row cannot support: no completeness counter was ever
-                    # read. Absence of evidence is said out loud instead.
-                    caveats.append(
-                        "this run's quality ledger is missing or unreadable, so the "
-                        "completeness checks never ran - the absence of caveats here "
-                        "is unknown, not clean"
-                    )
+                # How much ground this sortie covers is width x height x GSD per
+                # FRAME, and a video is many frames. Without this the archive
+                # would print one frame's footprint as a whole transect's
+                # surveyed area - off by the length of the flight.
+                run["frames_used"] = _frames_counted(quality, run.get("kind"))
                 run["caveats"] = caveats
                 latest_runs.append(run)
 

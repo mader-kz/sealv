@@ -4,7 +4,7 @@ import type { Footage, Detection, TrackPoint, MapLayerState } from "@/lib/types"
 import { mockDetections, generateSeedTrack, KZ_SITES } from "@/lib/mock/detections";
 import { fetchStats, fetchRunPoints, fetchTrack, pointsToDetections, mediaFileUrl, editPoint } from "@/lib/api";
 import type { Stats, StatsLatestRun } from "@/lib/api";
-import { footprintM2 } from "@/lib/analytics/area";
+import { sortieAreaM2 } from "@/lib/analytics/area";
 
 type Store = {
   footages: Footage[];
@@ -33,7 +33,7 @@ export const useFootageStore = create<Store>((set, get) => ({
   footages: [],
   detections: [],
   selectedId: null,
-  layerState: { footprints: true, detections: true, clusters: true, heatmap: false },
+  layerState: { footprints: true, detections: true },
   pinMode: false,
   pinPoints: [],
   timeRange: [0, 100],
@@ -143,7 +143,6 @@ export const useFootageStore = create<Store>((set, get) => ({
           track: trk,
           detections,
           center,
-          region: center.lat > 44.5 ? "KZ-East" : center.lat > 43.4 ? "KZ-South" : "KZ-North",
           status: "ready",
           source: "archive",
           runId: r.run_id,
@@ -158,8 +157,14 @@ export const useFootageStore = create<Store>((set, get) => ({
           caveats: Array.isArray(r.caveats) ? r.caveats : undefined,
           gsdCmPx: r.gsd_cm_px ?? null,
           gsdSource: r.gsd_source ?? null,
-          areaM2: footprintM2({
+          /* Frame footprint TIMES the frames the engine counted on. One frame
+             of a three-minute transect is not the ground that transect
+             surveyed. `frames_used` is null when the run's ledger never said
+             how many frames it used - then the area is unknown, not one
+             frame's worth. */
+          areaM2: sortieAreaM2({
             widthPx: r.width ?? 0, heightPx: r.height ?? 0, gsdCmPx: r.gsd_cm_px,
+            frames: r.frames_used ?? null,
           }),
         });
       } catch {
@@ -190,7 +195,6 @@ export const useFootageStore = create<Store>((set, get) => ({
         track,
         detections: dets,
         center: { lat: center.lat, lng: center.lng },
-        region: site.region,
         status: "ready" as const,
         source: "test" as const,
       };
@@ -208,7 +212,7 @@ export const useFootageStore = create<Store>((set, get) => ({
         size: 150000000 + Math.floor(Math.random()*150000000),
         duration: Math.round(80+Math.random()*60),
         uploadedAt: new Date(Date.now() - (8+i)*86400000).toISOString(),
-        track, detections: dets, center, region: "KZ-South" as const, status: "ready" as const, source: "test" as const
+        track, detections: dets, center, status: "ready" as const, source: "test" as const
       } as Footage;
     });
     const all = [...demo, ...extras];

@@ -6,6 +6,7 @@ import Icon from "@/components/ui/Icon";
 import EvidenceView, { EvidenceFrame } from "@/components/evidence/EvidenceView";
 import { basisText, useT } from "@/lib/i18n";
 import { formatArea } from "@/lib/analytics/area";
+import { countOf } from "@/lib/analytics/count";
 
 export default function RightInspector({ compact }: { compact?: boolean }){
   const { t, tp, lang } = useT();
@@ -46,9 +47,11 @@ export default function RightInspector({ compact }: { compact?: boolean }){
       ? { mediaId: f.mediaId, pixels: f.pixels }
       : null;
   /* With the real engine a sortie holds one detection PER ANIMAL, so the
-     headline is the band's best estimate; summing detections is the fallback
-     for test data, which never carries a band. */
-  const totalSeals = f.band?.best ?? f.detections.reduce((s, d) => s + d.count, 0);
+     headline is the band's best estimate; summing the SURVIVING detections is
+     the fallback for test data, which never carries a band. countOf() is that
+     rule, shared with the panel, the report and the CSV — the fallback here
+     used to include detections a reviewer had already rejected. */
+  const totalSeals = countOf(f);
   const hasRange = !!f.band && f.band.low != null && f.band.high != null && f.band.low !== f.band.high;
   /* How much of this count a human has actually signed off on. False positives
      are excluded from both sides: a rejected detection is not evidence for or
@@ -196,7 +199,15 @@ export default function RightInspector({ compact }: { compact?: boolean }){
                   <span className="font-mono tnum">
                     {f.areaM2 != null ? `${formatArea(f.areaM2, lang)} ${t("unit.ha")}` : "—"}
                   </span>
-                  {f.gsdSource && <span className="text-2xs text-ink3">{gsdNote(f.gsdCmPx, f.gsdSource)}</span>}
+                  {/* title: the source token is what says whether this area was
+                      measured or guessed, and the row is narrow enough to clip
+                      it mid-word ("assumed_nativ…"). It stays readable on hover
+                      rather than only in the export. */}
+                  {f.gsdSource && (
+                    <span className="text-2xs text-ink3 truncate" title={gsdNote(f.gsdCmPx, f.gsdSource)}>
+                      {gsdNote(f.gsdCmPx, f.gsdSource)}
+                    </span>
+                  )}
                 </span>
               }
             />

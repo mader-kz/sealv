@@ -59,9 +59,9 @@ execFileSync(
 // CommonJS output so the cross-module import ("./groups") resolves in Node
 // without the extension rewriting an ESM build would need.
 const require = createRequire(import.meta.url);
-const { footprintM2, totalAreaM2, formatArea, m2ToHa, m2ToKm2 } = require(
-  path.join(outDir, "analytics/area.js"),
-);
+const { footprintM2, sortieAreaM2, isAssumedGsd, totalAreaM2, formatArea, m2ToHa, m2ToKm2 } =
+  require(path.join(outDir, "analytics/area.js"));
+const { countOf } = require(path.join(outDir, "analytics/count.js"));
 const { groupSizes, histogram, clusterIndices } = require(path.join(outDir, "analytics/groups.js"));
 const { groupIntoSites, siteSeries, bestCount } = require(
   path.join(outDir, "analytics/surveys.js"),
@@ -106,15 +106,58 @@ const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
       footprintM2({ widthPx: NaN, heightPx: 3000, gsdCmPx: 2 }) === null,
   );
 
+  // A video is many frames: one frame's footprint under a "surveyed area"
+  // label is the error sortieAreaM2 exists to stop.
+  check(
+    "case1: 8 frames cover 8 footprints",
+    sortieAreaM2({ widthPx: 4000, heightPx: 3000, gsdCmPx: 2, frames: 8 }) === 4800 * 8,
+  );
+  check(
+    "case1: an unknown frame count -> null, never one frame's worth",
+    sortieAreaM2({ widthPx: 4000, heightPx: 3000, gsdCmPx: 2, frames: null }) === null &&
+      sortieAreaM2({ widthPx: 4000, heightPx: 3000, gsdCmPx: 2 }) === null &&
+      sortieAreaM2({ widthPx: 4000, heightPx: 3000, gsdCmPx: 2, frames: 0 }) === null,
+  );
+  check(
+    "case1: no GSD beats any frame count",
+    sortieAreaM2({ widthPx: 4000, heightPx: 3000, gsdCmPx: null, frames: 8 }) === null,
+  );
+
+  check(
+    "case1: only assumed_* scales are guesses",
+    isAssumedGsd("assumed_native_width") &&
+      isAssumedGsd("assumed_optics") &&
+      !isAssumedGsd("optics") &&
+      !isAssumedGsd("explicit") &&
+      !isAssumedGsd("unknown") &&
+      !isAssumedGsd(null),
+  );
+
   const total = totalAreaM2([{ areaM2: 4800 }, { areaM2: 1200 }, { areaM2: null }, {}]);
   check(
     "case1: totalAreaM2 sums the known and counts the unknown",
-    eq(total, { m2: 6000, known: 2, unknown: 2 }),
+    eq(total, { m2: 6000, known: 2, unknown: 2, assumed: 0 }),
     JSON.stringify(total),
   );
   check(
     "case1: a negative area counts as unknown, not as a subtraction",
-    eq(totalAreaM2([{ areaM2: -5 }, { areaM2: 100 }]), { m2: 100, known: 1, unknown: 1 }),
+    eq(totalAreaM2([{ areaM2: -5 }, { areaM2: 100 }]), { m2: 100, known: 1, unknown: 1, assumed: 0 }),
+  );
+  check(
+    "case1: an assumed scale is counted apart from a measured one",
+    eq(
+      totalAreaM2([
+        { areaM2: 100, gsdSource: "optics" },
+        { areaM2: 200, gsdSource: "assumed_native_width" },
+        { areaM2: null, gsdSource: "assumed_optics" },
+      ]),
+      { m2: 300, known: 2, unknown: 1, assumed: 1 },
+    ),
+    JSON.stringify(totalAreaM2([
+      { areaM2: 100, gsdSource: "optics" },
+      { areaM2: 200, gsdSource: "assumed_native_width" },
+      { areaM2: null, gsdSource: "assumed_optics" },
+    ])),
   );
 
   check("case1: m2ToHa / m2ToKm2", m2ToHa(32000) === 3.2 && m2ToKm2(2500000) === 2.5);
@@ -278,14 +321,32 @@ const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
     "case3: no band and no detections -> null, never 0",
     bestCount({ id: "x", uploadedAt: "2026-04-01T00:00:00Z", center: near1 }) === null,
   );
+  // An empty list is not an observation of zero animals, and neither is a list
+  // of nothing but rejections. Only a band can claim a measured zero.
+  check(
+    "case3: an empty detection list is unknown, not zero",
+    bestCount({ id: "x", uploadedAt: "2026-04-01T00:00:00Z", center: near1, detections: [] }) === null,
+  );
+  check(
+    "case3: nothing but false positives is unknown, not zero",
+    bestCount({
+      id: "x", uploadedAt: "2026-04-01T00:00:00Z", center: near1,
+      detections: [d("false_positive"), d("false_positive")],
+    }) === null,
+  );
+  check(
+    "case3: a band of 0 IS a measured zero",
+    bestCount({ id: "x", uploadedAt: "2026-04-01T00:00:00Z", center: near1, band: band(0) }) === 0,
+  );
 
   // A zero previous count has no percent change, and a missing count breaks
-  // the chain rather than being bridged over.
+  // the chain rather than being bridged over. The zero is stated as a band -
+  // the only way a sortie can claim it counted and found none.
   const zeroThen = siteSeries({
     id: 0,
     centroid: near1,
     footages: [
-      { id: "z0", uploadedAt: "2026-01-01T00:00:00Z", center: near1, detections: [] },
+      { id: "z0", uploadedAt: "2026-01-01T00:00:00Z", center: near1, band: band(0) },
       { id: "z1", uploadedAt: "2026-01-02T00:00:00Z", center: near1, band: band(10) },
       { id: "z2", uploadedAt: "2026-01-03T00:00:00Z", center: near1 },
       { id: "z3", uploadedAt: "2026-01-04T00:00:00Z", center: near1, band: band(20) },
@@ -300,9 +361,31 @@ const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   check("case3: and the next one is not bridged across the gap", zeroThen[3].delta === null);
 }
 
+/* ---------- case 3b: one definition of a sortie's count -------------------- */
+{
+  const d = (status) => ({ count: 1, status });
+  check(
+    "case3b: the band's best wins over the detections",
+    countOf({ band: { best: 562 }, detections: [d("auto"), d("auto")] }) === 562,
+  );
+  check(
+    "case3b: without a band, a rejected detection is not an animal",
+    countOf({ detections: [d("auto"), d("validated"), d("false_positive")] }) === 2,
+  );
+  check(
+    "case3b: animals counted but not placed are still animals",
+    countOf({ detections: [d("auto")], unplaced: 4 }) === 5,
+  );
+  check(
+    "case3b: a band of null is not a count of null",
+    countOf({ band: { best: null }, detections: [d("auto"), d("auto")] }) === 2,
+  );
+}
+
 /* ---------- case 4: empty inputs ----------------------------------------- */
 {
-  check("case4: totalAreaM2([]) -> zero known, zero unknown", eq(totalAreaM2([]), { m2: 0, known: 0, unknown: 0 }));
+  check("case4: totalAreaM2([]) -> zero known, zero unknown", eq(totalAreaM2([]), { m2: 0, known: 0, unknown: 0, assumed: 0 }));
+  check("case4: countOf({}) -> 0, and it does not throw", countOf({}) === 0);
   check("case4: groupSizes([]) -> []", eq(groupSizes([]), []));
   check("case4: clusterIndices([], 5) -> []", eq(clusterIndices([], 5), []));
   check("case4: groupIntoSites([]) -> []", eq(groupIntoSites([]), []));

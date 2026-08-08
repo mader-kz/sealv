@@ -5,7 +5,7 @@ import { Button, IconButton, Field, Pill } from "@/components/ui/primitives";
 import Icon from "@/components/ui/Icon";
 import { useT } from "@/lib/i18n";
 
-type SortKey = "date" | "count" | "conf" | "region";
+type SortKey = "date" | "count" | "conf";
 type StatusFilter = "all" | "auto" | "validated" | "false_positive";
 
 export default function Workbench({ open, onClose }: { open: boolean; onClose: ()=>void }){
@@ -33,15 +33,11 @@ export default function Workbench({ open, onClose }: { open: boolean; onClose: (
       if (!q) return true;
       const needle=q.toLowerCase();
       const f=footageById.get(d.footageId);
-      return d.id.toLowerCase().includes(needle) || d.footageId.toLowerCase().includes(needle) || String(d.count).includes(needle) || (f && (f.filename.toLowerCase().includes(needle) || f.region.toLowerCase().includes(needle)));
+      return d.id.toLowerCase().includes(needle) || d.footageId.toLowerCase().includes(needle) || String(d.count).includes(needle) || (f ? f.filename.toLowerCase().includes(needle) : false);
     });
     rows.sort((a,b)=>{
       if(sort==="count") return b.count - a.count;
       if(sort==="conf") return b.confidence - a.confidence;
-      if(sort==="region"){
-        const fa=footageById.get(a.footageId)?.region||""; const fb=footageById.get(b.footageId)?.region||"";
-        return fa.localeCompare(fb);
-      }
       // date: by footage uploadedAt
       const fa=footageById.get(a.footageId)?.uploadedAt||""; const fb=footageById.get(b.footageId)?.uploadedAt||"";
       return fb.localeCompare(fa);
@@ -60,10 +56,10 @@ export default function Workbench({ open, onClose }: { open: boolean; onClose: (
   if(!open) return null;
 
   const exportCSV = ()=>{
-    const rows=["id,footageId,filename,region,t,lat,lng,count,confidence,status"];
+    const rows=["id,footageId,filename,t,lat,lng,count,confidence,status"];
     for(const d of filtered){
       const f=footageById.get(d.footageId);
-      rows.push(`${d.id},${d.footageId},${f?.filename||""},${f?.region||""},${d.t},${d.lat},${d.lng},${d.count},${d.confidence},${d.status}`);
+      rows.push(`${d.id},${d.footageId},${f?.filename||""},${d.t},${d.lat},${d.lng},${d.count},${d.confidence},${d.status}`);
     }
     const blob=new Blob([rows.join("\n")],{type:"text/csv"}); const url=URL.createObjectURL(blob);
     const a=document.createElement("a"); a.href=url; a.download=`sealv-detections-${new Date().toISOString().slice(0,10)}.csv`; a.click(); URL.revokeObjectURL(url);
@@ -97,7 +93,6 @@ export default function Workbench({ open, onClose }: { open: boolean; onClose: (
             <option value="date">{t("wb.sortDate")}</option>
             <option value="count">{t("wb.sortCount")}</option>
             <option value="conf">{t("wb.sortConf")}</option>
-            <option value="region">{t("wb.sortRegion")}</option>
           </select>
           <div className="flex items-center gap-2 pl-1">
             <span className="text-xs text-ink3">{t("wb.minCount")}</span>
@@ -122,7 +117,6 @@ export default function Workbench({ open, onClose }: { open: boolean; onClose: (
                   <input type="checkbox" className="accent-[color:var(--accent)]" checked={allSelected} onChange={e=>{ setSelected(e.target.checked ? new Set(allIds) : new Set()); }} />
                 </th>
                 <th className={th}>{t("nav.footage")}</th>
-                <th className={th}>{t("row.region")}</th>
                 <th className={`${th} text-right`}>{t("th.count")}</th>
                 <th className={`${th} text-right`}>{t("wb.conf")}</th>
                 <th className={th}>{t("wb.status")}</th>
@@ -144,7 +138,6 @@ export default function Workbench({ open, onClose }: { open: boolean; onClose: (
                       <input type="checkbox" className="accent-[color:var(--accent)]" checked={isSel} onChange={()=> toggle(d.id)} />
                     </td>
                     <td className="px-3 py-2 font-mono text-ink truncate max-w-[180px]">{f?.filename || d.footageId}</td>
-                    <td className="px-3 py-2 text-ink2">{f?.region || "—"}</td>
                     <td className="px-3 py-2 text-right">
                       {isEditing ? (
                         <span className="inline-flex items-center gap-1">
@@ -195,7 +188,7 @@ export default function Workbench({ open, onClose }: { open: boolean; onClose: (
                 );
               })}
               {filtered.length===0 && (
-                <tr><td colSpan={8} className="px-4 py-16 text-center text-sm text-ink3">{t("wb.noMatch")}</td></tr>
+                <tr><td colSpan={7} className="px-4 py-16 text-center text-sm text-ink3">{t("wb.noMatch")}</td></tr>
               )}
             </tbody>
           </table>

@@ -112,7 +112,10 @@ export function Stat({
         {value}
       </div>
       <div className="label mt-1.5 truncate">{label}</div>
-      {sub && <div className="text-2xs text-ink3 mt-1 truncate">{sub}</div>}
+      {/* The sub-line is where a figure's qualification lives ("5 sorties rest
+          on an assumed scale"), so a narrow column must not be the only place
+          it exists: it truncates visually but stays readable on hover. */}
+      {sub && <div className="text-2xs text-ink3 mt-1 truncate" title={sub}>{sub}</div>}
     </div>
   );
 }

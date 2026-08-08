@@ -10,6 +10,7 @@ import Dashboard from "@/components/dashboard/Dashboard";
 import Timeline from "@/components/layout/Timeline";
 import Workbench from "@/components/workbench/Workbench";
 import { useFootageStore } from "@/store/useFootageStore";
+import { countOf } from "@/lib/analytics/count";
 import { Button, IconButton } from "@/components/ui/primitives";
 import Icon from "@/components/ui/Icon";
 import { useT } from "@/lib/i18n";
@@ -43,7 +44,6 @@ export default function Page(){
 
   const footages = useFootageStore(s=>s.footages);
   const selectedId = useFootageStore(s=>s.selectedId);
-  const detections = useFootageStore(s=>s.detections);
   const seedTestData = useFootageStore(s=>s.seedTestData);
   const hydrate = useFootageStore(s=>s.hydrate);
 
@@ -57,7 +57,12 @@ export default function Page(){
   // centred call-to-action is the only thing worth showing.
   useEffect(()=>{ if(footages.length>0) setShowLeft(true); },[footages.length>0]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const totalSeals = detections.reduce((s,d)=> s + (d.status!=="false_positive" ? d.count : 0), 0);
+  /* The same countOf() the panel, the inspector and the report use. This chip
+     used to sum the raw detection rows instead, which ignored the engine's own
+     band and the animals it counted but could not place — so the headline over
+     the map and the headline in the inspector could disagree about the very
+     same survey. One definition, or the product is arguing with itself. */
+  const totalSeals = useMemo(()=> footages.reduce((s,f)=> s + countOf(f), 0), [footages]);
   const empty = footages.length===0;
   // The timeline is a date brush; with everything flown on one day there is
   // nothing to brush. It earns its strip only once a season has history.

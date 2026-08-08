@@ -45,7 +45,11 @@ export type Footage = {
   track: TrackPoint[];
   detections: Detection[];
   center: { lat: number; lng: number };
-  region: string;
+  /* No `region`. It was `center.lat > 44.5 ? "KZ-East" : …` — a latitude
+     threshold wearing a toponym's clothes, invented at ingest and then shown,
+     charted, exported and put in sentences as if it were a place. The measured
+     thing is the centre coordinate, and that is what the UI shows. A real
+     region needs the service's `site` table, not an if-else. */
   status: "processing" | "ready" | "error";
   source: "srt" | "json" | "manual" | "injected" | "test" | "archive";
   videoUrl?: string; // object URL
@@ -83,11 +87,12 @@ export type Footage = {
   error?: string;
 };
 
+/* Only the layers the map still draws. `clusters` and `heatmap` outlived the
+   heat layer that was removed for painting a density nobody measured; a dead
+   field in a shared type reads as a contract to the next author. */
 export type MapLayerState = {
   footprints: boolean;
   detections: boolean;
-  clusters: boolean;
-  heatmap: boolean;
 };
 
 export type SiteMeta = {

@@ -52,6 +52,21 @@ export type RunResult = {
 
 export type JobProgress = { stage?: string; frames_done?: number; frames_total?: number };
 
+/** How many frames a finished run counted on. A still is one look; a video's
+ *  quality ledger lists the frames that survived into the consensus. Null when
+ *  the run never said — the same answer /v1/stats gives for an archived run,
+ *  so a fresh count and a reloaded one derive the same surveyed area. */
+export function framesUsed(
+  quality: Record<string, unknown> | null | undefined,
+  kind?: string | null,
+): number | null {
+  if (kind === "image") return 1;
+  const used = quality?.["frames_used"];
+  if (Array.isArray(used)) return used.length;
+  if (typeof used === "number" && Number.isFinite(used) && used >= 1) return Math.floor(used);
+  return null;
+}
+
 /* One row of /v1/stats.latest_runs - the archive hydrate() rebuilds the map
    from. Everything past the run id is optional: rows written before a column
    existed still come back, and a survey missing its frame size is a survey
@@ -71,6 +86,11 @@ export type StatsLatestRun = {
   gsd_cm_px?: number | null;
   gsd_source?: string | null;
   caveats?: string[] | null;
+  /* Frames the count was assembled from - 1 for a still, the consensus set for
+     a video. The surveyed area is a per-FRAME footprint, so without this a
+     transect would be reported as the ground under one instant of it. Null =
+     the run never said, which makes the area unknown rather than one frame. */
+  frames_used?: number | null;
 };
 
 /* The dashboard reads totals/per_site/over_time off the same payload, so the

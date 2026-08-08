@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useFootageStore } from "@/store/useFootageStore";
 import { colonyHull, expandHull, colonyBounds } from "@/lib/colony";
+import { countOf } from "@/lib/analytics/count";
 import type { Detection } from "@/lib/types";
 import { useT } from "@/lib/i18n";
 
@@ -387,9 +388,13 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
       const chips: ColonyChip[] = [];
       for(const f of footages){
         const entry = byFootage.get(f.id);
-        // The count the platform stands behind: the engine's best estimate;
-        // the raw sum of placed detections only when no band exists.
-        const count = f.band?.best ?? entry?.sum ?? 0;
+        // The count the platform stands behind, from the one shared definition:
+        // the engine's best estimate, else the surviving detections plus the
+        // animals it counted but could not place. `entry` still supplies the
+        // GEOMETRY below - where to anchor the chip - but not the number, so
+        // the chip over a colony and the inspector's headline for that same
+        // sortie can never be two different figures.
+        const count = countOf(f);
         const b = entry ? colonyBounds(entry.pts) : null;
         const lat = b ? (b.minLat+b.maxLat)/2 : f.center?.lat;
         const lng = b ? (b.minLng+b.maxLng)/2 : f.center?.lng;

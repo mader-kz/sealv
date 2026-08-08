@@ -16,6 +16,7 @@
  * Structural input types (not lib/types.ts Footage) so this module stays pure
  * and DOM-free; a Footage satisfies them.
  */
+import { countOf } from "./count";
 import { clusterIndices } from "./groups";
 
 /** Default site radius, meters. */
@@ -62,17 +63,23 @@ export type SeriesEntry<T extends SurveyFootage = SurveyFootage> = {
   delta: SurveyDelta | null;
 };
 
-/** The count behind a sortie: the engine's band if it produced one, otherwise
- *  the placed animals it actually found. False positives count for neither. */
+/** The count behind a sortie — countOf(), with one addition this module needs
+ *  and the panels do not: a sortie with nothing to count has an UNKNOWN count,
+ *  and null keeps it out of a delta. A gap is not a zero, and subtracting from
+ *  a zero that was never measured invents a crash or a boom that nobody
+ *  observed.
+ *
+ *  "Nothing to count" is no band AND not one surviving detection — an absent
+ *  list and a present-but-empty one make the same claim here, since neither
+ *  reports an observation. A sortie that genuinely saw zero animals says so
+ *  with a band whose best is 0, which the first branch returns as the real
+ *  measurement it is. */
 export function bestCount(f: SurveyFootage): number | null {
   if (f?.band && f.band.best != null && Number.isFinite(f.band.best)) return f.band.best;
-  if (!f?.detections) return null;
-  let n = 0;
-  for (const d of f.detections) {
-    if (d.status === "false_positive") continue;
-    if (Number.isFinite(d.count)) n += d.count;
-  }
-  return n;
+  const counted = (f?.detections ?? []).some(
+    (d) => d.status !== "false_positive" && Number.isFinite(d.count),
+  );
+  return counted ? countOf(f) : null;
 }
 
 /**
