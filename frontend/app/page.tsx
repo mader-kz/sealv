@@ -98,7 +98,7 @@ export default function Page(){
             {/* Running total — one line, top-right, out of the map's way */}
             <div className="absolute top-3 right-3 z-30 flex items-center gap-2">
               {!empty && (
-                <div className="flex items-baseline gap-1.5 bg-surface/95 backdrop-blur border border-line rounded h-7 px-2.5">
+                <div className="flex items-baseline gap-1.5 bg-surface border border-line rounded h-7 px-2.5 shadow-pop">
                   <span className="text-sm tnum text-ink">{totalSeals}</span>
                   <span className="text-2xs text-ink3">{tp(totalSeals, "unit.seals")}</span>
                   <span className="text-line px-0.5">·</span>

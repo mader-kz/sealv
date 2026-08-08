@@ -485,7 +485,8 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
 
       {/* Layer controls */}
       <div className="absolute top-3 left-3 z-10 flex items-center gap-2">
-        <div className="flex items-center gap-0.5 bg-surface/95 backdrop-blur border border-line rounded p-0.5">
+        {/* fully opaque: over satellite imagery any translucency reads as dirt */}
+        <div className="flex items-center gap-0.5 bg-surface border border-line rounded p-0.5 shadow-pop">
           <Toggle checked={satellite} onChange={setSatellite} label={t("map.satellite")} />
           <span className="w-px h-4 bg-line mx-0.5" />
           <Toggle checked={layerState.footprints} onChange={v=>setLayer("footprints",v)} label={t("map.tracks")} />
