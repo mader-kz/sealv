@@ -129,7 +129,7 @@ export default function Dropzone(){
       } else if (json && sidecarText) {
         try { track = parseJSONSidecar(sidecarText); source="json"; parseInfo=`${track.length} track points`; }
         catch(e:any){ setLog(`Could not read the JSON sidecar: ${e.message}`); continue; }
-      } else if (image && pinMode && pinPoints.length >= 1) {
+      } else if (image && pinPoints.length >= 1) {
         // A still has no flight track. One pinned point is its location; the
         // whole count aggregates onto that marker, exactly as honest as the
         // engine result allows without per-animal coordinates.
@@ -139,7 +139,14 @@ export default function Dropzone(){
         parseInfo = "photo · location pinned on the map";
         setPinPoints([]); setPinMode(false);
       } else if (image) {
-        setLog(`${image.name}: a photo has no flight track — turn on Pin mode, click where it was taken, then drop it again.`);
+        // Hold the file and arm pin mode ourselves. The old message told the
+        // user to enable pinning and DROP THE FILE AGAIN - a flow nobody
+        // completes. Same pending mechanism the GPS-less video path uses;
+        // confirm re-runs processFiles with the held file, and the branch
+        // above accepts it off the pinned point.
+        setPendingVideo({ file: image, url: URL.createObjectURL(image), name: image.name });
+        setPinMode(true); setPinPoints([]);
+        setLog(`${image.name}: a photo carries no location — click the map where it was taken, then press Confirm.`);
         continue;
       } else if (pinMode && pinPoints.length >=2) {
         // use pin track: distribute proportionally across duration
@@ -165,6 +172,7 @@ export default function Dropzone(){
             continue;
           } else {
             setPendingVideo({ file: video, url: URL.createObjectURL(video), name: video.name });
+            setPinMode(true); setPinPoints([]);
             setLog(`No GPS found in ${video.name}. Pin the flight path on the map, then confirm.`);
             continue;
           }
@@ -310,7 +318,7 @@ export default function Dropzone(){
             <Button variant="ghost" onClick={()=> setPinPoints([])}>Clear</Button>
             <Button
               variant="primary"
-              disabled={pinPoints.length<2 || !pendingVideo}
+              disabled={!pendingVideo || pinPoints.length < (/\.(jpe?g|png|tiff?|webp)$/i.test(pendingVideo.name) ? 1 : 2)}
               onClick={()=> { if(pendingVideo) processFiles([pendingVideo.file]); }}
             >
               Confirm
@@ -324,7 +332,11 @@ export default function Dropzone(){
           <Icon name="alert" size={13} className="text-accent mt-0.5" />
           <div className="flex-1 min-w-0">
             <div className="text-xs text-ink truncate">{pendingVideo.name}</div>
-            <div className="text-2xs text-ink3 mt-0.5">No GPS found — pin the path on the map, then confirm.</div>
+            <div className="text-2xs text-ink3 mt-0.5">
+              {/\.(jpe?g|png|tiff?|webp)$/i.test(pendingVideo.name)
+                ? "No location — click the map where this photo was taken, then confirm."
+                : "No GPS found — pin the flight path on the map (2+ points), then confirm."}
+            </div>
           </div>
           <button onClick={()=> setPendingVideo(null)} className="text-ink3 hover:text-ink" aria-label="Dismiss">
             <Icon name="close" size={12} />

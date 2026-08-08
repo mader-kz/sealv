@@ -130,9 +130,13 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
       setMapLoaded(true);
       onMapReady?.(map);
 
-      // pin mode click handler
+      // Pin-mode click handler. The map is created once (the init guard above
+      // bails on re-runs), so anything these closures capture is frozen at
+      // first render - `pinMode` here was ALWAYS false and manual pinning
+      // never registered a single point. Read the store at event time, the
+      // way the pinPoints line below already had to.
       map.on("click", (e: any)=>{
-        if (pinMode) {
+        if (useFootageStore.getState().pinMode) {
           const prev = useFootageStore.getState().pinPoints;
           const t = prev.length;
           const next = [...prev, { t, lat: e.lngLat.lat, lng: e.lngLat.lng }];
@@ -140,7 +144,7 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
         }
       });
       map.on("click","detections-circle",(e: any)=>{
-        if(pinMode) return;
+        if(useFootageStore.getState().pinMode) return;
         const f = e.features?.[0];
         const detId = (f?.properties as any)?.detId as string;
         if(detId){
@@ -149,7 +153,7 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
         }
       });
       map.on("mouseenter","detections-circle",()=> map.getCanvas().style.cursor="pointer");
-      map.on("mouseleave","detections-circle",()=> map.getCanvas().style.cursor= pinMode?"crosshair":"");
+      map.on("mouseleave","detections-circle",()=> map.getCanvas().style.cursor= useFootageStore.getState().pinMode?"crosshair":"");
     });
     mapRef.current = map;
     return ()=> map.remove();
