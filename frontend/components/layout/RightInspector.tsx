@@ -149,7 +149,11 @@ function FramePreview({ filename, count, det }: { filename:string; count:number;
         className="absolute inset-0 opacity-60"
         style={{ background:"radial-gradient(ellipse at 35% 40%, #14202a 0%, transparent 65%)" }}
       />
-      {det && (
+      {/* bbox is optional and, since the real engine replaced the mock, usually
+          absent: the counter returns a point per animal, not a box. The mock
+          always supplied one, so the old code indexed it unguarded - which
+          crashed the whole app the moment a real sortie was selected. */}
+      {det && Array.isArray(det.bbox) && det.bbox.length === 4 && (
         <div
           className="absolute border border-accent rounded-[2px]"
           style={{ left: `${det.bbox[0]*100}%`, top: `${det.bbox[1]*100}%`, width: `${det.bbox[2]*100}%`, height: `${det.bbox[3]*100}%` }}
