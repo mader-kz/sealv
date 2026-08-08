@@ -322,7 +322,7 @@ export default function Dropzone(){
             <span className="text-xs text-ink3 tnum px-1">{pinPoints.length ? "anchor set" : "no anchor"}</span>
             <Button variant="ghost" onClick={()=> setPinPoints([])}>Clear</Button>
             <Button
-              variant="primary"
+              variant={pendingVideo && pinPoints.length >= 1 ? "primary" : "default"}
               disabled={!pendingVideo || pinPoints.length < 1}
               onClick={()=> { if(pendingVideo) processFiles([pendingVideo.file]); }}
             >

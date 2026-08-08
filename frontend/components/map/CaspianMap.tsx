@@ -67,9 +67,19 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
   const pinPoints = useFootageStore(s=>s.pinPoints);
   const setPinPoints = useFootageStore(s=>s.setPinPoints);
 
+  /* onMapReady arrives as an inline lambda from the page - a NEW identity on
+     every parent render. Holding it in a ref keeps the map-creation effect on
+     EMPTY deps; the old shape (useCallback deps -> effect deps) re-ran per
+     render: cleanup removed the live map, the mapRef guard blocked recreating
+     it, and the page was left with dead or doubled map instances. */
+  const onMapReadyRef = useRef(onMapReady);
+  useEffect(()=>{ onMapReadyRef.current = onMapReady; });
+
   const initMap = useCallback(async ()=>{
     if (!containerRef.current || mapRef.current) return;
     const ml = await import("maplibre-gl");
+    MarkerCtorRef.current = (ml as any).Marker || (ml as any).default?.Marker;
+    if (!containerRef.current || mapRef.current) return; // torn down while importing
     const MapCtor: any = (ml as any).Map || (ml as any).default?.Map;
     const NavCtrl: any = (ml as any).NavigationControl || (ml as any).default?.NavigationControl;
     const AttrCtrl: any = (ml as any).AttributionControl || (ml as any).default?.AttributionControl;
@@ -128,7 +138,7 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
 
       (window as any).__sealvMap = map;
       setMapLoaded(true);
-      onMapReady?.(map);
+      onMapReadyRef.current?.(map);
 
       // Pin-mode click handler. The map is created once (the init guard above
       // bails on re-runs), so anything these closures capture is frozen at
@@ -143,6 +153,10 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
           // the centre of the shot; the engine lays the animals out around it
           // by their true pixel positions.
           setPinPoints([{ t: 0, lat: e.lngLat.lat, lng: e.lngLat.lng }]);
+          // Centre on the anchor: the acknowledgement is the map itself
+          // moving, so the bullseye can never land off-screen or under a
+          // panel and read as "nothing happened".
+          try { map.easeTo({ center: e.lngLat, duration: 250 }); } catch {}
         }
       });
       map.on("click","detections-circle",(e: any)=>{
@@ -158,15 +172,54 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
       map.on("mouseleave","detections-circle",()=> map.getCanvas().style.cursor= useFootageStore.getState().pinMode?"crosshair":"");
     });
     mapRef.current = map;
-    return ()=> map.remove();
-  }, [pinMode, setPinPoints, select, onMapReady]);
+    // The container's width changes with every panel toggle, but the map was
+    // created at whatever size the first paint happened to have - 400x300 on
+    // a cold load. Without resize() the canvas keeps that stale geometry: the
+    // chart LOOKS full-width while clicks unproject through the old 400px
+    // transform, landing the pin anchor far from the cursor. That is the
+    // "clicked and nothing appeared" bug in one line.
+    const ro = new ResizeObserver(()=> { try { map.resize(); } catch {} });
+    if (containerRef.current) ro.observe(containerRef.current);
+    roRef.current = ro;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  useEffect(()=>{ initMap(); },[initMap]);
-
-  // update cursor when pinMode toggles
+  const roRef = useRef<ResizeObserver | null>(null);
+  /* The anchor is a DOM marker, not a GL circle layer: DOM renders under any
+     GL backend (headless/software included), pulses via CSS, and cannot be
+     buried by style reloads. Held here so the update effect can move it. */
+  const anchorMarkerRef = useRef<any>(null);
+  const MarkerCtorRef = useRef<any>(null);
   useEffect(()=>{
-    if (mapRef.current) mapRef.current.getCanvas().style.cursor = pinMode ? "crosshair" : "";
-  }, [pinMode]);
+    initMap();
+    return ()=> {
+      try { roRef.current?.disconnect(); } catch {}
+      try { anchorMarkerRef.current?.remove(); } catch {}
+      anchorMarkerRef.current = null;
+      try { mapRef.current?.remove(); } catch {}
+      roRef.current = null;
+      mapRef.current = null;   // the guard must reopen for the next mount
+      setMapLoaded(false);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[]);
+
+  // update cursor when pinMode toggles; in pin mode the data layers step
+  // back so the one thing being placed is the loudest thing on the chart
+  useEffect(()=>{
+    const m = mapRef.current; if (!m) return;
+    m.getCanvas().style.cursor = pinMode ? "crosshair" : "";
+    for (const [id, prop, on, off] of [
+      ["detections-circle","circle-opacity",1,0.25],
+      ["detections-glow","circle-opacity",0.16,0.05],
+      ["detections-count","text-opacity",1,0.25],
+    ] as const) {
+      try {
+        if (id === "detections-count") m.setPaintProperty(id, prop, pinMode ? off : on);
+        else m.setPaintProperty(id, prop, pinMode ? off : on);
+      } catch { /* layer not created yet - the load handler sets defaults */ }
+    }
+  }, [pinMode, mapLoaded]);
 
   // satellite toggle: swap raster layer
   useEffect(()=>{
@@ -210,10 +263,18 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
         properties:{ id:f.id, selected: f.id===selectedId }
       }))
     };
-    // the pinned anchor, drawn as a point - never a path
-    if (pinMode && pinPoints.length>0) {
+    // the pinned anchor: one DOM marker, moved or removed per state
+    if (pinMode && pinPoints.length > 0 && MarkerCtorRef.current) {
       const p0 = pinPoints[0];
-      (fc.features as any).push({ type:"Feature", geometry:{ type:"Point", coordinates:[p0.lng,p0.lat] }, properties:{ id:"pin-anchor", selected:true, count: 0, status: "auto" } });
+      if (!anchorMarkerRef.current) {
+        const el = document.createElement("div");
+        el.className = "pin-anchor-marker";
+        el.setAttribute("data-pin-anchor", "1");
+        anchorMarkerRef.current = new MarkerCtorRef.current({ element: el, anchor: "center" });
+      }
+      anchorMarkerRef.current.setLngLat([p0.lng, p0.lat]).addTo(map);
+    } else if (anchorMarkerRef.current) {
+      anchorMarkerRef.current.remove();
     }
     src.setData(fc);
 

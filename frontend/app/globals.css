@@ -140,3 +140,24 @@ a:focus-visible {
 .maplibregl-popup-tip {
   border-top-color: var(--surface) !important;
 }
+
+/* Pin-mode anchor: a DOM marker, deliberately not a WebGL layer. DOM survives
+   every GL quirk (software renderers included), can pulse via CSS, and is
+   always exactly where MapLibre projects it. */
+.pin-anchor-marker {
+  width: 18px; height: 18px; border-radius: 50%;
+  background: var(--accent);
+  border: 3px solid #fff;
+  box-shadow: 0 0 0 2px rgba(0,0,0,.55);
+  position: relative;
+}
+.pin-anchor-marker::before {
+  content: ""; position: absolute; inset: -14px; border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  animation: pin-pulse 1.6s ease-out infinite;
+}
+@keyframes pin-pulse {
+  0%   { transform: scale(.6); opacity: .9; }
+  70%  { transform: scale(1.15); opacity: 0; }
+  100% { transform: scale(1.15); opacity: 0; }
+}
