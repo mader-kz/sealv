@@ -3,8 +3,10 @@ import { useMemo, useState } from "react";
 import { useFootageStore } from "@/store/useFootageStore";
 import { Button, Field, Stat, SectionHead, Pill } from "@/components/ui/primitives";
 import Icon from "@/components/ui/Icon";
+import { useT } from "@/lib/i18n";
 
 export default function LeftPanel(){
+  const { t, tp } = useT();
   const footages = useFootageStore(s=>s.footages);
   const detections = useFootageStore(s=>s.detections);
   const selectedId = useFootageStore(s=>s.selectedId);
@@ -24,8 +26,8 @@ export default function LeftPanel(){
   },[footages,timeRange]);
 
   const filtered = useMemo(()=>{
-    const t=q.toLowerCase();
-    return filteredByTime.filter(f=> !t || f.filename.toLowerCase().includes(t) || f.region.toLowerCase().includes(t) || f.id.toLowerCase().includes(t));
+    const needle=q.toLowerCase();
+    return filteredByTime.filter(f=> !needle || f.filename.toLowerCase().includes(needle) || f.region.toLowerCase().includes(needle) || f.id.toLowerCase().includes(needle));
   },[filteredByTime,q]);
 
   const totalSeals = detections.filter(d=> filteredByTime.some(f=>f.id===d.footageId)).reduce((s,d)=>s+d.count,0);
@@ -42,28 +44,28 @@ export default function LeftPanel(){
     <div className="w-[340px] shrink-0 bg-surface flex flex-col overflow-hidden h-full">
       {/* Headline numbers — figures first, no boxed KPI grid */}
       <div className="px-4 pt-4 pb-3.5 flex gap-6">
-        <Stat label="Seals" value={totalSeals} />
-        <Stat label="Sorties" value={filteredByTime.length} />
-        <Stat label="Coverage" value={`${coverage}%`} />
+        <Stat label={t("stat.seals")} value={totalSeals} />
+        <Stat label={t("stat.sorties")} value={filteredByTime.length} />
+        <Stat label={t("stat.coverage")} value={`${coverage}%`} />
       </div>
 
       <div className="px-3 pb-3 space-y-2 border-b border-line">
         <div className="flex gap-1.5">
-          <Field value={q} onChange={setQ} placeholder="Filter footage" icon="search" />
-          <Button icon="download" onClick={exportCSV} title="Export filtered as CSV" />
+          <Field value={q} onChange={setQ} placeholder={t("left.filter")} icon="search" />
+          <Button icon="download" onClick={exportCSV} title={t("left.exportCsvTitle")} />
         </div>
         {footages.length===0 ? (
-          <Button variant="primary" full onClick={seedTestData}>Load test data</Button>
+          <Button variant="primary" full onClick={seedTestData}>{t("left.loadTest")}</Button>
         ) : (
           <button onClick={clearAll} className="text-2xs text-ink3 hover:text-ink transition-colors">
-            Clear all footage
+            {t("left.clearAll")}
           </button>
         )}
       </div>
 
       <div className="flex-1 overflow-auto">
         <SectionHead
-          title={`Footage · ${filtered.length}`}
+          title={`${t("nav.footage")} · ${filtered.length}`}
           className="px-3 h-8 sticky top-0 bg-surface border-b border-line-soft z-10"
         />
 
@@ -83,14 +85,14 @@ export default function LeftPanel(){
               {active && <span className="absolute left-0 top-0 bottom-0 w-px bg-accent" />}
               <div className="flex items-baseline gap-2">
                 <span className="text-sm font-mono truncate text-ink">{f.filename}</span>
-                {f.source==="test" && <Pill>test</Pill>}
+                {f.source==="test" && <Pill>{t("pill.test")}</Pill>}
                 <span className="flex-1" />
                 <span className="tnum text-sm text-ink">{sealCount}</span>
-                <span className="text-2xs text-ink3">seals</span>
+                <span className="text-2xs text-ink3">{tp(sealCount, "unit.seals")}</span>
                 <button
                   onClick={(e)=>{e.stopPropagation(); remove(f.id);}}
                   className="opacity-0 group-hover:opacity-100 text-ink3 hover:text-bad transition-opacity"
-                  aria-label="Remove"
+                  aria-label={t("a11y.remove")}
                 >
                   <Icon name="close" size={12} />
                 </button>
@@ -98,9 +100,9 @@ export default function LeftPanel(){
               <div className="text-xs text-ink3 mt-1 flex items-center gap-1.5">
                 <span>{f.region}</span>
                 <span className="text-line">·</span>
-                <span className="tnum">{f.duration}s</span>
+                <span className="tnum">{f.duration}{t("unit.s")}</span>
                 <span className="text-line">·</span>
-                <span className="tnum">{f.track.length} pts</span>
+                <span className="tnum">{f.track.length} {tp(f.track.length, "unit.points")}</span>
                 <span className="text-line">·</span>
                 <span className="tnum">{new Date(f.uploadedAt).toLocaleDateString("en-CA")}</span>
               </div>
@@ -109,12 +111,11 @@ export default function LeftPanel(){
         })}
 
         {filtered.length===0 && footages.length>0 && (
-          <div className="p-6 text-center text-sm text-ink3">No footage matches “{q}”.</div>
+          <div className="p-6 text-center text-sm text-ink3">{t("left.noMatch", { q })}</div>
         )}
         {footages.length===0 && (
           <div className="p-6 text-sm text-ink3 leading-relaxed">
-            Drop an MP4 with a matching .SRT or .JSON track to ingest a sortie. Without GPS, pin the
-            flight path on the map instead.
+            {t("left.emptyHint")}
           </div>
         )}
       </div>

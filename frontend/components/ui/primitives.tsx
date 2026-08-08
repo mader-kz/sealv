@@ -193,7 +193,9 @@ export function Row({
 }) {
   return (
     <div className="flex items-baseline gap-3 py-1.5 border-b border-line-soft last:border-0">
-      <span className="text-xs text-ink3 w-[76px] shrink-0">{label}</span>
+      {/* 96px, not 76: ru/kk labels (Длительность, Координаттар) need the
+          extra column width — a fixed 76px clipped them mid-word. */}
+      <span className="text-xs text-ink3 w-[96px] shrink-0">{label}</span>
       <span className={`text-sm text-ink truncate ${mono ? "font-mono tnum" : ""}`}>{value}</span>
     </div>
   );

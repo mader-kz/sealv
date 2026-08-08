@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useFootageStore } from "@/store/useFootageStore";
 import { colonyHull, expandHull, colonyBounds } from "@/lib/colony";
 import type { Detection } from "@/lib/types";
+import { useT } from "@/lib/i18n";
 
 // Caspian bounds
 const CASPIAN_BOUNDS: [[number, number],[number,number]] = [[46,36],[55,48]];
@@ -65,6 +66,7 @@ type ColonyChip = {
 };
 
 export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void }) {
+  const { t, tp } = useT();
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any | null>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
@@ -488,7 +490,7 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
             <button
               key={c.fid}
               onClick={()=>handleChipClick(c.fid)}
-              title={c.low!=null ? `${c.count} seals (range ${c.low}–${c.high})` : `${c.count} seals`}
+              title={c.low!=null ? `${c.count} ${tp(c.count, "unit.seals")} (${t("misc.range", { low: c.low, high: c.high as number })})` : `${c.count} ${tp(c.count, "unit.seals")}`}
               className={`colony-chip ${isSel ? "selected z-10" : ""}`}
               style={{ left:c.x, top:c.y }}
             >
@@ -504,22 +506,22 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
       {/* Layer controls */}
       <div className="absolute top-3 left-3 z-10 flex items-center gap-2">
         <div className="flex items-center gap-0.5 bg-surface/95 backdrop-blur border border-line rounded p-0.5">
-          <Toggle checked={satellite} onChange={setSatellite} label="Satellite" />
+          <Toggle checked={satellite} onChange={setSatellite} label={t("map.satellite")} />
           <span className="w-px h-4 bg-line mx-0.5" />
-          <Toggle checked={layerState.footprints} onChange={v=>setLayer("footprints",v)} label="Tracks" />
-          <Toggle checked={layerState.detections} onChange={v=>setLayer("detections",v)} label="Colonies" />
-          <Toggle checked={layerState.heatmap} onChange={v=>setLayer("heatmap",v)} label="Heat" />
+          <Toggle checked={layerState.footprints} onChange={v=>setLayer("footprints",v)} label={t("map.tracks")} />
+          <Toggle checked={layerState.detections} onChange={v=>setLayer("detections",v)} label={t("map.colonies")} />
+          <Toggle checked={layerState.heatmap} onChange={v=>setLayer("heatmap",v)} label={t("map.heat")} />
         </div>
         {pinMode && (
           <div className="bg-accent text-accent-ink text-xs px-2.5 h-7 rounded flex items-center">
-            {pinPoints.length ? "Anchor set — click again to move it, then Confirm" : "Click the map at the centre of the shot"}
+            {pinPoints.length ? t("map.anchorSet") : t("map.clickCentre")}
           </div>
         )}
       </div>
 
       {!mapLoaded && (
         <div className="absolute inset-0 grid place-items-center bg-bg z-20">
-          <span className="text-sm text-ink3">Loading chart…</span>
+          <span className="text-sm text-ink3">{t("map.loading")}</span>
         </div>
       )}
     </div>

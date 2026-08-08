@@ -3,11 +3,13 @@ import { useMemo, useState } from "react";
 import { useFootageStore } from "@/store/useFootageStore";
 import { Button, IconButton, Field, Pill } from "@/components/ui/primitives";
 import Icon from "@/components/ui/Icon";
+import { useT } from "@/lib/i18n";
 
 type SortKey = "date" | "count" | "conf" | "region";
 type StatusFilter = "all" | "auto" | "validated" | "false_positive";
 
 export default function Workbench({ open, onClose }: { open: boolean; onClose: ()=>void }){
+  const { t } = useT();
   const footages = useFootageStore(s=>s.footages);
   const detections = useFootageStore(s=>s.detections);
   const updateDetection = useFootageStore(s=>s.updateDetection);
@@ -29,9 +31,9 @@ export default function Workbench({ open, onClose }: { open: boolean; onClose: (
       if (status!=="all" && d.status!==status) return false;
       if (d.count < minCount) return false;
       if (!q) return true;
-      const t=q.toLowerCase();
+      const needle=q.toLowerCase();
       const f=footageById.get(d.footageId);
-      return d.id.toLowerCase().includes(t) || d.footageId.toLowerCase().includes(t) || String(d.count).includes(t) || (f && (f.filename.toLowerCase().includes(t) || f.region.toLowerCase().includes(t)));
+      return d.id.toLowerCase().includes(needle) || d.footageId.toLowerCase().includes(needle) || String(d.count).includes(needle) || (f && (f.filename.toLowerCase().includes(needle) || f.region.toLowerCase().includes(needle)));
     });
     rows.sort((a,b)=>{
       if(sort==="count") return b.count - a.count;
@@ -74,40 +76,40 @@ export default function Workbench({ open, onClose }: { open: boolean; onClose: (
       <div className="absolute inset-0 bg-black/50 backdrop-blur-[2px]" onClick={onClose} />
       <div className="relative ml-auto w-[min(940px,94vw)] h-full bg-surface border-l border-line flex flex-col shadow-pop">
         <div className="h-11 shrink-0 border-b border-line flex items-center px-4 gap-3">
-          <span className="text-base font-medium">Detections</span>
+          <span className="text-base font-medium">{t("nav.detections")}</span>
           <span className="text-xs text-ink3 tnum">
-            {filtered.length} of {detections.length}{selected.size>0 && ` · ${selected.size} selected`}
+            {t("wb.ofTotal", { a: filtered.length, b: detections.length })}{selected.size>0 && ` · ${t("wb.selected", { n: selected.size })}`}
           </span>
           <div className="flex-1" />
-          <Button icon="download" onClick={exportCSV}>Export CSV</Button>
-          <IconButton name="close" onClick={onClose} title="Close" />
+          <Button icon="download" onClick={exportCSV}>{t("btn.exportCsv")}</Button>
+          <IconButton name="close" onClick={onClose} title={t("btn.close")} />
         </div>
 
         <div className="px-4 py-2.5 border-b border-line flex flex-wrap items-center gap-2">
-          <div className="w-56"><Field value={q} onChange={setQ} placeholder="Filter detections" icon="search" /></div>
+          <div className="w-56"><Field value={q} onChange={setQ} placeholder={t("wb.filter")} icon="search" /></div>
           <select value={status} onChange={e=>setStatus(e.target.value as any)} className="h-7 bg-surface2 border border-line rounded px-2 text-xs text-ink2">
-            <option value="all">All status</option>
-            <option value="auto">Auto</option>
-            <option value="validated">Validated</option>
-            <option value="false_positive">False positive</option>
+            <option value="all">{t("wb.allStatus")}</option>
+            <option value="auto">{t("status.auto")}</option>
+            <option value="validated">{t("status.validated")}</option>
+            <option value="false_positive">{t("status.falsePositive")}</option>
           </select>
           <select value={sort} onChange={e=>setSort(e.target.value as any)} className="h-7 bg-surface2 border border-line rounded px-2 text-xs text-ink2">
-            <option value="date">Sort by date</option>
-            <option value="count">Sort by count</option>
-            <option value="conf">Sort by confidence</option>
-            <option value="region">Sort by region</option>
+            <option value="date">{t("wb.sortDate")}</option>
+            <option value="count">{t("wb.sortCount")}</option>
+            <option value="conf">{t("wb.sortConf")}</option>
+            <option value="region">{t("wb.sortRegion")}</option>
           </select>
           <div className="flex items-center gap-2 pl-1">
-            <span className="text-xs text-ink3">Min count</span>
+            <span className="text-xs text-ink3">{t("wb.minCount")}</span>
             <input type="range" min={0} max={12} value={minCount} onChange={e=>setMinCount(parseInt(e.target.value))} className="w-20 accent-[color:var(--accent)]" />
             <span className="text-xs text-ink tnum w-3">{minCount}</span>
           </div>
           <div className="flex-1" />
           {selected.size>0 && (
             <div className="flex items-center gap-1.5">
-              <Button icon="check" onClick={()=>{ bulkUpdate(Array.from(selected), {status:"validated"}); setSelected(new Set()); }}>Validate</Button>
-              <Button onClick={()=>{ bulkUpdate(Array.from(selected), {status:"false_positive"}); setSelected(new Set()); }}>Mark false</Button>
-              <Button variant="ghost" onClick={()=> setSelected(new Set())}>Clear</Button>
+              <Button icon="check" onClick={()=>{ bulkUpdate(Array.from(selected), {status:"validated"}); setSelected(new Set()); }}>{t("wb.validate")}</Button>
+              <Button onClick={()=>{ bulkUpdate(Array.from(selected), {status:"false_positive"}); setSelected(new Set()); }}>{t("wb.markFalse")}</Button>
+              <Button variant="ghost" onClick={()=> setSelected(new Set())}>{t("btn.clear")}</Button>
             </div>
           )}
         </div>
@@ -119,12 +121,12 @@ export default function Workbench({ open, onClose }: { open: boolean; onClose: (
                 <th className="pl-4 pr-2 py-2 w-8">
                   <input type="checkbox" className="accent-[color:var(--accent)]" checked={allSelected} onChange={e=>{ setSelected(e.target.checked ? new Set(allIds) : new Set()); }} />
                 </th>
-                <th className={th}>Footage</th>
-                <th className={th}>Region</th>
-                <th className={`${th} text-right`}>Count</th>
-                <th className={`${th} text-right`}>Conf.</th>
-                <th className={th}>Status</th>
-                <th className={th}>Coordinates</th>
+                <th className={th}>{t("nav.footage")}</th>
+                <th className={th}>{t("row.region")}</th>
+                <th className={`${th} text-right`}>{t("th.count")}</th>
+                <th className={`${th} text-right`}>{t("wb.conf")}</th>
+                <th className={th}>{t("wb.status")}</th>
+                <th className={th}>{t("wb.coords")}</th>
                 <th className={th}></th>
               </tr>
             </thead>
@@ -156,7 +158,7 @@ export default function Workbench({ open, onClose }: { open: boolean; onClose: (
                           <button
                             onClick={()=>{ const n=parseInt(editCount); if(!isNaN(n)&&n>=0&&n<=50) updateDetection(d.id,{count:n}); setEditId(null); }}
                             className="text-ink3 hover:text-ink"
-                            aria-label="Save"
+                            aria-label={t("a11y.save")}
                           >
                             <Icon name="check" size={13} />
                           </button>
@@ -165,7 +167,7 @@ export default function Workbench({ open, onClose }: { open: boolean; onClose: (
                         <button
                           onClick={()=> { setEditId(d.id); setEditCount(String(d.count)); }}
                           className="tnum text-ink px-1.5 py-0.5 rounded hover:bg-surface2 border border-transparent hover:border-line transition-colors"
-                          title="Click to correct the count"
+                          title={t("wb.editTitle")}
                         >
                           {d.count}
                         </button>
@@ -174,18 +176,18 @@ export default function Workbench({ open, onClose }: { open: boolean; onClose: (
                     <td className="px-3 py-2 text-right text-ink2 tnum">{(d.confidence*100).toFixed(0)}%</td>
                     <td className="px-3 py-2">
                       <Pill tone={d.status==="validated" ? "good" : d.status==="false_positive" ? "neutral" : "neutral"}>
-                        {d.status==="false_positive" ? "false" : d.status}
+                        {d.status==="false_positive" ? t("status.falseShort") : d.status==="validated" ? t("status.validatedL") : t("status.autoL")}
                       </Pill>
                     </td>
                     <td className="px-3 py-2 font-mono text-xs text-ink3 tnum">{d.lat.toFixed(3)}, {d.lng.toFixed(3)}</td>
                     <td className="px-3 py-2">
                       <div className="flex items-center gap-1 justify-end">
-                        <Button variant="ghost" onClick={()=> { select(d.footageId); onClose(); }}>Show on map</Button>
+                        <Button variant="ghost" onClick={()=> { select(d.footageId); onClose(); }}>{t("wb.showOnMap")}</Button>
                         <Button
                           variant="ghost"
                           onClick={()=> updateDetection(d.id, {status: d.status==="false_positive" ? "auto" : "false_positive"})}
                         >
-                          {d.status==="false_positive" ? "Restore" : "Mark false"}
+                          {d.status==="false_positive" ? t("wb.restore") : t("wb.markFalse")}
                         </Button>
                       </div>
                     </td>
@@ -193,7 +195,7 @@ export default function Workbench({ open, onClose }: { open: boolean; onClose: (
                 );
               })}
               {filtered.length===0 && (
-                <tr><td colSpan={8} className="px-4 py-16 text-center text-sm text-ink3">No detections match these filters.</td></tr>
+                <tr><td colSpan={8} className="px-4 py-16 text-center text-sm text-ink3">{t("wb.noMatch")}</td></tr>
               )}
             </tbody>
           </table>

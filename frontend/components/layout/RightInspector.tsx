@@ -4,8 +4,10 @@ import { useEffect, useMemo, useState } from "react";
 import { Button, Row, SectionHead, Pill } from "@/components/ui/primitives";
 import Icon from "@/components/ui/Icon";
 import EvidenceView, { EvidenceFrame } from "@/components/evidence/EvidenceView";
+import { basisText, useT } from "@/lib/i18n";
 
 export default function RightInspector({ compact }: { compact?: boolean }){
+  const { t, tp, lang } = useT();
   const footages = useFootageStore(s=>s.footages);
   const selectedId = useFootageStore(s=>s.selectedId);
   const select = useFootageStore(s=>s.select);
@@ -25,7 +27,7 @@ export default function RightInspector({ compact }: { compact?: boolean }){
           <div className="max-w-[220px]">
             <Icon name="target" size={20} className="text-ink3 mx-auto" />
             <p className="text-sm text-ink2 mt-3 leading-relaxed">
-              Select a sortie on the map or in the footage list to inspect its count and track.
+              {t("insp.selectHint")}
             </p>
           </div>
         </div>
@@ -56,18 +58,18 @@ export default function RightInspector({ compact }: { compact?: boolean }){
       <div className="px-4 pt-4 pb-3.5 border-b border-line">
         {f.status === "error" ? (
           <div>
-            <div className="text-sm text-bad font-medium">count failed</div>
+            <div className="text-sm text-bad font-medium">{t("insp.countFailed")}</div>
             <div className="text-2xs text-ink3 mt-1 break-words">{f.error}</div>
           </div>
         ) : f.status === "processing" ? (
           <div className="flex items-baseline gap-2">
             <span className="text-hero tnum font-medium leading-none text-ink3 animate-pulse">…</span>
-            <span className="text-sm text-ink2">counting</span>
+            <span className="text-sm text-ink2">{t("insp.counting")}</span>
           </div>
         ) : (
           <div className="flex items-baseline gap-2">
             <span className="text-hero tnum font-medium leading-none">{totalSeals}</span>
-            <span className="text-sm text-ink2">seals counted</span>
+            <span className="text-sm text-ink2">{tp(totalSeals, "insp.sealsCounted")}</span>
           </div>
         )}
 
@@ -84,26 +86,28 @@ export default function RightInspector({ compact }: { compact?: boolean }){
             </div>
             <div className="flex justify-between mt-1 text-2xs tnum text-ink3">
               <span>{f.band.low}</span>
-              <span className="text-ink2">range between frames</span>
+              <span className="text-ink2">{t("insp.rangeBetweenFrames")}</span>
               <span>{f.band.high}</span>
             </div>
           </div>
         )}
 
         <div className="flex items-center flex-wrap gap-2 mt-2.5">
-          {f.source==="test" && <Pill tone="accent">test data</Pill>}
-          {f.band?.basis && <Pill tone="neutral">{f.band.basis.replace(/_/g, " ")}</Pill>}
+          {f.source==="test" && <Pill tone="accent">{t("pill.testData")}</Pill>}
+          {f.band?.basis && <Pill tone="neutral">{basisText(lang, f.band.basis)}</Pill>}
           {meanConf != null && f.status === "ready" && !f.band && (
-            <Pill tone="neutral">{(meanConf*100).toFixed(0)}% confidence</Pill>
+            <Pill tone="neutral">{t("insp.confidence", { pct: (meanConf*100).toFixed(0) })}</Pill>
           )}
-          {det?.status === "validated" && <Pill tone="good">Validated</Pill>}
-          {det?.status === "false_positive" && <Pill tone="bad">False positive</Pill>}
+          {det?.status === "validated" && <Pill tone="good">{t("status.validated")}</Pill>}
+          {det?.status === "false_positive" && <Pill tone="bad">{t("status.falsePositive")}</Pill>}
           {f.band ? (
             <span className="text-2xs text-ink3">
-              {f.unplaced ? `${f.detections.length} on map · ${f.unplaced} without coordinates` : `${f.detections.length} on map`}
+              {f.unplaced
+                ? `${t("insp.onMap", { n: f.detections.length })} · ${t("insp.withoutCoords", { n: f.unplaced })}`
+                : t("insp.onMap", { n: f.detections.length })}
             </span>
           ) : (
-            <span className="text-2xs text-ink3">whole video</span>
+            <span className="text-2xs text-ink3">{t("insp.wholeVideo")}</span>
           )}
         </div>
       </div>
@@ -122,7 +126,7 @@ export default function RightInspector({ compact }: { compact?: boolean }){
               className="absolute bottom-2 right-2 shadow-pop"
               onClick={() => setEvidenceOpen(true)}
             >
-              Open evidence
+              {t("insp.openEvidence")}
             </Button>
           </>
         ) : (
@@ -142,14 +146,14 @@ export default function RightInspector({ compact }: { compact?: boolean }){
 
       <div className="flex-1 overflow-auto">
         <div className="px-4 py-3">
-          <SectionHead title="Sortie" className="mb-1" />
-          <Row label="File" value={f.filename} mono />
-          <Row label="Region" value={f.region} />
-          <Row label="Duration" value={`${f.duration}s`} mono />
-          <Row label="Source" value={f.source} />
-          <Row label="Track" value={`${f.track.length} points`} mono />
+          <SectionHead title={t("sec.sortie")} className="mb-1" />
+          <Row label={t("row.file")} value={f.filename} mono />
+          <Row label={t("row.region")} value={f.region} />
+          <Row label={t("row.duration")} value={`${f.duration}${t("unit.s")}`} mono />
+          <Row label={t("row.source")} value={f.source} />
+          <Row label={t("row.track")} value={`${f.track.length} ${tp(f.track.length, "misc.trackPoints")}`} mono />
           <Row
-            label="Location"
+            label={t("row.location")}
             value={`${f.center.lat.toFixed(4)}, ${f.center.lng.toFixed(4)}`}
             mono
           />
@@ -166,11 +170,11 @@ export default function RightInspector({ compact }: { compact?: boolean }){
               URL.revokeObjectURL(url);
             }}
           >
-            Export JSON
+            {t("btn.exportJson")}
           </Button>
           <Button
             icon="copy"
-            title="Copy coordinates"
+            title={t("btn.copyCoords")}
             onClick={()=> navigator.clipboard.writeText(`${f.center.lat},${f.center.lng}`)}
           />
         </div>

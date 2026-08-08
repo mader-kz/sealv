@@ -1,18 +1,20 @@
 "use client";
 import Icon, { type IconName } from "@/components/ui/Icon";
+import { useT } from "@/lib/i18n";
 
 export default function Rail({ onWorkbench, onToggleLeft, onToggleAnalytics, leftOpen, rightAnalytics }: { onWorkbench?: ()=>void; onToggleLeft?: ()=>void; onToggleAnalytics?: ()=>void; leftOpen?: boolean; rightAnalytics?: boolean }){
+  const { t } = useT();
   const items: { icon: IconName; label: string; active: boolean; onClick?: ()=>void }[] = [
-    { icon: "map", label: "Map", active: true },
-    { icon: "list", label: "Footage", active: !!leftOpen, onClick: onToggleLeft },
-    { icon: "chart", label: "Analytics", active: !!rightAnalytics, onClick: onToggleAnalytics },
-    { icon: "table", label: "Detections", active: false, onClick: onWorkbench },
+    { icon: "map", label: t("nav.map"), active: true },
+    { icon: "list", label: t("nav.footage"), active: !!leftOpen, onClick: onToggleLeft },
+    { icon: "chart", label: t("nav.analytics"), active: !!rightAnalytics, onClick: onToggleAnalytics },
+    { icon: "table", label: t("nav.detections"), active: false, onClick: onWorkbench },
   ];
   return (
     <div className="w-12 shrink-0 bg-bg border-r border-line flex flex-col items-center py-2 gap-0.5">
       {items.map(it=>(
         <button
-          key={it.label}
+          key={it.icon}
           onClick={it.onClick}
           title={it.label}
           aria-label={it.label}

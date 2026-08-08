@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { useFootageStore } from "@/store/useFootageStore";
 import Icon from "@/components/ui/Icon";
+import { useT } from "@/lib/i18n";
 
 const SITES = [
   { id:"AKTAU", name:"Aktau offshore", lat:43.65, lng:51.18 },
@@ -10,6 +11,7 @@ const SITES = [
 ];
 
 export default function CommandPalette({ open, onClose }: { open:boolean; onClose:()=>void }){
+  const { t, tp } = useT();
   const [q,setQ]=useState("");
   const footages = useFootageStore(s=>s.footages);
   const select = useFootageStore(s=>s.select);
@@ -24,9 +26,9 @@ export default function CommandPalette({ open, onClose }: { open:boolean; onClos
 
   if(!open) return null;
 
-  const t = q.toLowerCase();
-  const filtered = footages.filter(f=> !t || f.filename.toLowerCase().includes(t) || f.region.toLowerCase().includes(t)).slice(0,8);
-  const sites = SITES.filter(s=> !t || s.name.toLowerCase().includes(t));
+  const needle = q.toLowerCase();
+  const filtered = footages.filter(f=> !needle || f.filename.toLowerCase().includes(needle) || f.region.toLowerCase().includes(needle)).slice(0,8);
+  const sites = SITES.filter(s=> !needle || s.name.toLowerCase().includes(needle));
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-start pt-[16vh] bg-black/50 backdrop-blur-[2px]" onClick={onClose}>
@@ -40,14 +42,14 @@ export default function CommandPalette({ open, onClose }: { open:boolean; onClos
             autoFocus
             value={q}
             onChange={e=>setQ(e.target.value)}
-            placeholder="Jump to a site or sortie"
+            placeholder={t("cmd.placeholder")}
             className="flex-1 bg-transparent outline-none text-base placeholder:text-ink3"
           />
           <kbd className="text-2xs text-ink3 border border-line rounded px-1 py-0.5 leading-none">esc</kbd>
         </div>
 
         <div className="max-h-[320px] overflow-auto py-1.5">
-          {sites.length>0 && <div className="label px-3.5 py-1.5">Sites</div>}
+          {sites.length>0 && <div className="label px-3.5 py-1.5">{t("cmd.sites")}</div>}
           {sites.map(s=>(
             <button
               key={s.id}
@@ -60,7 +62,7 @@ export default function CommandPalette({ open, onClose }: { open:boolean; onClos
             </button>
           ))}
 
-          {filtered.length>0 && <div className="label px-3.5 py-1.5 mt-1">Footage</div>}
+          {filtered.length>0 && <div className="label px-3.5 py-1.5 mt-1">{t("nav.footage")}</div>}
           {filtered.map(f=>(
             <button
               key={f.id}
@@ -71,13 +73,13 @@ export default function CommandPalette({ open, onClose }: { open:boolean; onClos
               <span className="text-base font-mono text-ink truncate">{f.filename}</span>
               <span className="text-xs text-ink3">{f.region}</span>
               <span className="ml-auto text-xs text-ink2 tnum">
-                {f.detections.reduce((s,d)=>s+d.count,0)} seals
+                {f.detections.reduce((s,d)=>s+d.count,0)} {tp(f.detections.reduce((s,d)=>s+d.count,0), "unit.seals")}
               </span>
             </button>
           ))}
 
           {sites.length===0 && filtered.length===0 && (
-            <div className="px-3.5 py-6 text-center text-sm text-ink3">No matches.</div>
+            <div className="px-3.5 py-6 text-center text-sm text-ink3">{t("cmd.noMatches")}</div>
           )}
         </div>
       </div>

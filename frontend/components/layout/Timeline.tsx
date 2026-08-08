@@ -1,8 +1,10 @@
 "use client";
 import { useMemo, useRef, useState } from "react";
 import { useFootageStore } from "@/store/useFootageStore";
+import { useT } from "@/lib/i18n";
 
 export default function Timeline({ minimal }: { minimal?: boolean }){
+  const { t } = useT();
   const footages = useFootageStore(s=>s.footages);
   const timeRange = useFootageStore(s=>s.timeRange);
   const setTimeRange = useFootageStore(s=>s.setTimeRange);
@@ -48,7 +50,7 @@ export default function Timeline({ minimal }: { minimal?: boolean }){
       className="shrink-0 flex items-center gap-3 px-3 bg-bg border-t border-line select-none"
       style={{ height: h }}
     >
-      <span className="label shrink-0 whitespace-nowrap">{filteredOut ? "Filtered" : "All time"}</span>
+      <span className="label shrink-0 whitespace-nowrap">{filteredOut ? t("time.filtered") : t("time.all")}</span>
 
       <div
         ref={barRef}
@@ -84,7 +86,7 @@ export default function Timeline({ minimal }: { minimal?: boolean }){
         <span className="tnum">{labels[0] || "—"} → {labels[1] || "—"}</span>
         {filteredOut && (
           <button onClick={()=> setTimeRange([0,100])} className="text-ink2 hover:text-ink transition-colors">
-            Reset
+            {t("btn.reset")}
           </button>
         )}
       </div>

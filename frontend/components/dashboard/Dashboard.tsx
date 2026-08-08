@@ -3,8 +3,11 @@ import { useMemo } from "react";
 import { useFootageStore } from "@/store/useFootageStore";
 import ForecastChart from "./ForecastChart";
 import { Button, IconButton, SectionHead, Stat } from "@/components/ui/primitives";
+import { localeFor, useT } from "@/lib/i18n";
 
 export default function Dashboard({ onClose }: { onClose?: ()=>void }){
+  const { t, lang } = useT();
+  const locale = localeFor(lang);
   const footages = useFootageStore(s=>s.footages);
   const detections = useFootageStore(s=>s.detections);
   const timeRange = useFootageStore(s=>s.timeRange);
@@ -31,15 +34,15 @@ export default function Dashboard({ onClose }: { onClose?: ()=>void }){
     const now = new Date();
     for(let i=5;i>=0;i--){
       const d = new Date(now.getFullYear(), now.getMonth()-i, 1);
-      const key = d.toLocaleString("en",{month:"short"});
+      const key = d.toLocaleString(locale,{month:"short"});
       buckets[key]=0; labels.push(key);
     }
     for(const f of filtered.f){
-      const m = new Date(f.uploadedAt).toLocaleString("en",{month:"short"});
+      const m = new Date(f.uploadedAt).toLocaleString(locale,{month:"short"});
       if (buckets[m]!==undefined) buckets[m]+= f.detections.reduce((s,dd)=>s+dd.count,0);
     }
     return labels.map(l=> ({ label:l, value: buckets[l] }));
-  },[filtered.f]);
+  },[filtered.f, locale]);
 
   const byRegion = useMemo(()=>{
     const m: Record<string, number> = {};
@@ -70,24 +73,24 @@ export default function Dashboard({ onClose }: { onClose?: ()=>void }){
   return (
     <div className="w-[380px] shrink-0 bg-surface border-l border-line flex flex-col overflow-hidden">
       <div className="h-9 shrink-0 pl-4 pr-1.5 flex items-center justify-between border-b border-line">
-        <span className="label">Analytics</span>
+        <span className="label">{t("nav.analytics")}</span>
         <div className="flex items-center gap-1">
           <Button onClick={onExportPDF} icon="download" className="h-6 text-2xs">PDF</Button>
-          {onClose && <IconButton name="close" onClick={onClose} title="Close analytics" />}
+          {onClose && <IconButton name="close" onClick={onClose} title={t("dash.closeAnalytics")} />}
         </div>
       </div>
 
       <div className="flex-1 overflow-auto">
         {/* Headline figures */}
         <div className="px-4 py-4 grid grid-cols-3 gap-4 border-b border-line">
-          <Stat label="Seals" value={totalSeals} sub={`${density}/km²`} />
-          <Stat label="Sorties" value={filtered.f.length} />
-          <Stat label="Avg / video" value={avg} />
+          <Stat label={t("stat.seals")} value={totalSeals} sub={`${density}/km²`} />
+          <Stat label={t("stat.sorties")} value={filtered.f.length} />
+          <Stat label={t("stat.avgPerVideo")} value={avg} />
         </div>
 
         {/* Trend */}
         <div className="px-4 py-4 border-b border-line">
-          <SectionHead title="Seals per month" right={<span className="text-2xs text-ink3">6 mo</span>} />
+          <SectionHead title={t("dash.sealsPerMonth")} right={<span className="text-2xs text-ink3">{t("dash.sixMo")}</span>} />
           <div className="flex items-end gap-1.5 h-20 mt-3">
             {trend.map(t=>(
               <div key={t.label} className="flex-1 flex flex-col items-center gap-1.5 h-full justify-end" title={`${t.label}: ${t.value}`}>
@@ -104,9 +107,9 @@ export default function Dashboard({ onClose }: { onClose?: ()=>void }){
 
         {/* Region */}
         <div className="px-4 py-4 border-b border-line">
-          <SectionHead title="By region" />
+          <SectionHead title={t("dash.byRegion")} />
           <div className="mt-3 space-y-2.5">
-            {byRegion.length===0 && <p className="text-sm text-ink3">No sorties in the selected window.</p>}
+            {byRegion.length===0 && <p className="text-sm text-ink3">{t("dash.noSorties")}</p>}
             {byRegion.map(([region, seals])=>{
               const pct = totalSeals ? Math.round(seals/totalSeals*100) : 0;
               return (
@@ -126,7 +129,7 @@ export default function Dashboard({ onClose }: { onClose?: ()=>void }){
 
         {/* Group size */}
         <div className="px-4 py-4 border-b border-line">
-          <SectionHead title="Group size" right={<span className="text-2xs text-ink3">videos</span>} />
+          <SectionHead title={t("dash.groupSize")} right={<span className="text-2xs text-ink3">{t("dash.videos")}</span>} />
           <div className="mt-3 grid grid-cols-4 gap-2">
             {hist.map(([bin, cnt])=>(
               <div key={bin} className="flex flex-col items-center gap-1.5">
@@ -149,12 +152,14 @@ export default function Dashboard({ onClose }: { onClose?: ()=>void }){
 
         {/* Notes — plain sentences, not bulleted "insight" filler */}
         <div className="px-4 py-4">
-          <SectionHead title="Notes" />
+          <SectionHead title={t("dash.notesTitle")} />
           <p className="text-sm text-ink2 mt-2.5 leading-relaxed">
             {filtered.f.length === 0
-              ? "Widen the timeline or ingest footage to populate analytics."
-              : <>Average density is <span className="text-ink tnum">{density}</span> seals/km² across {filtered.f.length} sorties.
-                 {largest !== null && <> The largest single count was <span className="text-ink tnum">{largest}</span>{byRegion[0] && <> in {byRegion[0][0]}</>}.</>}
+              ? t("dash.notesEmpty")
+              : <>{t("dash.avgDensity", { d: density, n: filtered.f.length })}
+                 {largest !== null && <> {byRegion[0]
+                   ? t("dash.largestIn", { x: largest, region: byRegion[0][0] })
+                   : t("dash.largest", { x: largest })}</>}
               </>}
           </p>
         </div>

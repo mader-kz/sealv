@@ -9,6 +9,7 @@
 import { useEffect, useRef, useState } from "react";
 import { mediaFileUrl, type CountBand } from "@/lib/api";
 import type { DetectionPixel } from "@/lib/types";
+import { useT } from "@/lib/i18n";
 import {
   Dialog,
   DialogContent,
@@ -29,6 +30,7 @@ function Overlay({
   pixels: DetectionPixel[];
   interactive?: boolean;
 }) {
+  const { t } = useT();
   const [hovered, setHovered] = useState<number | null>(null);
   /* r scales with the frame, not the screen: 0.35% of the frame width reads
      the same on a 4000px drone still and a 340px inspector preview. */
@@ -64,7 +66,7 @@ function Overlay({
           >
             {interactive && (
               <title>
-                {p.score != null ? `score ${p.score.toFixed(2)}` : "no score"}
+                {p.score != null ? t("ev.score", { n: p.score.toFixed(2) }) : t("ev.noScore")}
               </title>
             )}
           </circle>
@@ -89,6 +91,7 @@ export function EvidenceFrame({
   pixels: DetectionPixel[];
   interactive?: boolean;
 }) {
+  const { t } = useT();
   const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -103,8 +106,7 @@ export function EvidenceFrame({
     return (
       <div className="w-full h-full grid place-items-center p-4 text-center">
         <p className="text-xs text-ink3 max-w-[220px] leading-relaxed">
-          The source frame could not be loaded. The count and its points are
-          unaffected - only this preview is missing.
+          {t("ev.loadFailed")}
         </p>
       </div>
     );
@@ -115,7 +117,7 @@ export function EvidenceFrame({
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         src={mediaFileUrl(mediaId)}
-        alt="Source frame with detected animals"
+        alt={t("ev.alt")}
         draggable={false}
         className="absolute inset-0 w-full h-full object-contain select-none"
         onLoad={(e) => {
@@ -151,6 +153,9 @@ export default function EvidenceView({
   pixels: DetectionPixel[];
   band?: CountBand | null;
 }) {
+  /* `t` is taken by the pan/zoom transform state below — the translator
+     rides under `tr` in this one component. */
+  const { t: tr, tp } = useT();
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const [t, setT] = useState({ scale: 1, tx: 0, ty: 0 });
   const [dragging, setDragging] = useState(false);
@@ -218,16 +223,16 @@ export default function EvidenceView({
       >
         <DialogHeader className="flex-row items-baseline gap-3 space-y-0 px-4 py-3 pr-12 border-b border-line shrink-0">
           <DialogTitle className="text-sm font-medium text-ink tracking-normal">
-            Evidence — <span className="tnum">{n}</span>{" "}
-            {n === 1 ? "animal" : "animals"} marked
+            {tr("ev.title")} — <span className="tnum">{n}</span>{" "}
+            {tp(n, "ev.animalsMarked")}
           </DialogTitle>
           {hasRange && band && (
             <span className="text-xs text-ink2 tnum">
-              range {band.low}–{band.high}
+              {tr("misc.range", { low: band.low as number, high: band.high as number })}
             </span>
           )}
           <span className="ml-auto text-2xs text-ink3 hidden sm:block">
-            scroll to zoom · drag to pan · double-click to reset
+            {tr("ev.hint")}
           </span>
         </DialogHeader>
 

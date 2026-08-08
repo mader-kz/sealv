@@ -13,13 +13,20 @@ import Workbench from "@/components/workbench/Workbench";
 import { useFootageStore } from "@/store/useFootageStore";
 import { Button, IconButton } from "@/components/ui/primitives";
 import Icon from "@/components/ui/Icon";
+import { useT } from "@/lib/i18n";
+
+function MapLoading(){
+  const { t } = useT();
+  return <div className="h-full bg-bg grid place-items-center text-sm text-ink3">{t("map.loading")}</div>;
+}
 
 const CaspianMap = dynamic(()=> import("@/components/map/CaspianMap"), {
   ssr: false,
-  loading: ()=> <div className="h-full bg-bg grid place-items-center text-sm text-ink3">Loading chart…</div>,
+  loading: ()=> <MapLoading />,
 });
 
 export default function Page(){
+  const { t, tp } = useT();
   const [cmdOpen, setCmdOpen] = useState(false);
   const [showLeft, setShowLeft] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
@@ -85,10 +92,10 @@ export default function Page(){
               {!empty && (
                 <div className="flex items-baseline gap-1.5 bg-surface/95 backdrop-blur border border-line rounded h-7 px-2.5">
                   <span className="text-sm tnum text-ink">{totalSeals}</span>
-                  <span className="text-2xs text-ink3">seals</span>
+                  <span className="text-2xs text-ink3">{tp(totalSeals, "unit.seals")}</span>
                   <span className="text-line px-0.5">·</span>
                   <span className="text-sm tnum text-ink">{footages.length}</span>
-                  <span className="text-2xs text-ink3">sorties</span>
+                  <span className="text-2xs text-ink3">{tp(footages.length, "unit.sorties")}</span>
                 </div>
               )}
               <Button
@@ -96,7 +103,7 @@ export default function Page(){
                 variant={showUpload ? "primary" : "default"}
                 onClick={()=> setShowUpload(v=>!v)}
               >
-                Ingest
+                {t("page.ingest")}
               </Button>
             </div>
 
@@ -104,8 +111,8 @@ export default function Page(){
             {showUpload && (
               <div className="absolute top-[52px] right-3 z-30 w-[320px] bg-surface border border-line rounded-lg shadow-pop overflow-hidden">
                 <div className="h-9 px-3 pr-1.5 flex items-center justify-between border-b border-line">
-                  <span className="label">Ingest footage</span>
-                  <IconButton name="close" onClick={()=> setShowUpload(false)} title="Close" />
+                  <span className="label">{t("page.ingestFootage")}</span>
+                  <IconButton name="close" onClick={()=> setShowUpload(false)} title={t("btn.close")} />
                 </div>
                 <div className="p-3">
                   <Dropzone />
@@ -118,16 +125,15 @@ export default function Page(){
               <div className="absolute inset-0 z-20 grid place-items-center bg-bg">
                 <div className="text-center max-w-[320px] px-6">
                   <Icon name="upload" size={22} className="text-ink3 mx-auto" />
-                  <h2 className="text-lead text-ink mt-3">Ingest drone footage</h2>
+                  <h2 className="text-lead text-ink mt-3">{t("page.emptyTitle")}</h2>
                   <p className="text-sm text-ink2 mt-1.5 leading-relaxed">
-                    SEALv reads the flight track from the video, counts seals, and plots the count
-                    where the footage was shot.
+                    {t("page.emptyBody")}
                   </p>
                   <div className="flex items-center justify-center gap-1.5 mt-4">
                     <Button variant="primary" icon="upload" onClick={()=> setShowUpload(true)}>
-                      Upload footage
+                      {t("page.upload")}
                     </Button>
-                    <Button onClick={seedTestData}>Load test data</Button>
+                    <Button onClick={seedTestData}>{t("left.loadTest")}</Button>
                   </div>
                 </div>
               </div>
@@ -141,8 +147,8 @@ export default function Page(){
         {rightPane==="inspector" && (
           <div className="shrink-0 flex flex-col border-l border-line">
             <div className="h-9 shrink-0 flex items-center justify-between pl-4 pr-1.5 border-b border-line bg-surface">
-              <span className="label">Sortie</span>
-              <IconButton name="close" onClick={()=> setRightPane(null)} title="Close" />
+              <span className="label">{t("sec.sortie")}</span>
+              <IconButton name="close" onClick={()=> setRightPane(null)} title={t("btn.close")} />
             </div>
             <RightInspector compact />
           </div>
