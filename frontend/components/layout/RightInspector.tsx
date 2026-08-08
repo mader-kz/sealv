@@ -7,13 +7,23 @@ import EvidenceView, { EvidenceFrame } from "@/components/evidence/EvidenceView"
 import { basisText, useT } from "@/lib/i18n";
 import { formatArea } from "@/lib/analytics/area";
 import { countOf } from "@/lib/analytics/count";
+import { formatDate } from "@/lib/analytics/brush";
 import { isPlaced } from "@/lib/analytics/surveys";
+import { reviewStats } from "@/lib/analytics/review";
+import { useReviewStore } from "@/store/useReviewStore";
+import SortieNotes from "@/components/record/SortieNotes";
+import SitePicker from "@/components/record/SitePicker";
+import SurveyMetaEdit from "@/components/record/SurveyMetaEdit";
+import EditHistory from "@/components/record/EditHistory";
 
 export default function RightInspector({ compact }: { compact?: boolean }){
   const { t, tp, lang } = useT();
   const footages = useFootageStore(s=>s.footages);
   const selectedId = useFootageStore(s=>s.selectedId);
   const select = useFootageStore(s=>s.select);
+  const retirement = useFootageStore(s=>s.retirement);
+  const unretireFootage = useFootageStore(s=>s.unretireFootage);
+  const openReview = useReviewStore(s=>s.openReview);
   const [evidenceOpen, setEvidenceOpen] = useState(false);
   const f = useMemo(()=> footages.find(x=>x.id===selectedId) || null, [footages, selectedId]);
 
@@ -89,11 +99,19 @@ export default function RightInspector({ compact }: { compact?: boolean }){
     hasRange && best != null && !bandBroken
       ? Math.min(94, Math.max(6, 6 + 88 * ((best - low) / Math.max(1, high - low))))
       : null;
-  /* How much of this count a human has actually signed off on. False positives
-     are excluded from both sides: a rejected detection is not evidence for or
-     against the animals that remain. */
-  const validated = f.detections.filter(d => d.status === "validated").length;
-  const reviewable = validated + f.detections.filter(d => d.status === "auto").length;
+  /* How much of this count a human has actually signed off on — from the one
+     shared helper, so this row, the list row and the dashboard's verification
+     share cannot each answer the question differently. Animals with no
+     reviewable row (a video's unplaced ones, the aggregate marker) are counted
+     as NOT REVIEWABLE rather than folded into the denominator: "0 of 562
+     verified" over rows nobody can rule on reads as neglect, not as a
+     structural limit of this build. */
+  const review = reviewStats(f);
+  /* A count a person made rather than the engine. Labelled, never dressed up
+     with a range it does not have. */
+  const isManual = f.engine === "manual";
+  const retired = f.retiredAt ?? null;
+  const retiredNote = retirement[f.id] ?? null;
   /* "On map" means animals, so it counts animals. `detections.length` is the
      rows the endpoint returned, and those now include the ones a reviewer
      rejected — printing that as the number on the map would silently put
@@ -108,6 +126,33 @@ export default function RightInspector({ compact }: { compact?: boolean }){
 
   return (
     <div className={shell}>
+      {/* A retired sortie says so before it says anything else: every number
+          below it is still true and none of it is in the season's estimate. */}
+      {retired && (
+        <div className="px-4 py-2.5 border-b border-line bg-surface2">
+          <div className="flex items-baseline gap-2">
+            <Icon name="alert" size={12} className="text-accent shrink-0" />
+            <span className="text-xs text-ink2 flex-1">
+              {t("rec.retire.banner", { when: formatDate(retired, lang) })}
+            </span>
+            <button
+              onClick={()=> void unretireFootage(f.id)}
+              className="text-2xs text-ink3 hover:text-ink transition-colors shrink-0"
+            >
+              {t("rec.retire.undo")}
+            </button>
+          </div>
+          <div className="text-2xs text-ink3 mt-1 leading-relaxed break-words">
+            {/* Rendered as text, never as markup — the reason is something an
+                operator typed. A reason the archive never recorded is left
+                unsaid rather than filled in. */}
+            {retiredNote?.reason ? t("rec.retire.reasonIs", { reason: retiredNote.reason }) : null}
+            {retiredNote?.reason && retiredNote?.by ? " · " : null}
+            {retiredNote?.by ? t("rec.retire.byWho", { who: retiredNote.by }) : null}
+          </div>
+        </div>
+      )}
+
       {/* The count is the answer this product exists to give — so it leads. */}
       <div className="px-4 pt-4 pb-3.5 border-b border-line">
         {f.status === "error" ? (
@@ -168,9 +213,18 @@ export default function RightInspector({ compact }: { compact?: boolean }){
               sortie carries one detection per animal, so the label flipped
               with array order. The reviewed share is the honest figure and it
               is already computed and shown in the Review row below. */}
-          {f.band?.basis && <Pill tone="neutral">{basisText(lang, f.band.basis)}</Pill>}
+          {/* A manual basis is not an engine basis and must not look like one:
+              the accent pill says a person produced this number, and the line
+              under it says what that costs — no cross-frame range. */}
+          {isManual
+            ? <Pill tone="accent">{t("rec.manual.pill")}</Pill>
+            : f.band?.basis && <Pill tone="neutral">{basisText(lang, f.band.basis)}</Pill>}
+          {retired && <Pill tone="neutral">{t("rec.retire.pill")}</Pill>}
           {provenance && <span className="text-2xs text-ink3">{provenance}</span>}
         </div>
+        {isManual && (
+          <p className="text-2xs text-ink3 mt-1.5 leading-relaxed">{t("rec.manual.noBand")}</p>
+        )}
       </div>
 
       {/* frame preview: the real photo with every animal marked when the
@@ -236,21 +290,66 @@ export default function RightInspector({ compact }: { compact?: boolean }){
 
         <div className="px-4 py-3">
           <SectionHead title={t("sec.sortie")} className="mb-1" />
-          <Row label={t("row.file")} value={f.filename} mono />
+          {/* A ground count has no file to name. Printing "(archived survey)"
+              over a number a person reported would invent footage. */}
+          {isManual
+            ? <Row label={t("row.file")} value={t("rec.manual.title")} />
+            : <Row label={t("row.file")} value={f.filename} mono />}
+          {/* The DATE, said as what it is. `uploadedAt` falls back to the
+              count job's clock so the timeline always has something to sort
+              on; printing that fallback under "flown on" turns a processing
+              timestamp into a field observation, so the two are separate rows
+              and the fallback carries its caveat. */}
+          {f.capturedAt ? (
+            <Row label={t("rec.date.captured")} value={formatDate(f.capturedAt, lang)} mono />
+          ) : (
+            <Row
+              label={t("rec.date.counted")}
+              value={
+                <span className="inline-flex items-baseline gap-1.5 min-w-0">
+                  <span className="font-mono tnum">{formatDate(f.uploadedAt, lang)}</span>
+                  <span className="text-2xs text-ink3 truncate" title={t("rec.date.notRecorded")}>
+                    {t("rec.date.notRecorded")}
+                  </span>
+                </span>
+              }
+            />
+          )}
+          <SitePicker f={f} />
           {/* A still has no duration; "0s" read as a broken video rather than
               as a photo. Region is gone for a harder reason: "KZ-East" was a
               latitude threshold wearing a toponym's clothes. Coordinates are
               the measured thing, so coordinates are what is shown. */}
           {f.duration > 0 && <Row label={t("row.duration")} value={`${f.duration}${t("unit.s")}`} mono />}
           <Row label={t("row.source")} value={f.source} />
-          <Row label={t("row.track")} value={`${f.track.length} ${tp(f.track.length, "misc.trackPoints")}`} mono />
+          {f.track.length > 0 && (
+            <Row label={t("row.track")} value={`${f.track.length} ${tp(f.track.length, "misc.trackPoints")}`} mono />
+          )}
           {/* A sortie with no track and no georeferenced animal has no centre.
               Its stored centre is NaN precisely so that nothing prints it as a
-              position; four decimal places of NaN is a fabricated measurement. */}
+              position; four decimal places of NaN is a fabricated measurement.
+              Where there IS a position, its PROVENANCE rides with it: four
+              decimals is ~10 m, which a coordinate somebody clicked on a map
+              cannot support, so a pinned or typed one prints at three. */}
           <Row
             label={t("row.location")}
-            value={isPlaced(f) ? `${f.center.lat.toFixed(4)}, ${f.center.lng.toFixed(4)}` : t("misc.notPlaced")}
-            mono={isPlaced(f)}
+            value={
+              isPlaced(f) ? (
+                <span className="inline-flex items-baseline gap-1.5 min-w-0">
+                  <span className="font-mono tnum">
+                    {f.center.lat.toFixed(locPrecision(f.locationSource))},{" "}
+                    {f.center.lng.toFixed(locPrecision(f.locationSource))}
+                  </span>
+                  {f.locationSource && (
+                    <span className="text-2xs text-ink3 truncate" title={locText(t, f.locationSource)}>
+                      {locText(t, f.locationSource)}
+                    </span>
+                  )}
+                </span>
+              ) : (
+                t("misc.notPlaced")
+              )
+            }
           />
           {(f.areaM2 != null || f.gsdSource) && (
             <Row
@@ -276,16 +375,44 @@ export default function RightInspector({ compact }: { compact?: boolean }){
               }
             />
           )}
-          {reviewable > 0 && (
-            <Row
-              label={t("row.review")}
-              value={t("insp.verifiedShare", {
-                n: validated,
-                pct: Math.round((validated / reviewable) * 100),
-              })}
-            />
-          )}
+          {/* Three numbers, not a percentage on its own: verified, still to
+              review, and the animals this build has no reviewable row for.
+              `pct === null` means there is nothing to review at all, which is
+              a different statement from "0% reviewed" and is printed as one. */}
+          <Row
+            label={t("row.review")}
+            value={
+              review.reviewable === 0 ? (
+                <span className="text-ink3">{t("rec.review.nothing")}</span>
+              ) : (
+                <span className="tnum text-2xs">
+                  {t("rec.review.value", {
+                    v: review.verified,
+                    r: review.reviewable - review.verified,
+                    u: review.unreviewable,
+                  })}
+                </span>
+              )
+            }
+          />
         </div>
+
+        {review.reviewable > review.verified && f.runId && (
+          <div className="px-4 pb-3">
+            <Button icon="check" full onClick={()=> openReview(f.runId)}>
+              {t("rec.review.open")}
+            </Button>
+          </div>
+        )}
+
+        {/* ------------------------------------------------------- the record
+            What a person knows and the engine cannot derive. Below the
+            measured figures, because it annotates them rather than competing
+            with them, and above the exports, because a report should carry
+            what was just written down. */}
+        <SortieNotes f={f} />
+        <SurveyMetaEdit f={f} />
+        <EditHistory f={f} />
 
         <div className="px-4 pb-4 flex gap-1.5">
           {/* Per-animal exports, not a dump of this component's state. The old
@@ -313,6 +440,10 @@ export default function RightInspector({ compact }: { compact?: boolean }){
           </Button>
           <Button
             icon={copyState === "ok" ? "check" : copyState === "fail" ? "alert" : "copy"}
+            /* Disabled where there is no coordinate: the old handler happily
+               put "NaN,NaN" on the clipboard, which pastes into a field
+               notebook as a measurement. */
+            disabled={!isPlaced(f)}
             title={
               copyState === "ok" ? t("insp.copied")
               : copyState === "fail" ? t("insp.copyFailed")
@@ -366,6 +497,36 @@ async function copyText(text: string): Promise<boolean> {
     return ok;
   } catch {
     return false;
+  }
+}
+
+/* Where a coordinate came from, and how many digits it can carry.
+ *
+ * A telemetry fix and a click on a map are both "the location", and the app
+ * printed both to four decimals — ~10 m, a precision a hand-placed pin does
+ * not have. So a pinned or typed position prints to three, and every position
+ * states its provenance next to itself.
+ *
+ * An unrecognised token is printed as the service wrote it rather than mapped
+ * to a friendly guess: a location provenance this build does not know is
+ * exactly the thing a reader must be able to see. */
+function locPrecision(source: string | null | undefined): number {
+  return source === "measured" || source === "telemetry" || source == null ? 4 : 3;
+}
+
+function locText(t: (k: any, v?: any) => string, source: string): string {
+  switch (source) {
+    case "measured":
+    case "telemetry":
+      return t("rec.loc.measured");
+    case "pin":
+    case "pinned":
+      return t("rec.loc.pinned");
+    case "manual":
+    case "entered":
+      return t("rec.loc.manual");
+    default:
+      return source;
   }
 }
 

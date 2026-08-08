@@ -8,8 +8,10 @@ import { formatArea, totalAreaM2 } from "@/lib/analytics/area";
 import { countOf } from "@/lib/analytics/count";
 import { footagesInRange, formatDate } from "@/lib/analytics/brush";
 import { seasonEstimate } from "@/lib/analytics/estimate";
-import { isPlaced } from "@/lib/analytics/surveys";
+import { hasResult, isPlaced } from "@/lib/analytics/surveys";
+import { reviewStats } from "@/lib/analytics/review";
 import { csvCell, downloadText } from "@/lib/export/animals";
+import ManualCount from "@/components/record/ManualCount";
 
 /* Nominal sortie row height, px. Corrected from a real measurement on the
    first pass; the constant only has to be close enough to pick a first slice. */
@@ -23,11 +25,18 @@ export default function LeftPanel(){
   const footages = useFootageStore(s=>s.footages);
   const selectedId = useFootageStore(s=>s.selectedId);
   const select = useFootageStore(s=>s.select);
-  const remove = useFootageStore(s=>s.removeFootage);
+  const retireFootage = useFootageStore(s=>s.retireFootage);
   const seedTestData = useFootageStore(s=>s.seedTestData);
   const clearAll = useFootageStore(s=>s.clearAll);
   const [q, setQ] = useState("");
-  const [pendingRemove, setPendingRemove] = useState<string|null>(null);
+  /* Retiring asks for a REASON, not just a confirmation. "Why is this flight
+     not part of the season" is the only part of a retirement that is worth
+     anything a year later, and a bare yes/no records none of it. */
+  const [pendingRetire, setPendingRetire] = useState<string|null>(null);
+  const [retireReason, setRetireReason] = useState("");
+  const [retireError, setRetireError] = useState<string|null>(null);
+  const [showRetired, setShowRetired] = useState(false);
+  const [manualOpen, setManualOpen] = useState(false);
   const [pendingClear, setPendingClear] = useState(false);
   const timeRange = useFootageStore(s=>s.timeRange);
   /* Read defensively: the store gains these while the archive is being
@@ -35,26 +44,54 @@ export default function LeftPanel(){
      landing has happened yet. */
   const hydrating = useFootageStore(s=> ((s as any).hydrating ?? false) as boolean);
 
-  const filteredByTime = useMemo(()=> footagesInRange(footages, timeRange), [footages,timeRange]);
+  const inWindow = useMemo(()=> footagesInRange(footages, timeRange), [footages,timeRange]);
+
+  /* Retired sorties are out of every FIGURE on this panel — that is what
+     retiring one means — but they are not out of the archive, so they stay
+     available behind a toggle with their retirement stated. */
+  const retiredInWindow = useMemo(()=> inWindow.filter(f=> !!f.retiredAt), [inWindow]);
+  const filteredByTime = useMemo(()=> inWindow.filter(f=> !f.retiredAt), [inWindow]);
+
+  /* The sorties that actually produced a count. A failed ingest is a row in
+     this list and nothing else: seven of them used to add seven sorties to
+     "N animals observed across M sorties" and seven entries to the "without
+     GSD" tally — two sentences about surveys, counting rows that are not
+     surveys. One predicate, shared with the CSV and the report. */
+  const counted = useMemo(()=> filteredByTime.filter(hasResult), [filteredByTime]);
+
+  const listed = useMemo(
+    ()=> (showRetired ? [...filteredByTime, ...retiredInWindow] : filteredByTime),
+    [filteredByTime, retiredInWindow, showRetired],
+  );
 
   const filtered = useMemo(()=>{
     const needle=q.toLowerCase();
-    return filteredByTime.filter(f=> !needle || f.filename.toLowerCase().includes(needle) || f.id.toLowerCase().includes(needle));
-  },[filteredByTime,q]);
+    return listed.filter(f=> !needle
+      || f.filename.toLowerCase().includes(needle)
+      || (f.siteName ?? "").toLowerCase().includes(needle)
+      || f.id.toLowerCase().includes(needle));
+  },[listed,q]);
 
   /* The standing estimate, from the shared helper — the latest sortie at each
      site, not a sum over every sortie flown. The sum is still printed below it
      as what it actually measures: effort, not animals. One helper, so this
      headline, the map chip, the analytics panel and the report cannot print
      four different numbers for one season. */
-  const est = useMemo(()=> seasonEstimate(filteredByTime), [filteredByTime]);
+  const est = useMemo(()=> seasonEstimate(counted), [counted]);
 
   /* Surveyed area — what the sorties actually photographed — replaces the old
      "coverage" stat, which was sorties × 6.2%, i.e. 17 flights = 100% of the
      Caspian. The shared helper, so the number and its precision match the
      analytics panel and the report exactly; sorties with no GSD are unknown,
      not zero, and the count of them is printed rather than swallowed. */
-  const area = useMemo(()=> totalAreaM2(filteredByTime), [filteredByTime]);
+  /* Only sorties that photographed ground. A failed ingest has no footprint
+     because it has no survey; a ground count has none because nobody took a
+     picture — counting either as "without GSD" blames them for missing a
+     scale that was never applicable. */
+  const area = useMemo(
+    ()=> totalAreaM2(counted.filter(f=> f.engine !== "manual")),
+    [counted],
+  );
   const areaText = area.known ? `${formatArea(area.m2, lang)} ${t("unit.ha")}` : "—";
   const areaSub = [
     area.unknown ? t("dash.noGsd", { n: area.unknown }) : null,
@@ -64,15 +101,22 @@ export default function LeftPanel(){
   /* Per-sortie summary. Every column is measured: the band with its basis, the
      reviewed share, the photographed area. Filenames go through csvCell —
      a comma in a filename used to split a row into nonsense. */
+  /* Sorties that produced a count, in the current window. A failed ingest is
+     not a row of survey data, and exporting one puts a line of empty columns
+     into a spreadsheet somebody will average. Retired sorties are exported
+     only when they are shown, and then carry `retiredAt` so the reader can
+     tell why the total does not match the row count. */
   const exportCSV = ()=>{
-    const rows = ["id,filename,uploadedAt,centerLat,centerLng,trackPts,detections,seals,low,best,high,basis,validated,auto,unplaced,areaM2,gsdSource,source"];
-    for(const f of filtered){
+    const rows = ["id,surveyId,filename,siteName,uploadedAt,capturedAt,centerLat,centerLng,locationSource,trackPts,detections,seals,low,best,high,basis,engine,validated,auto,unplaced,areaM2,gsdSource,source,operator,retiredAt,notes"];
+    for(const f of filtered.filter(hasResult)){
       const area = f.areaM2;
       rows.push([
         // Empty cells, not NaN: a spreadsheet reads NaN as a value, and this
         // sortie has no measured position to report.
-        f.id, csvCell(f.filename), f.uploadedAt,
+        f.id, csvCell(f.surveyId ?? ""), csvCell(f.filename), csvCell(f.siteName ?? ""),
+        f.uploadedAt, csvCell(f.capturedAt ?? ""),
         isPlaced(f) ? f.center.lat : "", isPlaced(f) ? f.center.lng : "",
+        csvCell(f.locationSource ?? ""),
         f.track.length,
         // Rejected rows live in this list too. The header says "detections",
         // which in every other figure this app prints means "animals the
@@ -80,6 +124,7 @@ export default function LeftPanel(){
         f.detections.filter(d=>d.status!=="false_positive").length,
         countOf(f),
         f.band?.low ?? "", f.band?.best ?? "", f.band?.high ?? "", csvCell(f.band?.basis ?? ""),
+        csvCell(f.engine ?? ""),
         f.detections.filter(d=>d.status==="validated").length,
         f.detections.filter(d=>d.status==="auto").length,
         f.unplaced ?? 0,
@@ -88,6 +133,11 @@ export default function LeftPanel(){
         // app has no other way to tell a measured hectare from a guessed one.
         csvCell(f.gsdSource ?? ""),
         f.source,
+        csvCell(f.operator ?? ""),
+        csvCell(f.retiredAt ?? ""),
+        // Free text, quoted by csvCell — a field note is the one column here
+        // that can contain a comma, a quote and a newline all at once.
+        csvCell(f.notes ?? ""),
       ].join(","));
     }
     downloadText(`sealv-footage-${new Date().toISOString().slice(0,10)}.csv`, "text/csv", rows.join("\n"));
@@ -197,9 +247,12 @@ export default function LeftPanel(){
         </div>
         {/* The demoted total. Summing every sortie counts one haul-out once per
             visit, so it is effort, not a population — said in those words. */}
-        {filteredByTime.length>0 && (
+        {/* "across M sorties" counts the sorties the animals were observed ON,
+            which is the ones that produced a count — not every row in the
+            list. */}
+        {counted.length>0 && (
           <p className="text-2xs text-ink3 mt-2.5 leading-relaxed">
-            {t("est.observedSub", { n: est.observed, m: filteredByTime.length })}
+            {t("est.observedSub", { n: est.observed, m: counted.length })}
           </p>
         )}
       </div>
@@ -209,6 +262,22 @@ export default function LeftPanel(){
           <Field value={q} onChange={setQ} placeholder={t("left.filter")} icon="search" />
           <Button icon="download" onClick={exportCSV} title={t("left.exportCsvTitle")} />
         </div>
+        {/* A count a person made is a survey too. It sits next to the upload
+            path rather than buried in a menu, because for most of this
+            coastline it is the only way a count has ever been made. */}
+        <Button icon="plus" full onClick={()=> setManualOpen(true)}>
+          {t("rec.manual.open")}
+        </Button>
+        {retiredInWindow.length>0 && (
+          <button
+            onClick={()=> setShowRetired(v=>!v)}
+            className="text-2xs text-ink3 hover:text-ink transition-colors"
+          >
+            {showRetired
+              ? t("rec.retire.hide", { n: retiredInWindow.length })
+              : t("rec.retire.show", { n: retiredInWindow.length })}
+          </button>
+        )}
         {footages.length===0 ? (
           /* Disabled while the archive is being read: seeding synthetic sorties
              into a store that hydrate() is about to fill is a race whose loser
@@ -248,6 +317,12 @@ export default function LeftPanel(){
           const sealCount = countOf(f);
           const active = f.id===selectedId;
           const open = ()=>{ select(f.id); flyTo(f.center.lat, f.center.lng); };
+          const isManual = f.engine === "manual";
+          const review = reviewStats(f);
+          /* Three sorties over one beach rendered as three identical
+             filenames; the site name is the only thing that told them apart
+             and it was never shown. A ground count has no filename at all. */
+          const title = isManual ? t("rec.manual.title") : f.filename;
           return (
             /* The app's primary navigation was a bare <div onClick>: no tab
                stop, no role, no key handler. */
@@ -265,8 +340,15 @@ export default function LeftPanel(){
             >
               {active && <span className="absolute left-0 top-0 bottom-0 w-px bg-accent" />}
               <div className="flex items-baseline gap-2">
-                <span className="text-sm font-mono truncate text-ink" title={f.filename}>{f.filename}</span>
+                <span
+                  className={`text-sm truncate text-ink ${isManual ? "" : "font-mono"} ${f.retiredAt ? "line-through opacity-60" : ""}`}
+                  title={title}
+                >
+                  {title}
+                </span>
                 {f.source==="test" && <Pill>{t("pill.test")}</Pill>}
+                {isManual && <Pill tone="accent">{t("rec.manual.pill")}</Pill>}
+                {f.retiredAt && <Pill>{t("rec.retire.pill")}</Pill>}
                 <span className="flex-1" />
                 {/* A sortie still being counted has no band and no detections,
                     so countOf() is 0 — and "0 seals" reads as a finished survey
@@ -281,56 +363,95 @@ export default function LeftPanel(){
                     <span className="text-2xs text-ink3">{tp(sealCount, "unit.seals")}</span>
                   </>
                 )}
-                {/* Removing a sortie is destructive and was one click on a
-                    control that only existed on hover — invisible to keyboard
-                    focus and absent on touch. Revealed on focus too, and it
-                    asks first. */}
-                {pendingRemove===f.id ? (
-                  <span className="flex items-center gap-1.5 text-2xs" onClick={e=>e.stopPropagation()}>
-                    <button
-                      onClick={(e)=>{ e.stopPropagation(); setPendingRemove(null); remove(f.id); }}
-                      className="text-bad hover:underline"
-                      title={t("left.confirmRemove")}
-                    >
-                      {t("btn.confirm")}
-                    </button>
-                    <button
-                      onClick={(e)=>{ e.stopPropagation(); setPendingRemove(null); }}
-                      className="text-ink3 hover:text-ink transition-colors"
-                    >
-                      {t("btn.cancel")}
-                    </button>
-                  </span>
-                ) : (
+                {/* Retire, not remove. The × used to filter the sortie out of
+                    two arrays under a prompt that said "Remove this sortie?" —
+                    a durable-sounding promise over an act the app could not
+                    perform: the survey and its contribution to the estimate
+                    were both back on the next hydrate. Revealed on focus and
+                    on touch, and it asks for a reason. */}
+                {pendingRetire!==f.id && !f.retiredAt && (
                   <button
-                    onClick={(e)=>{e.stopPropagation(); setPendingRemove(f.id);}}
+                    onClick={(e)=>{e.stopPropagation(); setPendingRetire(f.id); setRetireReason(""); setRetireError(null);}}
                     onKeyDown={(e)=> e.stopPropagation()}
                     className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 text-ink3 hover:text-bad transition-opacity"
-                    aria-label={t("a11y.remove")}
-                    title={t("a11y.remove")}
+                    aria-label={t("rec.retire.action")}
+                    title={t("rec.retire.action")}
                   >
                     <Icon name="close" size={12} />
                   </button>
                 )}
               </div>
-              <div className="text-xs text-ink3 mt-1 flex items-center gap-1.5">
-                {/* The centre, not a latitude bucket named after a region.
+
+              {pendingRetire===f.id && (
+                <div
+                  className="mt-1.5 space-y-1"
+                  onClick={e=>e.stopPropagation()}
+                  onKeyDown={e=>e.stopPropagation()}
+                >
+                  <p className="text-2xs text-ink3 leading-relaxed">
+                    {f.surveyId ? t("rec.retire.explain") : t("rec.retire.localOnly")}
+                  </p>
+                  <input
+                    value={retireReason}
+                    onChange={(e)=> setRetireReason(e.target.value)}
+                    maxLength={200}
+                    autoFocus
+                    placeholder={t("rec.retire.reasonPlaceholder")}
+                    aria-label={t("rec.retire.reasonLabel")}
+                    className="w-full h-7 bg-surface2 border border-line rounded px-2 text-xs placeholder:text-ink3 focus:outline-none focus:border-ink3 transition-colors"
+                  />
+                  {retireError && <p className="text-2xs text-bad">{retireError}</p>}
+                  <div className="flex items-center gap-2 text-2xs">
+                    <button
+                      onClick={async ()=>{
+                        if(!retireReason.trim()){ setRetireError(t("rec.retire.reasonRequired")); return; }
+                        const ok = await retireFootage(f.id, retireReason.trim());
+                        if(ok) setPendingRetire(null);
+                        else setRetireError(t("rec.retire.failed"));
+                      }}
+                      className="text-bad hover:underline"
+                    >
+                      {t("rec.retire.action")}
+                    </button>
+                    <button
+                      onClick={()=> setPendingRetire(null)}
+                      className="text-ink3 hover:text-ink transition-colors"
+                    >
+                      {t("btn.cancel")}
+                    </button>
+                  </div>
+                </div>
+              )}
+              <div className="text-xs text-ink3 mt-1 flex items-center gap-1.5 flex-wrap">
+                {/* The place, by name once somebody has named it. Falls back to
+                    the centre — not a latitude bucket named after a region.
                     A sortie that flew no track and placed no animal has no
-                    centre — printing its NaN would be a fabricated
-                    coordinate, so it says so instead. */}
-                {isPlaced(f)
-                  ? <span className="tnum">{f.center.lat.toFixed(2)}, {f.center.lng.toFixed(2)}</span>
-                  : <span className="text-ink3">{t("misc.notPlaced")}</span>}
+                    centre either, and says so rather than printing NaN. */}
+                {f.siteName
+                  ? <span className="text-ink2 truncate max-w-[130px]" title={f.siteName}>{f.siteName}</span>
+                  : isPlaced(f)
+                    ? <span className="tnum">{f.center.lat.toFixed(2)}, {f.center.lng.toFixed(2)}</span>
+                    : <span className="text-ink3">{t("misc.notPlaced")}</span>}
                 {f.duration>0 && <>
                   <span className="text-line">·</span>
                   <span className="tnum">{f.duration}{t("unit.s")}</span>
                 </>}
-                <span className="text-line">·</span>
-                <span className="tnum">{f.track.length} {tp(f.track.length, "unit.points")}</span>
+                {f.track.length>0 && <>
+                  <span className="text-line">·</span>
+                  <span className="tnum">{f.track.length} {tp(f.track.length, "unit.points")}</span>
+                </>}
                 <span className="text-line">·</span>
                 {/* The reader's language, like every other date in the app —
                     this one was pinned to en-CA next to a localised one. */}
                 <span className="tnum">{formatDate(f.uploadedAt, lang)}</span>
+                {/* How far the review has got. Printed only where there is
+                    something to review: "0/0 verified" on a sortie with no
+                    reviewable row reads as neglect rather than as a fact
+                    about this build. */}
+                {review.reviewable>0 && <>
+                  <span className="text-line">·</span>
+                  <span className="tnum">{t("rec.review.short", { v: review.verified, r: review.reviewable })}</span>
+                </>}
               </div>
             </div>
           );
@@ -341,11 +462,26 @@ export default function LeftPanel(){
           <div className="p-6 text-center text-sm text-ink3">{t("left.noMatch", { q })}</div>
         )}
         {footages.length===0 && (
-          <div className="p-6 text-sm text-ink3 leading-relaxed">
-            {hydrating ? t("est.restoringBody") : t("left.emptyHint")}
+          <div className="p-5 text-sm text-ink3 leading-relaxed">
+            {hydrating ? t("est.restoringBody") : (
+              /* An empty product should teach the loop, not just point at a
+                 button. The three steps are the three things this platform
+                 does, in the order they happen; the drop instructions stay
+                 underneath because that is the first step's detail. */
+              <div className="space-y-2.5">
+                <p className="text-ink2">{t("rec.left.emptyTitle")}</p>
+                <p>{t("rec.left.emptyUpload")}</p>
+                <p>{t("rec.left.emptyReview")}</p>
+                <p>{t("rec.left.emptyReport")}</p>
+                <p className="text-2xs pt-1 border-t border-line-soft">{t("rec.left.emptyManual")}</p>
+                <p className="text-2xs">{t("left.emptyHint")}</p>
+              </div>
+            )}
           </div>
         )}
       </div>
+
+      <ManualCount open={manualOpen} onOpenChange={setManualOpen} />
     </div>
   );
 }

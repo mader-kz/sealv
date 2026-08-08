@@ -3,10 +3,26 @@ import { create } from "zustand";
 import { toast } from "sonner";
 import type { Footage, Detection, TrackPoint, MapLayerState } from "@/lib/types";
 import { mockDetections, generateSeedTrack, KZ_SITES } from "@/lib/mock/detections";
-import { fetchStats, fetchRunPoints, fetchTrack, pointsToDetections, mediaFileUrl, editPoints } from "@/lib/api";
-import type { StatsLatestRun } from "@/lib/api";
+import {
+  fetchStats, fetchRunPoints, fetchTrack, pointsToDetections, mediaFileUrl, editPoints,
+  patchSurvey, retireSurvey, unretireSurvey, createObservation, NOTES_MAX,
+} from "@/lib/api";
+import { locationSourceOf } from "@/lib/api";
+import type { ObservationIn, StatsLatestRun, SurveyOut, SurveyPatch } from "@/lib/api";
+import { getOperator } from "@/lib/identity";
 import { sortieAreaM2 } from "@/lib/analytics/area";
 import { translate, useLangStore } from "@/lib/i18n";
+
+/* Re-exported so a form can name the shape it builds without reaching past the
+   store into the HTTP client. One definition either way - these are aliases,
+   not copies, so a change on the api side is a compile error here. */
+export type { SurveyPatch } from "@/lib/api";
+export type ObservationInput = ObservationIn;
+
+/** How a note's last write went. "unsaved" is the debounce window — the
+ *  reviewer has typed and the request has not gone yet — and it is a distinct
+ *  claim from "error", which means the archive refused it. */
+export type NotesState = "saved" | "saving" | "unsaved" | "error";
 
 type Store = {
   footages: Footage[];
@@ -25,8 +41,25 @@ type Store = {
   hydrateSkipped: number;
   loadedRuns: number;
   totalRuns: number | null;
+  /* ---------------------------------------------------------- the record */
+  /** Per-footage note save state. Absent = nothing typed this session. */
+  notesState: Record<string, NotesState>;
+  /** Why a sortie was retired and by whom, keyed by footage id. The Footage
+   *  itself carries only `retiredAt`; the annotation lives here so a banner
+   *  can say more than "retired" without inventing a field on the type. */
+  retirement: Record<string, { reason: string | null; by: string | null }>;
+  /** Progress of an in-flight multi-sortie site assignment, or null. */
+  siteAssign: { done: number; total: number } | null;
+  /** Frame geometry per footage, kept out of Footage because only one caller
+   *  needs it: correcting the scale has to RECOMPUTE the area, and width x
+   *  height x frames is what the first computation was made of. Without it the
+   *  inspector's "the area recomputes" would be the same empty promise the
+   *  service's own endpoint was caught making. */
+  frameGeom: Record<string, { widthPx: number; heightPx: number; frames: number | null }>;
+  /** Verdict batches still on the wire. Package D renders "saving n verdicts";
+   *  it is a count of REQUESTS, so a bulk gesture over 400 rows is one. */
+  verdictsInFlight: number;
   addFootage: (f: Footage) => void;
-  removeFootage: (id: string) => void;
   select: (id: string | null) => void;
   setLayer: (k: keyof MapLayerState, v: boolean) => void;
   setPinMode: (v: boolean) => void;
@@ -40,6 +73,28 @@ type Store = {
      which is how the old version ended up with four untyped casts and a
      status->op map that no compiler was checking. */
   _persistStatus: (ids: string[], status: Detection["status"]) => void;
+  /* --------------------------------------------------- the record, written */
+  /** The reviewer has typed; the component's debounce owes us a saveNotes. */
+  markNotesDirty: (footageId: string) => void;
+  /** Persist a sortie's field notes. Debounced by the component, not here. */
+  saveNotes: (footageId: string, text: string) => Promise<boolean>;
+  /** Correct a survey's metadata and merge the service's answer back. */
+  patchSurveyFields: (footageId: string, patch: SurveyPatch) => Promise<boolean>;
+  /** Attach several sorties to one site, sequentially, with a progress count. */
+  assignSite: (
+    footageIds: string[],
+    siteId: string,
+    siteName?: string | null,
+  ) => Promise<{ ok: number; failed: number }>;
+  /** A site was renamed. Local only — the service already holds the new name,
+   *  and re-PATCHing every sortie's site_id to learn it would be N writes to
+   *  discover something one write already returned. */
+  applySiteName: (siteId: string, name: string) => void;
+  /** Take a sortie out of the counting without destroying it. */
+  retireFootage: (footageId: string, reason: string) => Promise<boolean>;
+  unretireFootage: (footageId: string) => Promise<boolean>;
+  /** Record a count a person made on the ground. */
+  addObservation: (input: ObservationInput) => Promise<boolean>;
   seedTestData: () => void;
   hydrate: () => Promise<void>;
   clearAll: () => void;
@@ -176,6 +231,75 @@ function patchDetections(
   return { footages, detections };
 }
 
+/* ------------------------------------------------------------ the record */
+
+const finiteOrNull = (v: unknown): number | null => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+
+/** The photographed ground, recomputed after a scale correction.
+ *
+ *  Preferably from the pixel geometry the first computation used. When that is
+ *  not on hand (a sortie this session uploaded, whose geometry the ingest path
+ *  did not record here), the area scales exactly with the square of the GSD,
+ *  so an old area and an old scale are enough. With neither, the area is
+ *  UNKNOWN — null, not the stale figure, which would then sit under a scale it
+ *  was never computed from. */
+function areaAfterScale(
+  f: Footage,
+  geom: { widthPx: number; heightPx: number; frames: number | null } | undefined,
+  gsdCmPx: number | null,
+): number | null {
+  if (geom) {
+    return sortieAreaM2({
+      widthPx: geom.widthPx, heightPx: geom.heightPx, gsdCmPx, frames: geom.frames,
+    });
+  }
+  const old = f.areaM2;
+  const oldGsd = f.gsdCmPx;
+  if (
+    gsdCmPx != null && gsdCmPx > 0 &&
+    typeof old === "number" && Number.isFinite(old) &&
+    typeof oldGsd === "number" && oldGsd > 0
+  ) {
+    const ratio = gsdCmPx / oldGsd;
+    return old * ratio * ratio;
+  }
+  return null;
+}
+
+/** Merge a survey row the service just answered with onto its Footage.
+ *
+ *  The sortie's POSITION is deliberately not touched. A survey's lat/lng is
+ *  only the sortie's centre when there was no track and no georeferenced
+ *  animal to derive one from (that is the order hydrate resolves in), and a
+ *  correction to some other field must not silently move a colony that was
+ *  measured from telemetry. */
+function applySurvey(
+  f: Footage,
+  survey: SurveyOut,
+  geom: { widthPx: number; heightPx: number; frames: number | null } | undefined,
+): Footage {
+  const gsd = finiteOrNull(survey.gsd_cm_px);
+  return {
+    ...f,
+    siteId: survey.site_id ?? null,
+    notes: survey.notes ?? null,
+    operator: survey.operator ?? null,
+    capturedAt: instantFromService(survey.captured_at),
+    altitudeM: finiteOrNull(survey.altitude_m),
+    tideState: survey.tide_state ?? null,
+    locationSource: locationSourceOf(survey.location_source),
+    gsdCmPx: gsd,
+    gsdSource: survey.gsd_source ?? null,
+    retiredAt: survey.retired_at ?? null,
+    /* The one thing the endpoint audit caught the service NOT doing. A new
+       scale with the old hectares under it is worse than no hectares. */
+    areaM2: areaAfterScale(f, geom, gsd),
+  };
+}
+
 export const useFootageStore = create<Store>((set, get) => ({
   footages: [],
   detections: [],
@@ -189,11 +313,18 @@ export const useFootageStore = create<Store>((set, get) => ({
   hydrateSkipped: 0,
   loadedRuns: 0,
   totalRuns: null,
+  notesState: {},
+  retirement: {},
+  siteAssign: null,
+  frameGeom: {},
+  verdictsInFlight: 0,
   addFootage: (f) => set(s => ({ footages: [...s.footages, f], detections: [...s.detections, ...f.detections] })),
-  removeFootage: (id) => {
-    releaseBlob(get().footages.find(f => f.id === id)?.videoUrl);
-    set(s => ({ footages: s.footages.filter(f=>f.id!==id), detections: s.detections.filter(d=>d.footageId!==id), selectedId: s.selectedId===id?null:s.selectedId }));
-  },
+  /* No `removeFootage`. It filtered the sortie out of two arrays and called
+     that done, under a confirmation that said "Remove this sortie?" — a
+     durable-sounding promise over an act that survived exactly until the next
+     hydrate, when the survey came back out of the archive along with its
+     contribution to the estimate. Retirement is the real operation and the
+     only one offered; see `retireFootage`. */
   select: (id) => set({ selectedId: id }),
   setLayer: (k,v) => set(s=>({ layerState: {...s.layerState, [k]: v }})),
   setPinMode: (v) => set({ pinMode: v }),
@@ -244,30 +375,51 @@ export const useFootageStore = create<Store>((set, get) => ({
     const footageById = new Map(s.footages.map(f => [f.id, f]));
     const byRun = new Map<string, { points: number[]; dets: string[] }>();
     const unpersistable: string[] = [];
+    const unpersistableWhy: string[] = [];
 
     for (const id of ids) {
       const det = detById.get(id);
-      if (!det) { unpersistable.push(`${id}: no longer in the store`); continue; }
+      if (!det) { unpersistableWhy.push(`${id}: no longer in the store`); unpersistable.push(id); continue; }
       const f = footageById.get(det.footageId);
-      if (!f?.runId) { unpersistable.push(`${id}: sortie has no service run (test or local data)`); continue; }
+      if (!f?.runId) {
+        unpersistableWhy.push(`${id}: sortie has no service run (test or local data)`);
+        unpersistable.push(id);
+        continue;
+      }
       const pointId = pointIdOf(id);
       /* The `-agg` marker is one dot standing in for a whole run's band when
          the engine placed no individual animals. There is no point row behind
          it, so there is nothing to edit - said out loud rather than returned
          from silently, which is how this looked like a working save. */
-      if (pointId === null) { unpersistable.push(`${id}: aggregate marker, no backend point`); continue; }
+      if (pointId === null) {
+        unpersistableWhy.push(`${id}: aggregate marker, no backend point`);
+        unpersistable.push(id);
+        continue;
+      }
       let e = byRun.get(f.runId);
       if (!e) { e = { points: [], dets: [] }; byRun.set(f.runId, e); }
       e.points.push(pointId);
       e.dets.push(id);
     }
 
+    /* A verdict with nowhere to go is a verdict that did not save, and it is
+       reported exactly like one the service refused. The old code hit the
+       `!byRun.size` return BEFORE flagging or toasting anything, so ruling on
+       the 562-animal aggregate marker flipped the pill green, wrote nothing,
+       and said nothing louder than a console warning. The pill now carries
+       `unsaved` and the reviewer is told, in their own language. */
     if (unpersistable.length) {
-      console.warn(`${unpersistable.length} verdict(s) have nowhere to persist:`, unpersistable.slice(0, 10));
+      console.warn(`${unpersistable.length} verdict(s) have nowhere to persist:`, unpersistableWhy.slice(0, 10));
+      flag(unpersistable, true);
+      toast.error(
+        translate(useLangStore.getState().lang, "store.editsNotSaved", {
+          n: unpersistable.length,
+          total: ids.length,
+        }),
+      );
     }
     if (!byRun.size) return;
 
-    const attempted = [...byRun.values()].reduce((n, e) => n + e.dets.length, 0);
     /* Clear a previous failure flag on these rows - this is a fresh attempt,
        and a stale "unsaved" would outlive the problem. Only the rows that
        actually carry one, so the ordinary path writes to the store exactly
@@ -277,14 +429,29 @@ export const useFootageStore = create<Store>((set, get) => ({
       false,
     );
 
+    /* Attribution travels with the edit. The client used to hardcode
+       operator:"platform" on every write, so an append-only log built to
+       answer "who corrected this count" answered "the software did" for every
+       row a human ruled on. An operator who has not given a name sends null -
+       an anonymous edit, visibly anonymous, which is a true record.
+
+       Read ONCE, here, rather than left to editPoints' own default: one
+       gesture over several runs is several requests, and a name typed into
+       the top bar while they are in flight must not split one decision
+       between two authors. */
+    const operator = getOperator();
+    set(s => ({ verdictsInFlight: s.verdictsInFlight + byRun.size }));
+
     void Promise.all(
       [...byRun.entries()].map(async ([runId, e]) => {
         try {
-          await editPoints(runId, op, e.points);
+          await editPoints(runId, op, e.points, operator);
           return [] as string[];
         } catch (err) {
           console.warn(`edits did not persist for run ${runId}:`, err);
           return e.dets;
+        } finally {
+          set(s => ({ verdictsInFlight: Math.max(0, s.verdictsInFlight - 1) }));
         }
       }),
     ).then((results) => {
@@ -294,7 +461,7 @@ export const useFootageStore = create<Store>((set, get) => ({
       toast.error(
         translate(useLangStore.getState().lang, "store.editsNotSaved", {
           n: failed.length,
-          total: attempted,
+          total: ids.length,
         }),
       );
     });
@@ -307,11 +474,279 @@ export const useFootageStore = create<Store>((set, get) => ({
     set(s => patchDetections(s, new Set(ids), patch) ?? s);
     if (patch.status) get()._persistStatus(ids, patch.status);
   },
+
+  /* ------------------------------------------------------------ the record
+     Everything below writes to the SURVEY behind a sortie rather than to the
+     count. A note, a place name, a corrected altitude and a retirement are all
+     things a person knows and the engine cannot derive; they are stored where
+     the count is stored, attributed, and reloaded by hydrate() like any other
+     measured field. None of them touch a number the engine produced. */
+
+  markNotesDirty: (footageId) =>
+    set(s => (s.notesState[footageId] === "unsaved"
+      ? s
+      : { notesState: { ...s.notesState, [footageId]: "unsaved" } })),
+
+  saveNotes: async (footageId, text) => {
+    const setState = (v: NotesState) =>
+      set(s => ({ notesState: { ...s.notesState, [footageId]: v } }));
+    const lang = () => useLangStore.getState().lang;
+    const f = get().footages.find(x => x.id === footageId);
+    if (!f) return false;
+
+    const body = String(text ?? "");
+    /* Refused here, before the request. The cap is the column's, and a note
+       that the service would truncate is a note the reviewer would believe
+       they had written in full. */
+    if (body.length > NOTES_MAX) {
+      setState("error");
+      toast.error(translate(lang(), "rec.notes.tooLong", { max: NOTES_MAX }));
+      return false;
+    }
+    if (!f.surveyId) {
+      setState("error");
+      toast.error(translate(lang(), "rec.notes.noSurvey"));
+      return false;
+    }
+    setState("saving");
+    try {
+      /* The survey table has ONE operator column, and it belongs to whoever
+         flew the sortie. A note is not a reason to overwrite that, so the
+         current operator is filled in only where the field is still empty -
+         and the inspector labels the line "attributed to", which is the claim
+         a single shared column can actually support. */
+      const who = getOperator();
+      const patch: SurveyPatch = { notes: body };
+      if (who && !f.operator) patch.operator = who;
+      const survey = await patchSurvey(f.surveyId, patch);
+      set(s => ({
+        footages: s.footages.map(x =>
+          x.id === footageId ? applySurvey(x, survey, s.frameGeom[footageId]) : x),
+        notesState: { ...s.notesState, [footageId]: "saved" },
+      }));
+      return true;
+    } catch (e) {
+      setState("error");
+      toast.error(`${translate(lang(), "rec.notes.error")}: ${messageOf(e)}`);
+      return false;
+    }
+  },
+
+  patchSurveyFields: async (footageId, patch) => {
+    const lang = () => useLangStore.getState().lang;
+    const f = get().footages.find(x => x.id === footageId);
+    if (!f) return false;
+    if (!f.surveyId) {
+      toast.error(translate(lang(), "rec.meta.noSurvey"));
+      return false;
+    }
+    try {
+      const survey = await patchSurvey(f.surveyId, patch);
+      set(s => ({
+        footages: s.footages.map(x =>
+          x.id === footageId ? applySurvey(x, survey, s.frameGeom[footageId]) : x),
+      }));
+      return true;
+    } catch (e) {
+      toast.error(`${translate(lang(), "rec.meta.failed")}: ${messageOf(e)}`);
+      return false;
+    }
+  },
+
+  /* Sequential on purpose. Naming a haul-out rewrites every sortie flown over
+     it, which on this fixture is three rows and could be thirty; SQLite has
+     one writer, and thirty parallel PATCHes at it is the pattern the batch
+     verdict endpoint exists to stop. The progress count is why the panel can
+     say "8 of 30 written" instead of freezing. */
+  assignSite: async (footageIds, siteId, siteName) => {
+    const ids = footageIds.filter(Boolean);
+    let ok = 0;
+    let failed = 0;
+    set({ siteAssign: { done: 0, total: ids.length } });
+    try {
+      for (const id of ids) {
+        const f = get().footages.find(x => x.id === id);
+        if (!f?.surveyId) { failed++; continue; }
+        try {
+          const survey = await patchSurvey(f.surveyId, { site_id: siteId });
+          set(s => ({
+            footages: s.footages.map(x =>
+              x.id === id
+                ? { ...applySurvey(x, survey, s.frameGeom[id]), siteName: siteName ?? x.siteName ?? null }
+                : x),
+          }));
+          ok++;
+        } catch (e) {
+          console.warn(`site assignment did not persist for ${id}:`, e);
+          failed++;
+        } finally {
+          set(s => ({ siteAssign: { done: (s.siteAssign?.done ?? 0) + 1, total: ids.length } }));
+        }
+      }
+    } finally {
+      set({ siteAssign: null });
+    }
+    return { ok, failed };
+  },
+
+  applySiteName: (siteId, name) =>
+    set(s => ({
+      footages: s.footages.map(f => (f.siteId === siteId ? { ...f, siteName: name } : f)),
+    })),
+
+  /* Retirement, not deletion. The sortie stays in the archive with its count,
+     its animals and its evidence intact - it simply stops being one of the
+     surveys the estimate is built from. That is what an ecologist means by
+     "this flight should not be in the season", and it is reversible, which
+     deletion is not. */
+  retireFootage: async (footageId, reason) => {
+    const lang = () => useLangStore.getState().lang;
+    const f = get().footages.find(x => x.id === footageId);
+    if (!f) return false;
+    const why = String(reason ?? "").trim().slice(0, NOTES_MAX);
+    const who = getOperator();
+
+    /* Test data and a sortie whose upload never reached the service exist only
+       in this tab. There is no archive row to retire, so forgetting it here IS
+       the durable outcome - and the caller says so before asking. */
+    if (!f.surveyId) {
+      releaseBlob(f.videoUrl);
+      set(s => ({
+        footages: s.footages.filter(x => x.id !== footageId),
+        detections: s.detections.filter(d => d.footageId !== footageId),
+        selectedId: s.selectedId === footageId ? null : s.selectedId,
+      }));
+      return true;
+    }
+    try {
+      const survey = await retireSurvey(f.surveyId, why, who);
+      const at = survey.retired_at ?? new Date().toISOString();
+      set(s => ({
+        footages: s.footages.map(x =>
+          x.id === footageId
+            ? { ...applySurvey(x, survey, s.frameGeom[footageId]), retiredAt: at }
+            : x),
+        retirement: {
+          ...s.retirement,
+          [footageId]: {
+            /* What the ARCHIVE recorded, not what this form typed. If the two
+               ever differ, the stored one is the record. */
+            reason: survey.retired_reason ?? (why || null),
+            by: survey.retired_by ?? who,
+          },
+        },
+      }));
+      return true;
+    } catch (e) {
+      toast.error(`${translate(lang(), "rec.retire.failed")}: ${messageOf(e)}`);
+      return false;
+    }
+  },
+
+  unretireFootage: async (footageId) => {
+    const lang = () => useLangStore.getState().lang;
+    const f = get().footages.find(x => x.id === footageId);
+    if (!f?.surveyId) return false;
+    try {
+      const survey = await unretireSurvey(f.surveyId);
+      set(s => {
+        const retirement = { ...s.retirement };
+        delete retirement[footageId];
+        return {
+          footages: s.footages.map(x =>
+            x.id === footageId
+              ? { ...applySurvey(x, survey, s.frameGeom[footageId]), retiredAt: survey.retired_at ?? null }
+              : x),
+          retirement,
+        };
+      });
+      return true;
+    } catch (e) {
+      toast.error(`${translate(lang(), "rec.retire.undoFailed")}: ${messageOf(e)}`);
+      return false;
+    }
+  },
+
+  /* A count a person made, standing on the shore. It becomes a sortie because
+     that is what it is - one visit to one place on one date - and the site
+     estimate treats it as such. What it is NOT is an engine result: the band
+     is the single number the observer reported (low = best = high, so nothing
+     downstream draws a range strip over it), the basis says "manual", and the
+     engine says "manual" so every surface can label it without guessing.
+     Synthesised locally rather than re-hydrating the whole archive, but with
+     the id hydrate WOULD give it, so the next reload does not double it. */
+  addObservation: async (input) => {
+    const lang = () => useLangStore.getState().lang;
+    try {
+      const { survey, run } = await createObservation(input);
+      /* The id hydrate would give this row, so an F5 does not mint a second
+         sortie over the same observation. */
+      const id = `run-${run.id}`;
+      if (get().footages.some(x => x.id === id)) return true;
+
+      /* The SERVICE's numbers, not the form's. What was stored is what the
+         panel must show, or a rejected field would render as if it had been
+         accepted. `count_best` is the observer's single number, and low/high
+         equal it - hasRange is false, so no strip is drawn. */
+      const count = finiteOrNull(run.count_best) ?? 0;
+      const lat = finiteOrNull(survey.lat);
+      const lng = finiteOrNull(survey.lng);
+      const when = instantFromService(survey.captured_at);
+      const placed = lat != null && lng != null;
+
+      get().addFootage({
+        id,
+        filename: "",
+        size: 0,
+        duration: 0,
+        uploadedAt: when ?? new Date().toISOString(),
+        capturedAt: when,
+        track: [],
+        detections: [],
+        center: placed ? { lat, lng } : { lat: NaN, lng: NaN },
+        placed,
+        status: "ready",
+        source: "manual",
+        engine: run.engine || "manual",
+        band: {
+          low: finiteOrNull(run.count_low) ?? count,
+          best: count,
+          high: finiteOrNull(run.count_high) ?? count,
+          basis: run.basis || "manual",
+        },
+        surveyId: survey.id,
+        runId: run.id,
+        siteId: survey.site_id ?? null,
+        /* The site's NAME is not on a survey row. Left null rather than
+           guessed at; the next hydrate joins it, and until then the panel
+           prints the coordinate, which is a true statement about the place. */
+        siteName: null,
+        notes: survey.notes ?? null,
+        operator: survey.operator ?? null,
+        /* A person's coordinate, and the row says so wherever it is printed. */
+        locationSource: locationSourceOf(survey.location_source) ?? "manual",
+        /* No footprint: nobody photographed any ground. Unknown area and zero
+           area are different claims, and this is neither - it is "not
+           applicable", which null is the closest honest rendering of. */
+        areaM2: null,
+        gsdCmPx: null,
+        gsdSource: null,
+        retiredAt: survey.retired_at ?? null,
+      });
+      toast.success(translate(lang(), "rec.manual.saved"));
+      return true;
+    } catch (e) {
+      toast.error(`${translate(lang(), "rec.manual.failed")}: ${messageOf(e)}`);
+      return false;
+    }
+  },
+
   clearAll: () => {
     for (const f of get().footages) releaseBlob(f.videoUrl);
     set({
       footages: [], detections: [], selectedId: null, pinPoints: [],
       loadedRuns: 0, totalRuns: null, hydrateSkipped: 0, hydrateError: null,
+      notesState: {}, retirement: {}, siteAssign: null, frameGeom: {},
     });
   },
   /* Reload the season's counts from the service. The store is browser memory;
@@ -345,12 +780,18 @@ export const useFootageStore = create<Store>((set, get) => ({
 
     const rank = new Map<string, number>();
 
-    const merge = (f: Footage) => set(s => {
+    const merge = (
+      f: Footage,
+      geom: { widthPx: number; heightPx: number; frames: number | null },
+      retired: { reason: string | null; by: string | null } | null,
+    ) => set(s => {
       if (s.footages.some(x => x.id === f.id)) return s;
       return {
         footages: insertRanked(s.footages, f, rank),
         detections: [...s.detections, ...f.detections],
         loadedRuns: s.loadedRuns + 1,
+        frameGeom: { ...s.frameGeom, [f.id]: geom },
+        retirement: retired ? { ...s.retirement, [f.id]: retired } : s.retirement,
       };
     });
     const skip = (n = 1) => set(s => ({ hydrateSkipped: s.hydrateSkipped + n }));
@@ -384,6 +825,16 @@ export const useFootageStore = create<Store>((set, get) => ({
           };
         }
       }
+      /* Last resort, and a real measurement rather than a fallback: the survey
+         row's own coordinate. A ground count has no track and no engine point,
+         and a photo whose position was pinned by hand carries the pin here -
+         both used to reload as {NaN, NaN}, drop out of the site grouping
+         entirely, and take their animals out of the estimate with them. */
+      if (!center) {
+        const slat = Number(r.survey_lat);
+        const slng = Number(r.survey_lng);
+        if (Number.isFinite(slat) && Number.isFinite(slng)) center = { lat: slat, lng: slng };
+      }
       const positioned = center !== null;
       /* NaN, not (0,0). There is no honest coordinate for this sortie, and an
          invented one would put it in the Gulf of Guinea. Every map consumer
@@ -401,7 +852,10 @@ export const useFootageStore = create<Store>((set, get) => ({
 
       merge({
         id,
-        filename: r.filename ?? "(archived survey)",
+        /* A ground count has no file. "(archived survey)" over a number a
+           person reported would read as footage nobody ever shot, so the row
+           is left nameless and the panels label it by what it is. */
+        filename: r.filename ?? (r.engine === "manual" ? "" : "(archived survey)"),
         size: 0,
         duration: 0,
         /* When the footage was FLOWN, not when the count job ran. `created_at`
@@ -411,6 +865,27 @@ export const useFootageStore = create<Store>((set, get) => ({
         uploadedAt: instantFromService(r.captured_at)
           ?? instantFromService(r.created_at)
           ?? new Date().toISOString(),
+        /* Carried SEPARATELY from uploadedAt and null when unrecorded. The
+           timeline needs a date for every sortie and falls back to the job
+           clock to get one; the inspector must be able to tell the two apart,
+           because printing "counted on" as "flown on" turns a processing
+           timestamp into a field observation. */
+        capturedAt: instantFromService(r.captured_at),
+        surveyId: r.survey_id ?? undefined,
+        siteId: r.site_id ?? null,
+        siteName: r.site_name ?? null,
+        notes: r.notes ?? null,
+        operator: r.operator ?? null,
+        /* Narrowed, not cast: a provenance token this build does not know
+           becomes null — "we do not know how this position was arrived at" —
+           rather than falling into whichever branch happens to be the else. */
+        locationSource: locationSourceOf(r.location_source),
+        retiredAt: r.retired_at ?? null,
+        altitudeM: r.altitude_m ?? null,
+        tideState: r.tide_state ?? null,
+        engine: r.engine ?? null,
+        falsePositiveRisk: r.false_positive_risk ?? null,
+        falsePositiveBasis: Array.isArray(r.false_positive_basis) ? r.false_positive_basis : null,
         track: trk,
         detections,
         center: anchor,
@@ -438,7 +913,16 @@ export const useFootageStore = create<Store>((set, get) => ({
           widthPx: r.width ?? 0, heightPx: r.height ?? 0, gsdCmPx: r.gsd_cm_px,
           frames: r.frames_used ?? null,
         }),
-      });
+      },
+      /* Kept so a later scale correction can recompute that area from the same
+         terms rather than scaling the old number and hoping. */
+      { widthPx: r.width ?? 0, heightPx: r.height ?? 0, frames: r.frames_used ?? null },
+      /* No retirement annotation from the archive listing: it excludes retired
+         surveys entirely, so `retired_at` is null on every row it returns. The
+         reason and the operator are known only for a retirement made in this
+         session, and the banner says only what it actually has. */
+      null,
+      );
     };
 
     inflight = (async () => {
