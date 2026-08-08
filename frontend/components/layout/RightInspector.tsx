@@ -1,14 +1,20 @@
 "use client";
 import { useFootageStore } from "@/store/useFootageStore";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button, Row, SectionHead, Pill } from "@/components/ui/primitives";
 import Icon from "@/components/ui/Icon";
+import EvidenceView, { EvidenceFrame } from "@/components/evidence/EvidenceView";
 
 export default function RightInspector({ compact }: { compact?: boolean }){
   const footages = useFootageStore(s=>s.footages);
   const selectedId = useFootageStore(s=>s.selectedId);
   const select = useFootageStore(s=>s.select);
+  const [evidenceOpen, setEvidenceOpen] = useState(false);
   const f = useMemo(()=> footages.find(x=>x.id===selectedId) || null, [footages, selectedId]);
+
+  /* A selection change swaps the sortie under the dialog; showing sortie B's
+     photo in a dialog opened for sortie A would be quiet misinformation. */
+  useEffect(() => { setEvidenceOpen(false); }, [selectedId]);
 
   const shell = `w-[340px] ${compact ? "flex-1" : "shrink-0 border-l border-line"} bg-surface flex flex-col overflow-hidden`;
 
@@ -28,6 +34,14 @@ export default function RightInspector({ compact }: { compact?: boolean }){
   }
 
   const det = f.detections[0] || null;
+  /* The Evidence view exists only where its raw material does: a photo
+     sortie whose engine run left us the media id and per-animal pixels.
+     Everything here is optional on Footage - guard all of it, or the
+     inspector goes down with the whole app (it already did once). */
+  const evidence =
+    !f.videoUrl && f.mediaId && f.pixels && f.pixels.length > 0
+      ? { mediaId: f.mediaId, pixels: f.pixels }
+      : null;
   /* With the real engine a sortie holds one detection PER ANIMAL, so the
      headline is the band's best estimate; summing detections is the fallback
      for test data, which never carries a band. */
@@ -94,14 +108,37 @@ export default function RightInspector({ compact }: { compact?: boolean }){
         </div>
       </div>
 
-      {/* frame preview */}
+      {/* frame preview: the real photo with every animal marked when the
+          engine gave us one; the video player for video; the placeholder
+          only where there is genuinely nothing to show. */}
       <div className="aspect-video bg-bg border-b border-line relative shrink-0">
         {f.videoUrl ? (
           <video src={f.videoUrl} controls className="w-full h-full object-contain" />
+        ) : evidence ? (
+          <>
+            <EvidenceFrame mediaId={evidence.mediaId} pixels={evidence.pixels} />
+            <Button
+              icon="search"
+              className="absolute bottom-2 right-2 shadow-pop"
+              onClick={() => setEvidenceOpen(true)}
+            >
+              Open evidence
+            </Button>
+          </>
         ) : (
           <FramePreview filename={f.filename} count={totalSeals} det={det} />
         )}
       </div>
+
+      {evidence && (
+        <EvidenceView
+          open={evidenceOpen}
+          onOpenChange={setEvidenceOpen}
+          mediaId={evidence.mediaId}
+          pixels={evidence.pixels}
+          band={f.band ?? null}
+        />
+      )}
 
       <div className="flex-1 overflow-auto">
         <div className="px-4 py-3">
