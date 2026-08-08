@@ -35,11 +35,15 @@ const DARK_STYLE: any = {
     }
   },
   layers: [
-    { id: "bg", type: "background", paint: { "background-color": "#0a0a0b" } },
+    // GL cannot read CSS vars — #13161b is --bg baked in, so map void = app bg.
+    { id: "bg", type: "background", paint: { "background-color": "#13161b" } },
     // Dial the basemap right down — it is context, and the counts drawn on top
-    // are the only things that should carry contrast.
+    // are the only things that should carry contrast. brightness-min lifts the
+    // tile blacks off the floor so water/land separate from the app background
+    // instead of pooling into one tar pit with it.
     { id: "osm", type: "raster", source: "osm", paint: {
       "raster-opacity": 1,
+      "raster-brightness-min": 0.06,
       "raster-brightness-max": 0.72,
       "raster-saturation": -0.45,
       "raster-contrast": 0.05,
@@ -147,7 +151,7 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
       // Appears from mid zoom; far out the chip alone carries the story.
       map.addLayer({ id:"colony-fill", type:"fill", source:"colonies", minzoom: ZOOM_COLONY, paint:{
         "fill-color":"#e0a13c",
-        "fill-opacity":0.14,
+        "fill-opacity":0.16, // lifted raster floor eats a little of the tint — keep in sync with the pin/heat toggles below
       }});
       map.addLayer({ id:"colony-line", type:"line", source:"colonies", minzoom: ZOOM_COLONY, paint:{
         "line-color":"#e0a13c",
@@ -155,10 +159,10 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
         "line-opacity": ["case",["==",["get","selected"],true], 1, 0.8],
       }});
       // Individual animals only at close zoom, bare dots, no labels.
-      // GL cannot read CSS vars, so var(--good) is baked in as #6aa88a.
+      // GL cannot read CSS vars, so var(--good) is baked in as #74b294.
       map.addLayer({ id:"animal-dots", type:"circle", source:"animals", minzoom: ZOOM_ANIMALS, paint:{
         "circle-radius": 3.5,
-        "circle-color": ["case",["==",["get","status"],"validated"],"#6aa88a","#ffffff"],
+        "circle-color": ["case",["==",["get","status"],"validated"],"#74b294","#ffffff"],
         "circle-stroke-color": "rgba(0,0,0,0.6)",
         "circle-stroke-width": 1,
         "circle-opacity": 1
@@ -234,7 +238,7 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
     const m = mapRef.current; if (!m) return;
     m.getCanvas().style.cursor = pinMode ? "crosshair" : "";
     for (const [id, prop, on, off] of [
-      ["colony-fill","fill-opacity",0.14,0.04],
+      ["colony-fill","fill-opacity",0.16,0.04],
       ["colony-line","line-opacity",0.8,0.25],
       ["animal-dots","circle-opacity",1,0.25],
     ] as const) {
@@ -269,7 +273,7 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
       if(map.getLayer("seal-heat")) map.setLayoutProperty("seal-heat","visibility",vis);
       // step the colony drawing back while the density field is on
       if(map.getLayer("animal-dots")) map.setPaintProperty("animal-dots","circle-opacity", layerState.heatmap ? 0.35 : 1);
-      if(map.getLayer("colony-fill")) map.setPaintProperty("colony-fill","fill-opacity", layerState.heatmap ? 0.05 : 0.14);
+      if(map.getLayer("colony-fill")) map.setPaintProperty("colony-fill","fill-opacity", layerState.heatmap ? 0.05 : 0.16);
     }catch{}
   },[layerState.heatmap, mapLoaded]);
 

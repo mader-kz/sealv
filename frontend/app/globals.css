@@ -6,24 +6,38 @@
 /* ---------------------------------------------------------------
    SEALv design tokens — one neutral ramp, one accent. Nothing else.
    Chrome stays quiet so the data on the map is the only loud thing.
+
+   Dark, not black: the ramp sits on a cool blue-grey so panels, bg
+   and borders separate into visible LEVELS and EDGES instead of one
+   pool of near-black. Measured WCAG contrast (relative luminance):
+
+     ink    #f2f4f7 on surface  15.2:1   (on bg 16.5:1)   body ≥7 ✓
+     ink-2  #aab3bf on surface   7.9:1   (on surface-2 7.1:1)  ≥7 ✓
+     ink-3  #7e8898 on bg        5.1:1   (on surface 4.7:1) ≥4.5 ✓
+     accent #e0a13c on surface   7.4:1;  accent-ink on accent 8.3:1
+     good   #74b294 on bg        7.4:1
+     bad    #d47d72 on bg        6.0:1
+     line     vs surface  3.3x luminance — edges read at a glance
+     line-soft vs surface 2.0x luminance — hairlines, still visible
+     surface vs bg 1.6x, surface-2 vs surface 1.6x — three levels
    --------------------------------------------------------------- */
 :root {
-  --bg: #0a0a0b;
-  --surface: #101012;
-  --surface-2: #17171a;
-  --line: #232327;
-  --line-soft: #1a1a1d;
+  --bg: #13161b;
+  --surface: #1a1e24;
+  --surface-2: #22272f;
+  --line: #333a44;
+  --line-soft: #272d35;
 
-  --ink: #ececee;
-  --ink-2: #9c9ca4;
-  --ink-3: #64646c;
+  --ink: #f2f4f7;
+  --ink-2: #aab3bf;
+  --ink-3: #7e8898;
 
   --accent: #e0a13c;
-  --accent-soft: #e0a13c1f;
+  --accent-soft: #e0a13c24;
   --accent-ink: #17120a;
 
-  --good: #6aa88a;
-  --bad: #c0685f;
+  --good: #74b294;
+  --bad: #d47d72;
 
   /* shadcn/ui semantic tokens, aliased onto the tokens above so library
      components inherit this design system instead of shipping their own.
@@ -113,13 +127,13 @@ a:focus-visible {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #2a2a2f;
+  background: #39414d;
   border-radius: 4px;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #3a3a41;
+  background: #4a5462;
   background-clip: padding-box;
 }
 
@@ -156,9 +170,12 @@ a:focus-visible {
   border-radius: 10px;
   background: var(--accent);
   color: var(--accent-ink);
+  /* On the lifted bg shadows finally have something to fall on — a soft
+     two-layer elevation (tight contact + wide ambient) plus the hairline. */
   box-shadow:
-    0 0 0 1px rgb(0 0 0 / 0.3),
-    0 3px 12px rgb(0 0 0 / 0.5);
+    0 0 0 1px rgb(0 0 0 / 0.35),
+    0 2px 5px rgb(0 0 0 / 0.35),
+    0 10px 24px rgb(0 0 0 / 0.4);
   cursor: pointer;
   pointer-events: auto;
   line-height: 1;
@@ -166,11 +183,16 @@ a:focus-visible {
 }
 .colony-chip:hover {
   transform: translate(-50%, -50%) scale(1.06);
+  box-shadow:
+    0 0 0 1px rgb(0 0 0 / 0.35),
+    0 4px 8px rgb(0 0 0 / 0.4),
+    0 14px 30px rgb(0 0 0 / 0.45);
 }
 .colony-chip.selected {
   box-shadow:
     0 0 0 2px #fff,
-    0 3px 14px rgb(0 0 0 / 0.55);
+    0 3px 8px rgb(0 0 0 / 0.4),
+    0 12px 28px rgb(0 0 0 / 0.45);
 }
 .colony-chip .chip-best {
   font-size: 15px;
@@ -197,7 +219,11 @@ a:focus-visible {
   width: 18px; height: 18px; border-radius: 50%;
   background: var(--accent);
   border: 3px solid #fff;
-  box-shadow: 0 0 0 2px rgba(0,0,0,.55);
+  /* The dark ring keeps the white border contrasty on the lifted map;
+     the drop shadow seats the anchor on it. */
+  box-shadow:
+    0 0 0 2px rgba(0,0,0,.55),
+    0 3px 8px rgba(0,0,0,.45);
   position: relative;
 }
 .pin-anchor-marker::before {
