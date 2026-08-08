@@ -110,7 +110,7 @@ export const useFootageStore = create<Store>((set, get) => ({
           r.media_id ? fetchTrack(r.media_id).catch(() => []) : Promise.resolve([]),
         ]);
         const id = `run-${r.run_id}`;
-        const { placed, unplaced } = pointsToDetections(id, points);
+        const { placed, unplaced, pixels } = pointsToDetections(id, points);
         const trk: TrackPoint[] = track.map((p: any) => ({
           t: p.t ?? 0, lat: p.lat, lng: p.lng, alt: p.alt ?? undefined,
         }));
@@ -145,9 +145,11 @@ export const useFootageStore = create<Store>((set, get) => ({
           status: "ready",
           source: "archive",
           runId: r.run_id,
+          mediaId: r.media_id ?? undefined,
           videoUrl: r.kind === "video" && r.media_id ? mediaFileUrl(r.media_id) : undefined,
           band: { low: r.low ?? null, best, high: r.high ?? null, basis: r.basis ?? "" },
           unplaced,
+          pixels,
         });
       } catch {
         /* one unreadable run must not sink the other nineteen */

@@ -8,7 +8,7 @@
    field/offline story stays intact. NEXT_PUBLIC_API_BASE exists for `next
    dev` on :3000 talking to a backend on :8090 (see next.config rewrites). */
 
-import type { Detection } from "./types";
+import type { Detection, DetectionPixel } from "./types";
 
 const API = process.env.NEXT_PUBLIC_API_BASE ?? "";
 
@@ -171,15 +171,20 @@ export function watchJob(
 /* One backend point -> one map detection. The mock invented a single blob per
    video with a made-up count; the real engine returns every animal it found,
    georeferenced when the footage carried a track. Points without coordinates
-   are the caller's problem to aggregate - it knows the sortie's centre. */
+   are the caller's problem to aggregate - it knows the sortie's centre.
+   `pixels` carries EVERY non-false-positive point in reference-frame pixel
+   space, placed or not: an animal the map cannot show is still in the photo,
+   and the Evidence view needs it there. */
 export function pointsToDetections(
   footageId: string,
   points: RunResult["points"],
-): { placed: Detection[]; unplaced: number } {
+): { placed: Detection[]; unplaced: number; pixels: DetectionPixel[] } {
   const placed: Detection[] = [];
+  const pixels: DetectionPixel[] = [];
   let unplaced = 0;
   for (const p of points) {
     if (p.status === "false_positive") continue;
+    pixels.push({ px: p.x, py: p.y, status: p.status, score: p.score ?? null, id: p.id });
     if (Number.isFinite(p.lat) && Number.isFinite(p.lng)) {
       placed.push({
         id: `${footageId}-p${p.id}`,
@@ -190,12 +195,14 @@ export function pointsToDetections(
         count: 1,
         confidence: p.score ?? 0,
         status: p.status,
+        px: p.x,
+        py: p.y,
       });
     } else {
       unplaced += 1;
     }
   }
-  return { placed, unplaced };
+  return { placed, unplaced, pixels };
 }
 
 /* ---------------------------------------------------------------- history */

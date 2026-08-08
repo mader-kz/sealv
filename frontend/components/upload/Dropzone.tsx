@@ -76,7 +76,7 @@ export default function Dropzone(){
         const t = p.frames_total ?? 0;
         setLog(`${footage.filename} · ${p.stage ?? "working"}${t ? ` · frame ${p.frames_done ?? 0}/${t}` : ""}`);
       });
-      const { placed, unplaced } = pointsToDetections(id, result.points ?? []);
+      const { placed, unplaced, pixels } = pointsToDetections(id, result.points ?? []);
       const best = result.count?.best ?? null;
       let detections = placed;
       if (placed.length === 0 && best != null && best > 0) {
@@ -89,7 +89,7 @@ export default function Dropzone(){
           count: best, confidence: 1, status: "auto" as const,
         }];
       }
-      completeFootage(id, { status: "ready", detections, band: result.count, unplaced, runId: result.run_id });
+      completeFootage(id, { status: "ready", detections, band: result.count, unplaced, runId: result.run_id, mediaId: up.id, pixels });
       const bandTxt = result.count && result.count.low !== result.count.high
         ? ` (range ${result.count.low}–${result.count.high})` : "";
       toast.success(`${footage.filename}: ${best ?? "?"} seals${bandTxt}`);

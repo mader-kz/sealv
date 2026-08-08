@@ -16,6 +16,24 @@ export type Detection = {
   confidence: number;
   bbox?: [number, number, number, number]; // x,y,w,h normalized 0-1 (mock)
   status: "auto" | "validated" | "false_positive";
+  /* Pixel position of this animal in the source/reference frame's coordinate
+     system. The Evidence view draws verdicts on the actual photo, where
+     geography is irrelevant but pixels are everything. Absent on mock/test
+     detections - the engine is the only honest source of them. */
+  px?: number;
+  py?: number;
+};
+
+/* One engine detection in the pixel space of the source/reference frame.
+   Kept for ALL non-false-positive points - including the ones the map cannot
+   place (no lat/lng) - because an animal without coordinates is still visible
+   in the photo, and the Evidence view must show it. */
+export type DetectionPixel = {
+  px: number;
+  py: number;
+  status: string;
+  score: number | null;
+  id: number;
 };
 
 export type Footage = {
@@ -41,6 +59,12 @@ export type Footage = {
   /* Animals the engine found but could not georeference (no flight track).
      They are in the count; they are not on the map. The UI must say so. */
   unplaced?: number;
+  /* Every non-false-positive detection in reference-frame pixel space,
+     placed or not. The raw material of the Evidence view. */
+  pixels?: DetectionPixel[];
+  /* Backend media id for this sortie's source file - what /media/{id}/file
+     is fed to show the actual footage behind the count. */
+  mediaId?: string;
   error?: string;
 };
 
