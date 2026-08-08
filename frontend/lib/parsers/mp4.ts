@@ -1,19 +1,28 @@
 import type { TrackPoint } from "../types";
-import { snapToWater, isWater } from "../caspian";
 
 /**
  * Try to extract GPS from inside the MP4 itself (no sidecar).
  * Supports:
  *  - DJI XMP inside moov/udta (plain text GPS( lat,lng) or [latitude: ] inside the file)
- *  - iPhone/Android com.apple.quicktime.location / creation location (ISO6709 +43.1234+051.1234/)
+ *  - iPhone/Android com.apple.quicktime.location / ©xyz (ISO-6709 +43.1234+051.1234/)
  *  - Generic XMP <GPSLatitude> / <Location> tags
+ *  - The binary 3GPP `loci` box ffmpeg and many Android cameras write
  *
- * Strategy: read first ~2MB + last ~256KB as text (XMP is plain XML at head or tail)
- * and regex for lat/lng. No mp4box dep — lightweight and works for hack demo.
- * If only one fix found, we synthesize a 30km track around it so the footprint is visible.
+ * Strategy: read the first ~2MB + last ~512KB and decode them ONCE as latin1
+ * (a 1:1 byte→char map, so ASCII metadata embedded in binary stays
+ * searchable), then regex for lat/lng. No mp4box dep.
+ *
+ * What this parser does NOT do is invent geometry. Every point it returns is a
+ * coordinate the file actually carries, unmoved. It used to spin a single fix
+ * into a forty-point random walk — reported to the operator as "40 track
+ * points" and uploaded as the sidecar the service georeferences every animal
+ * against — and to push any point the water mask disliked up to ~33 km. One
+ * fix is one anchor; the consensus lays the animals out around it by their
+ * real pixel offsets.
  */
 export type MP4Location = {
-  /** Track ready to ingest — null when nothing usable was found. */
+  /** Track ready to ingest — null when nothing usable was found. One entry per
+   *  fix the file carries, in file order, at the coordinates it carries. */
   track: TrackPoint[] | null;
   /** First coordinate found in the file, exactly as written. Reported to the
    *  user even when it is outside the survey area, so "no GPS" is never
@@ -23,7 +32,43 @@ export type MP4Location = {
   outsideSurveyArea: boolean;
   /** How many distinct fixes were recovered. */
   fixes: number;
+  /** True when the track's `t` values were spread evenly instead of read: the
+   *  POSITIONS are measured, their timing is not, and the UI says so. */
+  timesSynthesized: boolean;
 };
+
+/** Seconds several fixes are spread across when the file gives positions but
+ *  no timing. Dropzone rescales this onto the video's real duration. */
+const SYNTHETIC_SPREAD_S = 90;
+
+/* ISO-6709 is two signs and a handful of digits — a pattern that a compressed
+   video stream produces by coincidence, inside the very lat 36-48 / lng 46-56
+   box the survey filter allows, and it was then reported as a GPS fix. So it is
+   only looked for where the format actually puts it: the QuickTime location
+   keys, or right after a `©xyz` atom (0xA9 "xyz", one byte per char under the
+   latin1 decode). A match found loose in the byte stream is noise wearing a
+   coordinate's clothes.
+
+   The keys/ilst layout, where the key name and its value sit in separate boxes
+   too far apart for this window, is still covered by `reQuickTime` below —
+   which scans the whole text exactly as it did before. */
+const ISO6709_CONTAINERS = ["com.apple.quicktime.location", "©xyz"];
+const ISO6709_WINDOW = 96;
+
+function iso6709Windows(text: string): string[] {
+  const out: string[] = [];
+  for (const marker of ISO6709_CONTAINERS) {
+    let from = 0;
+    for (;;) {
+      const at = text.indexOf(marker, from);
+      if (at < 0) break;
+      out.push(text.slice(at, at + marker.length + ISO6709_WINDOW));
+      from = at + marker.length;
+      if (out.length >= 32) return out;
+    }
+  }
+  return out;
+}
 
 /** Survey area — the map's own bounds. Coordinates outside it are still
  *  reported, just not plotted. */
@@ -34,17 +79,19 @@ function inSurveyArea(lat:number, lng:number){
 export async function parseMP4Metadata(file: File): Promise<MP4Location> {
   // read head + tail
   const headSize = Math.min(file.size, 2 * 1024 * 1024);
-  const tailSize = Math.min(file.size, 512 * 1024);
+  const tailSize = file.size > headSize ? Math.min(file.size, 512 * 1024) : 0;
   const head = await file.slice(0, headSize).arrayBuffer();
-  const tail = file.size > headSize ? await file.slice(file.size - tailSize).arrayBuffer() : new ArrayBuffer(0);
+  const tail = tailSize ? await file.slice(file.size - tailSize).arrayBuffer() : new ArrayBuffer(0);
   const combined = new Uint8Array(headSize + tailSize);
   combined.set(new Uint8Array(head), 0);
   if (tailSize) combined.set(new Uint8Array(tail), headSize);
-  // decode as latin1 to keep bytes searchable (XMP is ascii)
-  let text = "";
-  try { text = new TextDecoder("utf-8", { fatal: false }).decode(combined); } catch { text = Array.from(combined).map(b=> String.fromCharCode(b)).join(""); }
-  // also try latin1 fallback for binary-safe search
-  const latin = Array.from(combined).map(b=> b>=32 && b<=126 ? String.fromCharCode(b) : " ").join("");
+  /* ONE decode, ONE string. latin1 maps every byte to exactly one character,
+     so ASCII metadata inside binary is searchable without a second copy. The
+     old code built a 2.5-million-element array and joined it into a second
+     full-size string, then ran six global regexes over both — twelve full
+     scans of 2.5 MB on the main thread, per dropped file. Its try/catch was
+     dead too: TextDecoder with fatal:false cannot throw. */
+  const text = new TextDecoder("latin1").decode(combined);
 
   const candidates: Array<{lat:number,lng:number, alt?:number}> = [];
   const anyFound: Array<{lat:number,lng:number}> = [];
@@ -61,26 +108,26 @@ export async function parseMP4Metadata(file: File): Promise<MP4Location> {
   //    Stored as fixed-point, so no amount of text matching will find it.
   for(const p of parseLociBoxes(combined)) pushCand(p.lat, p.lng, p.alt);
 
-  const sources = [text, latin];
-  for(const src of sources){
-    let m: RegExpExecArray | null;
-    while((m=reGPS.exec(src))){ pushCand(parseFloat(m[1]), parseFloat(m[2]), m[3]?parseFloat(m[3]):undefined); }
-    reGPS.lastIndex=0;
-    while((m=reLatLonBracket.exec(src))){ pushCand(parseFloat(m[1]), parseFloat(m[2])); }
-    reLatLonBracket.lastIndex=0;
-    while((m=reLatLonTag.exec(src))){ pushCand(parseFloat(m[1]), parseFloat(m[2])); }
-    reLatLonTag.lastIndex=0;
-    while((m=reQuickTime.exec(src))){ pushCand(parseFloat(m[1]), parseFloat(m[2])); }
-    reQuickTime.lastIndex=0;
-    while((m=reXmpLatLon.exec(src))){ pushCand(parseFloat(m[1]), parseFloat(m[2])); }
-    reXmpLatLon.lastIndex=0;
-    // ISO6709 — be careful: many numbers, only take those near Caspian
-    while((m=reISO6709.exec(src))){
+  let m: RegExpExecArray | null;
+  while((m=reGPS.exec(text))){ pushCand(parseFloat(m[1]), parseFloat(m[2]), m[3]?parseFloat(m[3]):undefined); }
+  reGPS.lastIndex=0;
+  while((m=reLatLonBracket.exec(text))){ pushCand(parseFloat(m[1]), parseFloat(m[2])); }
+  reLatLonBracket.lastIndex=0;
+  while((m=reLatLonTag.exec(text))){ pushCand(parseFloat(m[1]), parseFloat(m[2])); }
+  reLatLonTag.lastIndex=0;
+  while((m=reQuickTime.exec(text))){ pushCand(parseFloat(m[1]), parseFloat(m[2])); }
+  reQuickTime.lastIndex=0;
+  while((m=reXmpLatLon.exec(text))){ pushCand(parseFloat(m[1]), parseFloat(m[2])); }
+  reXmpLatLon.lastIndex=0;
+  // ISO-6709, inside its container only — never loose in the byte stream.
+  for(const win of iso6709Windows(text)){
+    reISO6709.lastIndex=0;
+    while((m=reISO6709.exec(win))){
       const lat=parseFloat(m[1]), lng=parseFloat(m[2]);
       if(!isNaN(lat)&&!isNaN(lng)) pushCand(lat,lng);
     }
-    reISO6709.lastIndex=0;
   }
+  reISO6709.lastIndex=0;
 
   function pushCand(lat:number,lng:number, alt?:number){
     if(isNaN(lat)||isNaN(lng)) return;
@@ -101,40 +148,27 @@ export async function parseMP4Metadata(file: File): Promise<MP4Location> {
       found: anyFound[0] ?? null,
       outsideSurveyArea: anyFound.length > 0,
       fixes: anyFound.length,
+      timesSynthesized: false,
     };
   }
 
-  // if many points found (e.g., XMP with per-frame GPS), build track with t spread
-  if(candidates.length>=3){
-    // sort by lat jitter to simulate time order — XMP order is already time order
-    const track: TrackPoint[] = candidates.map((c,i)=> ({
-      t: (i/(candidates.length-1))*90,
-      lat: c.lat, lng: c.lng, alt: c.alt ?? 75,
-    }));
-    // snap any land pts to water
-    const snapped = track.map(p=> isWater(p.lat,p.lng) ? p : { ...snapToWater(p.lat,p.lng), t:p.t, alt:p.alt });
-    return { track: snapped, found: candidates[0], outsideSurveyArea: false, fixes: candidates.length };
-  }
-
-  // single fix (iPhone location) — synthesize a 30km offshore track around it so footprint is visible
-  const center = candidates[0];
-  const rawCenter = isWater(center.lat, center.lng) ? center : snapToWater(center.lat, center.lng);
-  // generate small synthetic track (same logic as lib/mock but inline to avoid circular dep)
-  const pts: TrackPoint[] = [];
-  let lat=rawCenter.lat, lng=rawCenter.lng;
-  for(let i=0;i<40;i++){
-    const t=(i/40)*90;
-    let nlat=lat + (Math.sin(i*0.5)*0.008 + (Math.random()-0.5)*0.004);
-    let nlng=lng + (Math.cos(i*0.7)*0.008 + (Math.random()-0.5)*0.004);
-    if(!isWater(nlat,nlng)){
-      const toward={ lat: lat + (rawCenter.lat-lat)*0.4, lng: lng + (rawCenter.lng-lng)*0.4 };
-      if(isWater(toward.lat,toward.lng)){ nlat=toward.lat; nlng=toward.lng; }
-      else { const s=snapToWater(nlat,nlng, rawCenter); nlat=s.lat; nlng=s.lng; }
-    }
-    lat=nlat; lng=nlng;
-    pts.push({ t, lat, lng, alt: center.alt ?? 75 });
-  }
-  return { track: pts, found: { lat: center.lat, lng: center.lng }, outsideSurveyArea: false, fixes: 1 };
+  /* One fix is one anchor; several fixes are several anchors, in file order,
+     at the coordinates the file gives. Nothing is moved and nothing is added.
+     The only invented quantity left is the SPACING when there is more than one
+     fix — XMP order is time order but carries no timestamps here — and the
+     caller is told so via `timesSynthesized` rather than left to assume. */
+  const spread = candidates.length > 1;
+  const track: TrackPoint[] = candidates.map((c,i)=> ({
+    t: spread ? (i/(candidates.length-1))*SYNTHETIC_SPREAD_S : 0,
+    lat: c.lat, lng: c.lng, alt: c.alt ?? 75,
+  }));
+  return {
+    track,
+    found: { lat: candidates[0].lat, lng: candidates[0].lng },
+    outsideSurveyArea: false,
+    fixes: candidates.length,
+    timesSynthesized: spread,
+  };
 }
 
 /**

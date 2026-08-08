@@ -14,8 +14,10 @@ export function mockDetections(track: TrackPoint[], footageId: string): Detectio
   let lat = center.lat + (rand()-0.5)*0.006;
   let lng = center.lng + (rand()-0.5)*0.006;
   if (!isWater(lat, lng)) {
+    // snapToWater gives up rather than inventing a point when no water is in
+    // reach — then the jittered centre stands as it is. Synthetic either way.
     const s = snapToWater(lat, lng, center);
-    lat = s.lat; lng = s.lng;
+    if (s) { lat = s.lat; lng = s.lng; }
   }
   const count = 2 + Math.floor(rand()*18) + Math.floor(rand()*7); // 2-26 whole-video count
   const confidence = 0.76 + rand()*0.18;
@@ -40,7 +42,7 @@ function hash(s: string): number {
 
 export function generateSeedTrack(center: {lat:number, lng:number}, durationSec: number, points: number = 50): TrackPoint[] {
   // ensure center is on water — snap if user gave land coordinate
-  const start = isWater(center.lat, center.lng) ? center : snapToWater(center.lat, center.lng);
+  const start = (isWater(center.lat, center.lng) ? center : snapToWater(center.lat, center.lng)) ?? center;
   const track: TrackPoint[] = [];
   let lat = start.lat;
   let lng = start.lng;
@@ -54,9 +56,9 @@ export function generateSeedTrack(center: {lat:number, lng:number}, durationSec:
       // try to stay, or snap toward start (which is water)
       const toward = { lat: lat + (start.lat - lat)*0.4, lng: lng + (start.lng - lng)*0.4 };
       if (isWater(toward.lat, toward.lng)) { nlat = toward.lat; nlng = toward.lng; }
-      else { // try snapped version near start
+      else { // try snapped version near start; null = no water in reach, keep the step
         const s = snapToWater(nlat, nlng, start);
-        nlat = s.lat; nlng = s.lng;
+        if (s) { nlat = s.lat; nlng = s.lng; }
       }
     }
     lat = nlat; lng = nlng;

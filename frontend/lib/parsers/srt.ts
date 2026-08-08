@@ -1,4 +1,5 @@
 import type { TrackPoint } from "../types";
+import type { I18nKey } from "../i18n";
 
 // DJI SRT formats vary. We support:
 // 1) Classic DJI: cue contains GPS( lat, lng, alt, ... ) or [latitude: xx] [longitude: xx] [rel_alt: xx]
@@ -66,13 +67,24 @@ export function parseSRT(content: string): TrackPoint[] {
   return track;
 }
 
-export function validateTrackInCaspian(track: TrackPoint[]): { valid: boolean; reason?: string } {
-  if (track.length === 0) return { valid: false, reason: "No GPS points found in SRT" };
+/**
+ * Why a track was rejected — as a dictionary key plus its variables, never as
+ * a finished sentence. The Dropzone prints this straight into the ingest log,
+ * so a hardcoded English `reason` landed in the middle of an otherwise Kazakh
+ * or Russian session. The parser states the fact; the UI states it in the
+ * operator's language.
+ */
+export type TrackValidation =
+  | { valid: true }
+  | { valid: false; key: I18nKey; vars?: Record<string, string | number> };
+
+export function validateTrackInCaspian(track: TrackPoint[]): TrackValidation {
+  if (track.length === 0) return { valid: false, key: "drop.srtNoPoints" };
   // Caspian bounds approx: lat 36-48, lng 46-55. Allow 10% margin for test data.
   const caspian = { latMin: 35, latMax: 49, lngMin: 45, lngMax: 56 };
   const inside = track.filter(p => p.lat >= caspian.latMin && p.lat <= caspian.latMax && p.lng >= caspian.lngMin && p.lng <= caspian.lngMax);
   if (inside.length < track.length * 0.3) {
-    return { valid: false, reason: `Only ${inside.length}/${track.length} points inside Caspian basin (35-49N,45-56E). Check lat/lng order.` };
+    return { valid: false, key: "drop.srtOutsideBasin", vars: { inside: inside.length, total: track.length } };
   }
   return { valid: true };
 }

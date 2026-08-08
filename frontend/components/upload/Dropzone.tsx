@@ -1,13 +1,13 @@
 "use client";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useFootageStore } from "@/store/useFootageStore";
 import { parseSRT, validateTrackInCaspian } from "@/lib/parsers/srt";
-import { parseJSONSidecar } from "@/lib/parsers/json";
-import { parseMP4Metadata } from "@/lib/parsers/mp4";
+import { parseJSONSidecar, trackToJSON } from "@/lib/parsers/json";
+import { parseMP4Metadata, type MP4Location } from "@/lib/parsers/mp4";
 import { uploadMedia, createJob, watchJob, pointsToDetections, framesUsed } from "@/lib/api";
 import { sortieAreaM2 } from "@/lib/analytics/area";
 import { toast } from "sonner";
-import { snapToWater, isWater } from "@/lib/caspian";
+import { isWater } from "@/lib/caspian";
 import type { Footage, TrackPoint } from "@/lib/types";
 import Icon from "@/components/ui/Icon";
 import { Button } from "@/components/ui/primitives";
@@ -38,6 +38,15 @@ function readVideoDuration(file: File): Promise<number | null> {
   });
 }
 
+/** The engine's caveats and the ones ingest already recorded are one list.
+ *  `undefined` still means "nobody reported anything" — an empty array is the
+ *  positive claim "clean run", and only the service is entitled to make it. */
+function mergeCaveats(own: string[] | undefined, engine: unknown): string[] | undefined {
+  const fromEngine = Array.isArray(engine) ? (engine as string[]) : null;
+  if (!own?.length) return fromEngine ?? undefined;
+  return fromEngine ? [...own, ...fromEngine] : own;
+}
+
 export default function Dropzone(){
   const { t, tp, lang } = useT();
   const [drag, setDrag] = useState(false);
@@ -49,8 +58,28 @@ export default function Dropzone(){
   const pinPoints = useFootageStore(s=>s.pinPoints);
   const setPinPoints = useFootageStore(s=>s.setPinPoints);
   const fileRef = useRef<HTMLInputElement>(null);
-  const [pendingVideo, setPendingVideo] = useState<{ file: File, url: string, name: string }|null>(null);
+  /* No `url` here. Four code paths minted an object URL for this state and not
+     one reader ever touched it — the confirm handler and the pending card use
+     `.file` and `.name` — so every held-back file leaked a blob for the life
+     of the tab. The Footage's `videoUrl` is a different thing: RightInspector
+     plays it, so that one is still minted (and revoked by the store). */
+  const [pendingVideo, setPendingVideo] = useState<{ file: File, name: string }|null>(null);
   const [loadingSample, setLoadingSample] = useState(false);
+  /* One ingest at a time. Nothing stopped a second drop (or a second click on
+     Confirm) from starting while a 2.5 MB metadata scan and an upload were
+     still in flight, and the same file went up twice as two separate runs. */
+  const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
+  const aliveRef = useRef(true);
+  useEffect(() => { aliveRef.current = true; return () => { aliveRef.current = false; }; }, []);
+
+  /* page.tsx unmounts this panel while a count started here keeps running to
+     completion — by design, the result belongs in the store, not in this
+     component. Writing progress into a component that is gone is not part of
+     that deal. (The EventSource behind watchJob outliving the unmount is the
+     other half of the leak; tearing that down needs an abort handle watchJob
+     does not expose yet.) */
+  const say = useCallback((msg: string) => { if (aliveRef.current) setLog(msg); }, []);
 
   /* The real count. Upload -> queue -> follow to completion -> swap the
      engine's result into the store. Runs detached from processFiles so a
@@ -68,7 +97,7 @@ export default function Dropzone(){
       let sc = sidecar;
       if (!sc && footage.track.length > 0) {
         sc = new File(
-          [JSON.stringify({ track: footage.track })],
+          [trackToJSON(footage.track)],
           "track.json",
           { type: "application/json" },
         );
@@ -77,7 +106,7 @@ export default function Dropzone(){
       const jobId = await createJob(up.id);
       const result = await watchJob(jobId, p => {
         const total = p.frames_total ?? 0;
-        setLog(`${footage.filename} · ${stageText(lang, p.stage)}${total ? ` · ${t("prog.frame", { done: p.frames_done ?? 0, total })}` : ""}`);
+        say(`${footage.filename} · ${stageText(lang, p.stage)}${total ? ` · ${t("prog.frame", { done: p.frames_done ?? 0, total })}` : ""}`);
       });
       const { placed, unplaced, pixels } = pointsToDetections(id, result.points ?? []);
       const best = result.count?.best ?? null;
@@ -98,12 +127,13 @@ export default function Dropzone(){
       completeFootage(id, {
         status: "ready", detections, band: result.count, unplaced,
         runId: result.run_id, mediaId: up.id, pixels,
-        /* A list the service actually sent, or nothing. `[]` renders as
-           "clean run - no caveats", and a run whose completeness was never
-           measured must not be certified clean here and then confess after an
-           F5, when hydrate() reads the same run and says so. Same rule on both
-           paths. */
-        caveats: Array.isArray(result.caveats) ? result.caveats : undefined,
+        /* A list the service actually sent, plus anything ingest already knew
+           (a track the water mask disagrees with). `undefined` still means
+           nothing was reported: `[]` renders as "clean run - no caveats", and
+           a run whose completeness was never measured must not be certified
+           clean here and then confess after an F5, when hydrate() reads the
+           same run and says so. Same rule on both paths. */
+        caveats: mergeCaveats(footage.caveats, result.caveats),
         gsdCmPx: up.gsd_cm_px ?? null,
         gsdSource: up.gsd_source ?? null,
         /* Per-FRAME footprint times the frames counted: a video's surveyed
@@ -116,16 +146,20 @@ export default function Dropzone(){
       const bandTxt = result.count && result.count.low != null && result.count.high != null && result.count.low !== result.count.high
         ? ` (${t("misc.range", { low: result.count.low, high: result.count.high })})` : "";
       toast.success(`${footage.filename}: ${best ?? "?"} ${tp(best ?? 0, "unit.seals")}${bandTxt}`);
-      setLog(`${footage.filename} · ${best ?? "?"} ${tp(best ?? 0, "insp.sealsCounted")}${unplaced ? ` · ${t("insp.withoutCoords", { n: unplaced })}` : ""}`);
+      say(`${footage.filename} · ${best ?? "?"} ${tp(best ?? 0, "insp.sealsCounted")}${unplaced ? ` · ${t("insp.withoutCoords", { n: unplaced })}` : ""}`);
     } catch (e: any) {
       const msg = String(e?.message ?? e);
       completeFootage(id, { status: "error", error: msg });
       toast.error(`${footage.filename}: ${msg}`);
-      setLog(`${footage.filename} · ${t("insp.countFailed")}: ${msg}`);
+      say(`${footage.filename} · ${t("insp.countFailed")}: ${msg}`);
     }
-  }, [completeFootage, t, tp, lang]);
+  }, [completeFootage, say, t, tp, lang]);
 
   const processFiles = useCallback(async (files: FileList | File[])=>{
+    if (busyRef.current) { say(t("drop.busy")); return; }
+    busyRef.current = true;
+    setBusy(true);
+    try {
     const arr = Array.from(files as FileList);
     // group by basename: video + sidecars
     const byBase = new Map<string, File[]>();
@@ -140,18 +174,49 @@ export default function Dropzone(){
       const image = group.find(f=> /\.(jpe?g|png|tiff?|webp)$/i.test(f.name));
       const srt = group.find(f=> /\.srt$/i.test(f.name));
       const json = group.find(f=> /\.json$/i.test(f.name));
-      const sidecarText = srt ? await srt.text() : json ? await json.text() : null;
+      /* This read sat outside every try in the loop. A sidecar the OS refuses
+         to hand over — removable media pulled between the drop and the read,
+         a revoked permission — threw NotReadableError out of processFiles,
+         killing the whole drop including the other files in it, and neither
+         call site caught it, so nothing was logged and nothing was shown. */
+      const sidecarFile = srt ?? json ?? null;
+      let sidecarText: string | null = null;
+      if (sidecarFile) {
+        try { sidecarText = await sidecarFile.text(); }
+        catch(e:any){ say(t("drop.sidecarError", { name: sidecarFile.name, msg: String(e?.message ?? e) })); continue; }
+      }
 
       let track: TrackPoint[] | null = null;
       let source: Footage["source"] = "manual";
       let parseInfo = "";
+      const caveats: string[] = [];
+
+      /* Probe the video's own metadata BEFORE choosing a branch. Deciding
+         first and reading later is what let a pin left armed from an earlier
+         file outrank the GPS the camera actually recorded: the pin branch came
+         first, and the video branch was the only caller of the parser, so the
+         telemetry was never even read. Probe, then choose — and keep the
+         choice a plain chain, because the confirm button re-enters this
+         function with the held file and a reordered else-if that never reaches
+         the pin branch would re-prompt forever. */
+      let probe: MP4Location | null = null;
+      let probeError: string | null = null;
+      if (video) {
+        say(t("drop.scanning", { name: video.name }));
+        try { probe = await parseMP4Metadata(video); }
+        catch(e:any){ probeError = String(e?.message ?? e); }
+      }
 
       if (srt && sidecarText) {
-        try { track = parseSRT(sidecarText); source="srt"; parseInfo=`${track.length} ${tp(track.length, "misc.trackPoints")}`; const v=validateTrackInCaspian(track); if(!v.valid) parseInfo+=` · ${v.reason}`; }
-        catch(e:any){ setLog(t("drop.srtError", { base, msg: e.message })); continue; }
+        try {
+          track = parseSRT(sidecarText); source="srt"; parseInfo=`${track.length} ${tp(track.length, "misc.trackPoints")}`;
+          const v = validateTrackInCaspian(track);
+          if(!v.valid) parseInfo += ` · ${t(v.key, v.vars)}`;
+        }
+        catch(e:any){ say(t("drop.srtError", { base, msg: e.message })); continue; }
       } else if (json && sidecarText) {
         try { track = parseJSONSidecar(sidecarText); source="json"; parseInfo=`${track.length} ${tp(track.length, "misc.trackPoints")}`; }
-        catch(e:any){ setLog(t("drop.jsonError", { msg: e.message })); continue; }
+        catch(e:any){ say(t("drop.jsonError", { msg: e.message })); continue; }
       } else if (image && pinPoints.length >= 1) {
         // A still has no flight track. One pinned point is its location; the
         // whole count aggregates onto that marker, exactly as honest as the
@@ -167,10 +232,24 @@ export default function Dropzone(){
         // completes. Same pending mechanism the GPS-less video path uses;
         // confirm re-runs processFiles with the held file, and the branch
         // above accepts it off the pinned point.
-        setPendingVideo({ file: image, url: URL.createObjectURL(image), name: image.name });
+        setPendingVideo({ file: image, name: image.name });
         setPinMode(true); setPinPoints([]);
-        setLog(t("drop.imageNoLocation", { name: image.name }));
+        say(t("drop.imageNoLocation", { name: image.name }));
         continue;
+      } else if (probe?.track && probe.track.length > 0) {
+        // The camera's own record beats a hand-dropped point, always.
+        track = probe.track;
+        source = "injected";
+        const at = probe.found ? ` · ${probe.found.lat.toFixed(4)}, ${probe.found.lng.toFixed(4)}` : "";
+        parseInfo = `${t("drop.gpsFromVideo")}${at} · ${probe.fixes} ${tp(probe.fixes, "misc.fixes")}`;
+        // The fixes are measured; when there are several, their SPACING in
+        // time is not. Say which part of the track is a reading.
+        if (probe.timesSynthesized) parseInfo += ` · ${t("drop.evenSpacing")}`;
+        if (pinPoints.length >= 1) {
+          // Don't leave the pin armed to be silently reused on the next file.
+          parseInfo += ` · ${t("drop.gpsOverridesPin")}`;
+          setPinPoints([]); setPinMode(false);
+        }
       } else if (pinMode && pinPoints.length >= 1) {
         // One point, not a drawn path. A hand-drawn ring pretending to be a
         // flight track gave every frame a different fabricated anchor, and the
@@ -184,43 +263,40 @@ export default function Dropzone(){
         parseInfo = t("drop.pinnedCentre");
         setPinPoints([]); setPinMode(false);
       } else if (video) {
-        // try MP4 internal metadata first (location from video)
-        setLog(t("drop.scanning", { name: video.name }));
-        try{
-          const res = await parseMP4Metadata(video);
-          if(res.track && res.track.length>0){
-            track = res.track;
-            source="injected";
-            const at = res.found ? ` · ${res.found.lat.toFixed(4)}, ${res.found.lng.toFixed(4)}` : "";
-            parseInfo = `${t("drop.gpsFromVideo")}${at} · ${track.length} ${tp(track.length, "misc.trackPoints")}`;
-          } else if(res.outsideSurveyArea && res.found){
-            // The video plainly has GPS — say where, rather than claiming none.
-            setPendingVideo({ file: video, url: URL.createObjectURL(video), name: video.name });
-            setLog(t("drop.gpsOutside", { name: video.name, lat: res.found.lat.toFixed(4), lng: res.found.lng.toFixed(4) }));
-            continue;
-          } else {
-            setPendingVideo({ file: video, url: URL.createObjectURL(video), name: video.name });
-            setPinMode(true); setPinPoints([]);
-            setLog(t("drop.noGps", { name: video.name }));
-            continue;
-          }
-        }catch(e:any){
-          setPendingVideo({ file: video, url: URL.createObjectURL(video), name: video.name });
-          setLog(t("drop.readError", { name: video.name, msg: e.message }));
-          continue;
+        // No usable GPS in the file: hold it and ask for a pin. Confirm
+        // re-enters here, the probe comes back empty again, and the pin branch
+        // above catches it — the round-trip terminates.
+        setPendingVideo({ file: video, name: video.name });
+        if (probeError) {
+          say(t("drop.readError", { name: video.name, msg: probeError }));
+        } else if (probe?.outsideSurveyArea && probe.found) {
+          // The video plainly has GPS — say where, rather than claiming none.
+          say(t("drop.gpsOutside", { name: video.name, lat: probe.found.lat.toFixed(4), lng: probe.found.lng.toFixed(4) }));
+        } else {
+          setPinMode(true); setPinPoints([]);
+          say(t("drop.noGps", { name: video.name }));
         }
+        continue;
       } else {
-        setLog(t("drop.skipped", { base }));
+        say(t("drop.skipped", { base }));
         continue;
       }
 
-      if (!track || track.length===0) { setLog(t("drop.noTrack", { base })); continue; }
+      if (!track || track.length===0) { say(t("drop.noTrack", { base })); continue; }
 
-      // sanitize: ensure track is on water — snap any land points west into Caspian (real coords must match map)
-      let offWater = track.filter(p=> !isWater(p.lat, p.lng)).length;
+      /* The water mask disagreeing with a measured coordinate is a fact about
+         the mask, not a licence to move the coordinate. Every rejected point
+         used to be snapped — up to ~33 km, at random, into the very track.json
+         the service georeferences each animal against, so the invention
+         propagated to per-animal positions, the site clustering, the GeoJSON
+         export and the PDF's five decimals. Now the disagreement is stated and
+         the measurement stands. (The mask calls the Aktau shoreline land; a
+         real sortie launches from there.) */
+      const offWater = track.filter(p=> !isWater(p.lat, p.lng)).length;
       if (offWater > 0) {
-        track = track.map(p=> isWater(p.lat, p.lng) ? p : { ...snapToWater(p.lat, p.lng), t:p.t, alt:p.alt });
-        parseInfo += ` · ${t("drop.snapped", { n: offWater })}`;
+        const note = t("drop.offWater", { n: offWater, total: track.length });
+        parseInfo += ` · ${note}`;
+        caveats.push(note);
       }
 
       // Prefer the video's own duration. Falling back to the track's time span
@@ -250,6 +326,9 @@ export default function Dropzone(){
         status: "processing",
         source,
         videoUrl: video ? URL.createObjectURL(video) : undefined,
+        // What ingest itself knows to doubt. countForReal merges the engine's
+        // own caveats on top rather than replacing this.
+        caveats: caveats.length ? caveats : undefined,
       };
       addFootage(footage);
       setPendingVideo(null);
@@ -258,64 +337,90 @@ export default function Dropzone(){
         // A sidecar with no media: the track can be drawn, but there is
         // nothing to count. Say so instead of inventing numbers for it.
         completeFootage(id, { status: "error", error: t("drop.trackOnlyError") });
-        setLog(t("drop.trackOnly", { base }));
+        say(t("drop.trackOnly", { base }));
         continue;
       }
 
-      setLog(`${footage.filename} · ${parseInfo} · ${t("drop.counting")}`);
-      countForReal(id, media, srt ?? json ?? null, footage);
+      say(`${footage.filename} · ${parseInfo} · ${t("drop.counting")}`);
+      countForReal(id, media, sidecarFile, footage);
     }
-  },[addFootage, completeFootage, countForReal, pinMode, pinPoints, setPinMode, setPinPoints, t, tp]);
+    } finally {
+      busyRef.current = false;
+      if (aliveRef.current) setBusy(false);
+    }
+  },[addFootage, completeFootage, countForReal, pinMode, pinPoints, say, setPinMode, setPinPoints, t, tp]);
+
+  /* Every entry point funnels through here so an unexpected throw reaches the
+     operator instead of the console. processFiles already handles the failures
+     it expects; this is for the ones it does not. */
+  const runIngest = useCallback((files: FileList | File[]) => {
+    processFiles(files).catch((e: any) => {
+      const msg = String(e?.message ?? e);
+      say(t("drop.ingestError", { msg }));
+      toast.error(t("drop.ingestError", { msg }));
+    });
+  },[processFiles, say, t]);
 
   const onDrop = useCallback((e:React.DragEvent)=>{
     e.preventDefault(); setDrag(false);
-    if(e.dataTransfer.files) processFiles(e.dataTransfer.files);
-  },[processFiles]);
+    if(e.dataTransfer.files?.length) runIngest(e.dataTransfer.files);
+  },[runIngest]);
 
   /** Pull the bundled sample clip and run it through the normal ingest path —
    *  same code as a dropped file, so this exercises the real parser rather
    *  than a shortcut. */
   const loadSampleClip = useCallback(async ()=>{
     setLoadingSample(true);
-    setLog(t("drop.sampleLoading"));
+    say(t("drop.sampleLoading"));
     try {
       const res = await fetch(SAMPLE_CLIP.url);
       if(!res.ok) throw new Error(`${res.status}`);
       const blob = await res.blob();
       await processFiles([new File([blob], SAMPLE_CLIP.name, { type: "video/mp4" })]);
     } catch(e:any){
-      setLog(t("drop.sampleError", { msg: e.message, url: SAMPLE_CLIP.url }));
+      say(t("drop.sampleError", { msg: e.message, url: SAMPLE_CLIP.url }));
     } finally {
-      setLoadingSample(false);
+      if (aliveRef.current) setLoadingSample(false);
     }
-  },[processFiles, t]);
+  },[processFiles, say, t]);
 
   const onInput = useCallback((e:React.ChangeEvent<HTMLInputElement>)=>{
-    if(e.target.files) processFiles(e.target.files);
-  },[processFiles]);
+    if(e.target.files?.length) runIngest(e.target.files);
+    // Clear the input, or picking the same file twice in a row fires no change
+    // event at all and the second attempt looks like the app ignored it.
+    e.target.value = "";
+  },[runIngest]);
 
   return (
     <div className="space-y-2">
+      {/* A click target that the keyboard can also reach: this is the primary
+          action of the panel and it was a bare div. */}
       <div
-        onDragOver={e=>{e.preventDefault(); setDrag(true);}}
+        role="button"
+        tabIndex={busy ? -1 : 0}
+        aria-label={t("drop.title")}
+        aria-busy={busy}
+        aria-disabled={busy}
+        onDragOver={e=>{e.preventDefault(); if(!busy) setDrag(true);}}
         onDragLeave={()=> setDrag(false)}
         onDrop={onDrop}
-        onClick={()=> fileRef.current?.click()}
-        className={`rounded border border-dashed px-3 py-5 cursor-pointer transition-colors text-center ${drag ? "border-accent bg-accent-soft" : "border-line hover:border-ink3 hover:bg-surface2"}`}
+        onClick={()=> { if(!busyRef.current) fileRef.current?.click(); }}
+        onKeyDown={e=>{ if(!busy && (e.key === "Enter" || e.key === " ")){ e.preventDefault(); fileRef.current?.click(); } }}
+        className={`rounded border border-dashed px-3 py-5 transition-colors text-center ${busy ? "cursor-progress opacity-60" : "cursor-pointer"} ${drag ? "border-accent bg-accent-soft" : "border-line hover:border-ink3 hover:bg-surface2"}`}
       >
         <Icon name="upload" size={16} className="text-ink3 mx-auto" />
         <div className="text-sm text-ink mt-2">{t("drop.title")}</div>
         <div className="text-xs text-ink3 mt-1 leading-relaxed">
           {t("drop.sub")}
         </div>
-        <input ref={fileRef} type="file" multiple accept=".mp4,.mov,.avi,.mkv,.webm,.jpg,.jpeg,.png,.tif,.tiff,.webp,.srt,.json" onChange={onInput} className="hidden" />
+        <input ref={fileRef} type="file" multiple disabled={busy} accept=".mp4,.mov,.avi,.mkv,.webm,.jpg,.jpeg,.png,.tif,.tiff,.webp,.srt,.json" onChange={onInput} onClick={e=> e.stopPropagation()} className="hidden" />
       </div>
 
       {/* Nothing to source, nothing to install — a real GPS-tagged clip shipped
           with the app, so the ingest path can be tried on a bare machine. */}
       <button
         onClick={loadSampleClip}
-        disabled={loadingSample}
+        disabled={loadingSample || busy}
         aria-label={t("drop.sampleAria")}
         className="w-full flex items-center gap-2 px-2.5 py-2 rounded border border-line bg-surface2 text-left hover:border-ink3 transition-colors disabled:opacity-60 disabled:pointer-events-none"
       >
@@ -335,7 +440,7 @@ export default function Dropzone(){
           variant={pinMode ? "primary" : "default"}
           icon="pin"
           full={!pinMode}
-          onClick={()=> { const v=!pinMode; setPinMode(v); setLog(v ? t("drop.pinInstruction") : ""); }}
+          onClick={()=> { const v=!pinMode; setPinMode(v); say(v ? t("drop.pinInstruction") : ""); }}
         >
           {pinMode ? t("drop.pinning") : t("drop.pinManually")}
         </Button>
@@ -345,8 +450,15 @@ export default function Dropzone(){
             <Button variant="ghost" onClick={()=> setPinPoints([])}>{t("btn.clear")}</Button>
             <Button
               variant={pendingVideo && pinPoints.length >= 1 ? "primary" : "default"}
-              disabled={!pendingVideo || pinPoints.length < 1}
-              onClick={()=> { if(pendingVideo) processFiles([pendingVideo.file]); }}
+              disabled={busy || !pendingVideo || pinPoints.length < 1}
+              onClick={()=> {
+                const pv = pendingVideo;
+                if(!pv || busyRef.current) return;
+                // Drop the held file synchronously: a second click landing
+                // before the re-render was enough to upload it twice.
+                setPendingVideo(null);
+                runIngest([pv.file]);
+              }}
             >
               {t("btn.confirm")}
             </Button>

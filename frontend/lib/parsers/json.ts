@@ -50,6 +50,12 @@ export function parseJSONSidecar(content: string): TrackPoint[] {
   return track;
 }
 
+/** The track as the JSON sidecar this module's own parser reads back, and as
+ *  the ingest path uploads it for the service to georeference against. One
+ *  definition rather than an inlined `JSON.stringify` at the call site: the
+ *  writer and the reader of this format belong in the same file. Compact on
+ *  purpose — a season sortie carries thousands of points and indentation is
+ *  pure upload weight. */
 export function trackToJSON(track: TrackPoint[]): string {
-  return JSON.stringify({ track }, null, 2);
+  return JSON.stringify({ track });
 }

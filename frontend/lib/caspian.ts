@@ -50,7 +50,24 @@ function pointInPolygon(pt: [number, number], poly: [number, number][]): boolean
   return inside;
 }
 
-export function snapToWater(lat: number, lng: number, seaCenter: { lat: number; lng: number } = { lat: 42.8, lng: 50.1 }): { lat: number; lng: number } {
+/**
+ * Nearest water point to a coordinate the mask rejects — or `null` when there
+ * is none within reach.
+ *
+ * SYNTHETIC DATA ONLY. This must never touch a measured coordinate: moving a
+ * measurement is fabricating one, and the mask is an approximation (it calls
+ * the Aktau shoreline land, which is where a real sortie launches from). The
+ * ingest path used to run every rejected track point through here before
+ * packing that same track into the sidecar the service georeferences animals
+ * against — so a mask disagreement propagated into per-animal positions, site
+ * clustering, the GeoJSON export and the PDF's five decimals. It no longer
+ * does; ingest states the disagreement and keeps the measurement.
+ *
+ * The old deep fallback returned `43.1 ± 0.3, 50.15 ± 0.3` — up to ~33 km of
+ * invented offset, a different answer on every run. A caller that cannot find
+ * water now gets `null` and has to decide honestly what that means.
+ */
+export function snapToWater(lat: number, lng: number, seaCenter: { lat: number; lng: number } = { lat: 42.8, lng: 50.1 }): { lat: number; lng: number } | null {
   if (isWater(lat, lng)) return { lat, lng };
   // bias strongly toward central Caspian, not just coast
   for (let r = 0.04; r < 0.8; r += 0.06) {
@@ -62,6 +79,5 @@ export function snapToWater(lat: number, lng: number, seaCenter: { lat: number; 
     candidates.push({ lat: lat + (seaCenter.lat - lat) * 0.5, lng: lng + (seaCenter.lng - lng) * 0.5 });
     for (const c of candidates) if (isWater(c.lat, c.lng)) return c;
   }
-  // deep fallback: central sea + small jitter (guaranteed water)
-  return { lat: 43.1 + (Math.random()-0.5)*0.6, lng: 50.15 + (Math.random()-0.5)*0.6 };
+  return null;
 }
