@@ -154,3 +154,45 @@ jobs:
               sys.exit(1)
           print(f"railway.json ok (healthcheck {hc}, volume /data)")
           PY
+
+  # The platform (frontend/) grew its own guard rails after the slop purge:
+  # a typed trilingual dictionary, pure analytics modules with selftests, and
+  # the GIS/PDF export builders. The Docker build only proves `next build`
+  # compiles; everything below would fail silently without this job.
+  frontend:
+    name: Platform gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Types compile
+        run: npx tsc --noEmit
+
+      # Fails on missing keys, cross-language drift, placeholder mismatches,
+      # and keys referenced in code but absent from the dictionary.
+      - name: Trilingual dictionary parity (kk / ru / en)
+        run: node scripts/check-i18n.mjs
+
+      # Hand-computed invariants for every module that produces a number the
+      # UI shows: colony hulls, footprint area, spatial group sizes,
+      # repeat-survey deltas, and the GeoJSON/CSV/PDF builders.
+      - name: Self-tests
+        run: |
+          node lib/colony.selftest.mjs
+          node lib/analytics/analytics.selftest.mjs
+          node lib/export/animals.selftest.mjs
+          node lib/export/pdf.selftest.mjs
