@@ -97,8 +97,10 @@ export default function Page(){
 
             {/* Running total — one line, top-right, out of the map's way */}
             <div className="absolute top-3 right-3 z-30 flex items-center gap-2">
+              {/* symmetric padding, not h-7: items-baseline packs a fixed-height
+                  line to the top, so the text sat above centre */}
               {!empty && (
-                <div className="flex items-baseline gap-1.5 bg-surface border border-line rounded h-7 px-2.5 shadow-pop">
+                <div className="flex items-baseline gap-1.5 bg-surface border border-line rounded px-2.5 py-[3px] shadow-pop">
                   <span className="text-sm tnum text-ink">{totalSeals}</span>
                   <span className="text-2xs text-ink3">{tp(totalSeals, "unit.seals")}</span>
                   <span className="text-line px-0.5">·</span>
