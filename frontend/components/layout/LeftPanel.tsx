@@ -4,11 +4,13 @@ import { useFootageStore } from "@/store/useFootageStore";
 import { Button, Field, Stat, SectionHead, Pill } from "@/components/ui/primitives";
 import Icon from "@/components/ui/Icon";
 import { useT } from "@/lib/i18n";
+import { formatArea, totalAreaM2 } from "@/lib/analytics/area";
+import { countOf } from "@/lib/analytics/count";
+import { csvCell, downloadText } from "@/lib/export/animals";
 
 export default function LeftPanel(){
-  const { t, tp } = useT();
+  const { t, tp, lang } = useT();
   const footages = useFootageStore(s=>s.footages);
-  const detections = useFootageStore(s=>s.detections);
   const selectedId = useFootageStore(s=>s.selectedId);
   const select = useFootageStore(s=>s.select);
   const remove = useFootageStore(s=>s.removeFootage);
@@ -27,17 +29,53 @@ export default function LeftPanel(){
 
   const filtered = useMemo(()=>{
     const needle=q.toLowerCase();
-    return filteredByTime.filter(f=> !needle || f.filename.toLowerCase().includes(needle) || f.region.toLowerCase().includes(needle) || f.id.toLowerCase().includes(needle));
+    return filteredByTime.filter(f=> !needle || f.filename.toLowerCase().includes(needle) || f.id.toLowerCase().includes(needle));
   },[filteredByTime,q]);
 
-  const totalSeals = detections.filter(d=> filteredByTime.some(f=>f.id===d.footageId)).reduce((s,d)=>s+d.count,0);
-  const coverage = filteredByTime.length ? Math.min(100, Math.round(filteredByTime.length*6.2)) : 0;
+  /* countOf(), the one definition of "what did this sortie count" — so this
+     headline, the analytics panel, the report and this file's own CSV cannot
+     print four different numbers for one survey. It was summing every
+     detection including the ones a reviewer had rejected, while the CSV two
+     functions below already excluded them. */
+  const totalSeals = useMemo(
+    ()=> filteredByTime.reduce((s,f)=> s+countOf(f), 0),
+    [filteredByTime],
+  );
 
+  /* Surveyed area — what the sorties actually photographed — replaces the old
+     "coverage" stat, which was sorties × 6.2%, i.e. 17 flights = 100% of the
+     Caspian. The shared helper, so the number and its precision match the
+     analytics panel and the report exactly; sorties with no GSD are unknown,
+     not zero, and the count of them is printed rather than swallowed. */
+  const area = useMemo(()=> totalAreaM2(filteredByTime), [filteredByTime]);
+  const areaText = area.known ? `${formatArea(area.m2, lang)} ${t("unit.ha")}` : "—";
+  const areaSub = [
+    area.unknown ? t("dash.noGsd", { n: area.unknown }) : null,
+    area.assumed ? t("dash.assumedGsd", { n: area.assumed }) : null,
+  ].filter(Boolean).join(" · ") || undefined;
+
+  /* Per-sortie summary. Every column is measured: the band with its basis, the
+     reviewed share, the photographed area. Filenames go through csvCell —
+     a comma in a filename used to split a row into nonsense. */
   const exportCSV = ()=>{
-    const rows = ["id,filename,region,uploadedAt,centerLat,centerLng,trackPts,detections,seals,source"];
-    for(const f of filtered){ const seals=f.detections.reduce((s,d)=>s+d.count,0); rows.push(`${f.id},${f.filename},${f.region},${f.uploadedAt},${f.center.lat},${f.center.lng},${f.track.length},${f.detections.length},${seals},${f.source}`); }
-    const blob=new Blob([rows.join("\n")],{type:"text/csv"}); const url=URL.createObjectURL(blob);
-    const a=document.createElement("a"); a.href=url; a.download=`sealv-footage-${new Date().toISOString().slice(0,10)}.csv`; a.click(); URL.revokeObjectURL(url);
+    const rows = ["id,filename,uploadedAt,centerLat,centerLng,trackPts,detections,seals,low,best,high,basis,validated,auto,unplaced,areaM2,gsdSource,source"];
+    for(const f of filtered){
+      const area = f.areaM2;
+      rows.push([
+        f.id, csvCell(f.filename), f.uploadedAt, f.center.lat, f.center.lng,
+        f.track.length, f.detections.length, countOf(f),
+        f.band?.low ?? "", f.band?.best ?? "", f.band?.high ?? "", csvCell(f.band?.basis ?? ""),
+        f.detections.filter(d=>d.status==="validated").length,
+        f.detections.filter(d=>d.status==="auto").length,
+        f.unplaced ?? 0,
+        typeof area==="number" && Number.isFinite(area) ? area : "",
+        // An assumed scale next to the area it produced: a reader outside this
+        // app has no other way to tell a measured hectare from a guessed one.
+        csvCell(f.gsdSource ?? ""),
+        f.source,
+      ].join(","));
+    }
+    downloadText(`sealv-footage-${new Date().toISOString().slice(0,10)}.csv`, "text/csv", rows.join("\n"));
   };
 
   return (
@@ -46,7 +84,11 @@ export default function LeftPanel(){
       <div className="px-4 pt-4 pb-3.5 flex gap-6">
         <Stat label={t("stat.seals")} value={totalSeals} />
         <Stat label={t("stat.sorties")} value={filteredByTime.length} />
-        <Stat label={t("stat.coverage")} value={`${coverage}%`} />
+        {/* stat.surveyed, not the analytics panel's longer stat.area: three
+            figures share 340px here and a truncated label helps nobody. The
+            sub-line is not optional: a sum over the sorties that HAVE a scale,
+            printed bare, reads as the whole survey. */}
+        <Stat label={t("stat.surveyed")} value={areaText} sub={areaSub} />
       </div>
 
       <div className="px-3 pb-3 space-y-2 border-b border-line">
@@ -70,7 +112,7 @@ export default function LeftPanel(){
         />
 
         {filtered.map(f=>{
-          const sealCount = f.detections.reduce((s,d)=>s+d.count,0);
+          const sealCount = countOf(f);
           const active = f.id===selectedId;
           return (
             <div
@@ -98,9 +140,12 @@ export default function LeftPanel(){
                 </button>
               </div>
               <div className="text-xs text-ink3 mt-1 flex items-center gap-1.5">
-                <span>{f.region}</span>
-                <span className="text-line">·</span>
-                <span className="tnum">{f.duration}{t("unit.s")}</span>
+                {/* The centre, not a latitude bucket named after a region. */}
+                <span className="tnum">{f.center.lat.toFixed(2)}, {f.center.lng.toFixed(2)}</span>
+                {f.duration>0 && <>
+                  <span className="text-line">·</span>
+                  <span className="tnum">{f.duration}{t("unit.s")}</span>
+                </>}
                 <span className="text-line">·</span>
                 <span className="tnum">{f.track.length} {tp(f.track.length, "unit.points")}</span>
                 <span className="text-line">·</span>
