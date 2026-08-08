@@ -16,7 +16,7 @@
  * inspector draws no range strip over it.
  */
 import { useEffect, useMemo, useState } from "react";
-import { fetchSites, OPERATOR_MAX, NOTES_MAX, type SiteOut } from "@/lib/api";
+import { fetchSites, METHOD_MAX, OPERATOR_MAX, NOTES_MAX, type SiteOut } from "@/lib/api";
 import { getOperator } from "@/lib/identity";
 import { useT } from "@/lib/i18n";
 import { useFootageStore } from "@/store/useFootageStore";
@@ -116,7 +116,10 @@ export default function ManualCount({
       site_id: siteId || null,
       operator: operator.trim().slice(0, OPERATOR_MAX) || null,
       notes: note.trim().slice(0, NOTES_MAX) || null,
-      method: method.trim().slice(0, 200) || null,
+      /* METHOD_MAX, not 200: the service caps `method` at 120 and a
+         121-character entry 400d behind a generic failure toast. The
+         input below stops at the same number. */
+      method: method.trim().slice(0, METHOD_MAX) || null,
     });
     setBusy(false);
     if (ok) onOpenChange(false);
@@ -212,7 +215,7 @@ export default function ManualCount({
             <input
               value={method}
               onChange={(e) => setMethod(e.target.value)}
-              maxLength={200}
+              maxLength={METHOD_MAX}
               placeholder={t("rec.manual.methodPlaceholder")}
               className={INPUT}
             />

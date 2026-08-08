@@ -7,6 +7,7 @@ import { countOf } from "@/lib/analytics/count";
 import { footagesInRange, detectionsFor } from "@/lib/analytics/brush";
 import type { Detection } from "@/lib/types";
 import { useT } from "@/lib/i18n";
+import { parseLatLng } from "@/lib/parsers/latlng";
 
 // Caspian bounds
 const CASPIAN_BOUNDS: [[number, number],[number,number]] = [[46,36],[55,48]];
@@ -149,6 +150,10 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
   const setLayer = useFootageStore(s=>s.setLayer);
   const pinMode = useFootageStore(s=>s.pinMode);
   const pinPoints = useFootageStore(s=>s.pinPoints);
+  /* How the current pin arrived — a click or a typed coordinate. The
+     readout states a different precision for each, because the store
+     rounds one of them and keeps the other verbatim. */
+  const pinEntry = useIngestStore(s=>s.pinEntry);
   const setPinPoints = useFootageStore(s=>s.setPinPoints);
   /* Depend on the two booleans, not on the layerState object: setLayer hands
      back a fresh object every toggle, so an effect keyed on the object re-ran
@@ -687,6 +692,7 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
           <PinReadout
             value={pinPoints.length ? { lat: pinPoints[0].lat, lng: pinPoints[0].lng } : null}
             zoom={zoomNow}
+            entry={pinEntry}
             onChange={(p)=>{
               setPinPoints([{ t: 0, lat: p.lat, lng: p.lng }]);
               try { useIngestStore.getState().notePin("typed", zoomNow); } catch {}
@@ -748,28 +754,36 @@ function sameTracks(a:any[], b:any[]){
 export function PinReadout({
   value,
   zoom,
+  entry,
   onChange,
 }: {
   value: { lat: number; lng: number } | null;
   zoom: number | null;
+  /** How the current value arrived. A map click is rounded to three decimals
+   *  on the way into the store; a typed coordinate is kept exactly as typed.
+   *  The readout has to say which, because the two have different precision
+   *  and the label used to claim the click's for both. */
+  entry?: "click" | "typed" | null;
   onChange: (p: { lat: number; lng: number }) => void;
 }) {
   const { t } = useT();
   const [text, setText] = useState("");
   const [bad, setBad] = useState(false);
+  const typed = entry === "typed";
 
   const apply = () => {
-    // "43.65, 51.18" — comma, semicolon or space, decimal point or comma.
-    const m = text.trim().replace(/,(\d)/g, ".$1").match(/^(-?\d+(?:\.\d+)?)[\s,;]+(-?\d+(?:\.\d+)?)$/);
-    const lat = m ? Number(m[1]) : NaN;
-    const lng = m ? Number(m[2]) : NaN;
-    if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+    /* One shared parser, and a pure one. Inline here it rejected the most
+       common paste in the world — "43.65,51.18", straight out of Google Maps —
+       because it normalised decimal commas before it split on the separator.
+       lib/parsers/latlng.ts has that case in its selftest now. */
+    const p = parseLatLng(text);
+    if (!p) {
       setBad(true);
       return;
     }
     setBad(false);
     setText("");
-    onChange({ lat, lng });
+    onChange(p);
   };
 
   return (
@@ -777,13 +791,27 @@ export function PinReadout({
       <div className="text-2xs text-ink3">{value ? t("map.anchorSet") : t("map.clickCentre")}</div>
       {value && (
         <div className="text-xs text-ink tnum font-mono mt-0.5">
-          {value.lat.toFixed(3)}, {value.lng.toFixed(3)}
+          {/* Shown at the precision it is STORED at. A click is rounded to
+              three decimals before it reaches the store, so printing three is
+              the whole value; a typed coordinate is kept verbatim, and
+              trimming it here displayed 43.651 for a 43.6512345 that then went
+              into the GeoJSON, the CSV and the report at full length. */}
+          {typed
+            ? `${value.lat}, ${value.lng}`
+            : `${value.lat.toFixed(3)}, ${value.lng.toFixed(3)}`}
         </div>
       )}
-      {/* The precision claim, out loud. Three decimals is about 110 m; the
-          zoom says how much of that the gesture could actually see. */}
+      {/* The precision claim, out loud, and only the one that is true of this
+          value. A map click is three decimals — about 110 m — and the zoom says
+          how much of that the gesture could actually see. A typed coordinate is
+          as precise as it was typed, and describing it as 3-decimal was the
+          label contradicting the data underneath it. */}
       <div className="text-2xs text-ink3 mt-0.5 leading-tight">
-        {zoom != null ? t("map.pinPrecisionZoom", { z: zoom.toFixed(1) }) : t("map.pinPrecision")}
+        {typed
+          ? t("map.pinPrecisionTyped")
+          : zoom != null
+            ? t("map.pinPrecisionZoom", { z: zoom.toFixed(1) })
+            : t("map.pinPrecision")}
       </div>
       <div className="flex items-center gap-1 mt-1">
         <input

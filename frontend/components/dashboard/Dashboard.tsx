@@ -392,12 +392,20 @@ export default function Dashboard({ onClose }: { onClose?: ()=>void }){
             : review.reviewable===0
               ? <p className="text-sm text-ink3 mt-2.5">{t("dash.onlyUnreviewable", { n: review.unreviewable })}</p>
               : <>
+                  {/* The bar is progress through the work, so its numerator is
+                      rulings of either kind. The split underneath is what the
+                      rulings were — a season where every animal was rejected is
+                      fully reviewed and found nothing, and those are two facts
+                      that must not be collapsed into one share. */}
                   <p className="text-sm text-ink2 mt-2.5">
-                    {t("dash.verifiedOf", { n: review.verified, r: review.reviewable, pct: reviewPct })}
+                    {t("dash.verifiedOf", { n: review.ruled, r: review.reviewable, pct: reviewPct })}
                   </p>
                   <div className="h-1 bg-line-soft rounded-full overflow-hidden mt-2">
                     <div className="h-full bg-ink2 rounded-full" style={{ width:`${reviewPct}%` }} />
                   </div>
+                  <p className="text-2xs text-ink3 mt-1.5 leading-relaxed">
+                    {t("dash.ruledSplit", { v: review.verified, x: review.rejected })}
+                  </p>
                   {review.unreviewable>0 && (
                     <p className="text-2xs text-ink3 mt-1.5 leading-relaxed">
                       {t("dash.plusUnreviewable", { n: review.unreviewable })}
@@ -425,7 +433,7 @@ export default function Dashboard({ onClose }: { onClose?: ()=>void }){
               ? t("dash.notesEmpty")
               : <>
                   {areaText ? t("dash.notesArea", { a: areaText }) : t("dash.notesNoArea")}
-                  {review.reviewable>0 && <> {t("dash.notesVerifiedPct", { n: review.verified, total: review.reviewable, pct: reviewPct })}</>}
+                  {review.reviewable>0 && <> {t("dash.notesVerifiedPct", { n: review.ruled, total: review.reviewable, pct: reviewPct })}</>}
                   {review.unreviewable>0 && <> {t("dash.notesUnreviewable", { n: review.unreviewable })}</>}
                   {/* Named by its file, not by an invented region. */}
                   {largest && <> {t("dash.notesLargestSortie", { x: countOf(largest), sortie: largest.filename })}</>}

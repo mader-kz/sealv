@@ -11,6 +11,7 @@ import { seasonEstimate } from "@/lib/analytics/estimate";
 import { hasResult, isPlaced } from "@/lib/analytics/surveys";
 import { reviewStats } from "@/lib/analytics/review";
 import { csvCell, downloadText } from "@/lib/export/animals";
+import { REASON_MAX } from "@/lib/api";
 import ManualCount from "@/components/record/ManualCount";
 
 /* Nominal sortie row height, px. Corrected from a real measurement on the
@@ -347,6 +348,17 @@ export default function LeftPanel(){
                   {title}
                 </span>
                 {f.source==="test" && <Pill>{t("pill.test")}</Pill>}
+                {/* One frame of a clip, not a photograph. It survives a reload
+                    because the archive stores the clip and the second, so the
+                    label is a fact about the row rather than a leftover from
+                    the session that made it. */}
+                {f.quickCount && (
+                  <Pill>
+                    <span title={t("ingest.quickFrom", { name: f.quickCount.fromVideo, s: f.quickCount.atSeconds })}>
+                      {t("pill.quick")}
+                    </span>
+                  </Pill>
+                )}
                 {isManual && <Pill tone="accent">{t("rec.manual.pill")}</Pill>}
                 {f.retiredAt && <Pill>{t("rec.retire.pill")}</Pill>}
                 <span className="flex-1" />
@@ -394,7 +406,7 @@ export default function LeftPanel(){
                   <input
                     value={retireReason}
                     onChange={(e)=> setRetireReason(e.target.value)}
-                    maxLength={200}
+                    maxLength={REASON_MAX}
                     autoFocus
                     placeholder={t("rec.retire.reasonPlaceholder")}
                     aria-label={t("rec.retire.reasonLabel")}
@@ -444,13 +456,15 @@ export default function LeftPanel(){
                 {/* The reader's language, like every other date in the app —
                     this one was pinned to en-CA next to a localised one. */}
                 <span className="tnum">{formatDate(f.uploadedAt, lang)}</span>
-                {/* How far the review has got. Printed only where there is
-                    something to review: "0/0 verified" on a sortie with no
-                    reviewable row reads as neglect rather than as a fact
+                {/* How far the review has got. Rulings, not confirmations: a
+                    reviewer who rejected every animal of this sortie has
+                    finished it, and the row used to still read 0. Printed only
+                    where there is something to review — "0/0" on a sortie with
+                    no reviewable row reads as neglect rather than as a fact
                     about this build. */}
                 {review.reviewable>0 && <>
                   <span className="text-line">·</span>
-                  <span className="tnum">{t("rec.review.short", { v: review.verified, r: review.reviewable })}</span>
+                  <span className="tnum">{t("rec.review.short", { v: review.ruled, r: review.reviewable })}</span>
                 </>}
               </div>
             </div>

@@ -5,7 +5,7 @@ import type { Footage, Detection, TrackPoint, MapLayerState } from "@/lib/types"
 import { mockDetections, generateSeedTrack, KZ_SITES } from "@/lib/mock/detections";
 import {
   fetchStats, fetchRunPoints, fetchTrack, pointsToDetections, mediaFileUrl, editPoints,
-  patchSurvey, retireSurvey, unretireSurvey, createObservation, NOTES_MAX,
+  patchSurvey, retireSurvey, unretireSurvey, createObservation, NOTES_MAX, REASON_MAX,
 } from "@/lib/api";
 import { locationSourceOf } from "@/lib/api";
 import type { ObservationIn, StatsLatestRun, SurveyOut, SurveyPatch } from "@/lib/api";
@@ -113,6 +113,13 @@ const HYDRATE_POOL = 6;
  *  season; past this we are reading an archive, not a season, and the map
  *  should be paging it deliberately rather than swallowing it on boot. */
 const HYDRATE_MAX_RUNS = 400;
+
+/** Stand-in name for a run whose media row the archive no longer carries. It
+ *  identifies NOTHING — every such run shares it — so any panel that groups by
+ *  filename has to exclude it rather than treat the match as an identity. It is
+ *  exported for exactly that reason: the determinism section once read two
+ *  unrelated archived runs as repeat counts of one file. */
+export const ARCHIVED_FILENAME = "(archived survey)";
 
 /** Bounded-concurrency map. Dependency-free on purpose: this is ten lines and
  *  the alternative is a package. Never rejects - a failing item is the
@@ -603,7 +610,11 @@ export const useFootageStore = create<Store>((set, get) => ({
     const lang = () => useLangStore.getState().lang;
     const f = get().footages.find(x => x.id === footageId);
     if (!f) return false;
-    const why = String(reason ?? "").trim().slice(0, NOTES_MAX);
+    /* REASON_MAX, not NOTES_MAX. The retire endpoint refuses past 500 and
+       this sliced at 4000 - masked only by a maxLength on the one input
+       that reaches it, which makes the constant wrong rather than the
+       behaviour, and the next caller inherits the bug. */
+    const why = String(reason ?? "").trim().slice(0, REASON_MAX);
     const who = getOperator();
 
     /* Test data and a sortie whose upload never reached the service exist only
@@ -809,6 +820,15 @@ export const useFootageStore = create<Store>((set, get) => ({
       }));
       const best = r.best ?? null;
 
+      /* Both halves or neither: a clip name with no timestamp cannot say WHICH
+         frame, and a timestamp with no clip cannot say which video. Either on
+         its own is not a provenance, so it is not rendered as one. */
+      const quick =
+        typeof r.from_video === "string" && r.from_video.trim() !== "" &&
+        typeof r.at_seconds === "number" && Number.isFinite(r.at_seconds)
+          ? { fromVideo: r.from_video.trim(), atSeconds: r.at_seconds }
+          : null;
+
       /* Where the sortie sits. The track's midpoint if it flew one, else the
          mean of the animals it actually placed - rejected ones excluded, since
          a false positive should not tug the colony's centre. */
@@ -855,7 +875,7 @@ export const useFootageStore = create<Store>((set, get) => ({
         /* A ground count has no file. "(archived survey)" over a number a
            person reported would read as footage nobody ever shot, so the row
            is left nameless and the panels label it by what it is. */
-        filename: r.filename ?? (r.engine === "manual" ? "" : "(archived survey)"),
+        filename: r.filename ?? (r.engine === "manual" ? "" : ARCHIVED_FILENAME),
         size: 0,
         duration: 0,
         /* When the footage was FLOWN, not when the count job ran. `created_at`
@@ -891,7 +911,14 @@ export const useFootageStore = create<Store>((set, get) => ({
         center: anchor,
         placed: positioned,
         status: "ready",
-        source: "archive",
+        /* A quick count stays a quick count across a reload. The archive now
+           records the clip and the second the frame was taken at, so the row
+           can be rebuilt as what it is — one frame of a video, deliberately
+           counted without a cross-frame band — instead of degrading into a
+           plain archived still whose only trace of the trade was a free-text
+           note the operator can edit away. */
+        source: quick ? "frame" : "archive",
+        quickCount: quick,
         runId: r.run_id,
         mediaId: r.media_id ?? undefined,
         videoUrl: r.kind === "video" && r.media_id ? mediaFileUrl(r.media_id) : undefined,
@@ -917,11 +944,16 @@ export const useFootageStore = create<Store>((set, get) => ({
       /* Kept so a later scale correction can recompute that area from the same
          terms rather than scaling the old number and hoping. */
       { widthPx: r.width ?? 0, heightPx: r.height ?? 0, frames: r.frames_used ?? null },
-      /* No retirement annotation from the archive listing: it excludes retired
-         surveys entirely, so `retired_at` is null on every row it returns. The
-         reason and the operator are known only for a retirement made in this
-         session, and the banner says only what it actually has. */
-      null,
+      /* The withdrawal, as the archive recorded it. This used to be `null` on
+         the grounds that the listing never returned a retired row — it does
+         now, and with it the two fields that make a withdrawal defensible a
+         season later. Still `null` where nothing was withdrawn, so an
+         un-retired sortie never grows an empty banner; and either field may be
+         null on its own, because a reason the archive does not hold is left
+         unsaid rather than filled in. */
+      r.retired_at
+        ? { reason: r.retired_reason ?? null, by: r.retired_by ?? null }
+        : null,
       );
     };
 
@@ -935,8 +967,15 @@ export const useFootageStore = create<Store>((set, get) => ({
              one colony. A service too old for the parameter ignores it and
              reports no total - then this window is all there is, and totalRuns
              stays null so nothing prints a truncated archive as a whole one. */
+          /* Retired sorties come back too. They are excluded from the estimate
+             by `retiredAt`, not by being absent — left out of the fetch, a
+             withdrawal became irreversible the moment the tab reloaded: the row
+             was gone, so the archive's "show retired" toggle never appeared and
+             the Undo the banner offers had nothing to act on. The retire form
+             promises the sortie "stays in the archive"; this is what keeps that
+             promise past an F5. */
           const stats = await fetchStats({
-            latestPerSurvey: true, limit: HYDRATE_PAGE, offset,
+            latestPerSurvey: true, limit: HYDRATE_PAGE, offset, includeRetired: true,
           });
           const rows = (stats.latest_runs ?? []) as StatsLatestRun[];
           const usable = rows.filter((r) => r && r.run_id);

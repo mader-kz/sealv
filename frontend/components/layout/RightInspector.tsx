@@ -295,6 +295,21 @@ export default function RightInspector({ compact }: { compact?: boolean }){
           {isManual
             ? <Row label={t("row.file")} value={t("rec.manual.title")} />
             : <Row label={t("row.file")} value={f.filename} mono />}
+          {/* A quick count names the clip it was cut from, the second it was
+              taken at, and the thing it gave up for the speed. The basis alone
+              says `single image`, which does not distinguish this from a
+              photograph — and the difference is the whole trade. */}
+          {f.quickCount && (
+            <Row
+              label={t("rec.quick.label")}
+              value={
+                <span className="text-2xs leading-relaxed">
+                  {t("ingest.quickFrom", { name: f.quickCount.fromVideo, s: f.quickCount.atSeconds })}
+                  <span className="text-ink3"> · {t("rec.quick.tradeoff")}</span>
+                </span>
+              }
+            />
+          )}
           {/* The DATE, said as what it is. `uploadedAt` falls back to the
               count job's clock so the timeline always has something to sort
               on; printing that fallback under "flown on" turns a processing
@@ -375,10 +390,13 @@ export default function RightInspector({ compact }: { compact?: boolean }){
               }
             />
           )}
-          {/* Three numbers, not a percentage on its own: verified, still to
-              review, and the animals this build has no reviewable row for.
-              `pct === null` means there is nothing to review at all, which is
-              a different statement from "0% reviewed" and is printed as one. */}
+          {/* Four numbers, not a percentage on its own: confirmed, rejected,
+              still to rule on, and the animals this build has no reviewable
+              row for. A rejection is a verdict — leaving it out of both terms
+              made a finished triage pass read as an untouched one, and a
+              sortie whose animals were all rejected print "nothing to review".
+              `pct === null` still means there is genuinely nothing to rule on,
+              which is a different statement from "0% reviewed". */}
           <Row
             label={t("row.review")}
             value={
@@ -388,16 +406,22 @@ export default function RightInspector({ compact }: { compact?: boolean }){
                 <span className="tnum text-2xs">
                   {t("rec.review.value", {
                     v: review.verified,
-                    r: review.reviewable - review.verified,
-                    u: review.unreviewable,
+                    x: review.rejected,
+                    r: review.reviewable - review.ruled,
                   })}
+                  {review.unreviewable > 0
+                    ? ` · ${t("rec.review.unreviewable", { u: review.unreviewable })}`
+                    : ""}
                 </span>
               )
             }
           />
         </div>
 
-        {review.reviewable > review.verified && f.runId && (
+        {/* Offered while rows are still UNRULED. Gated on `verified` it stayed
+            up after a pass that rejected everything, inviting the reviewer back
+            to work they had already finished. */}
+        {review.reviewable > review.ruled && f.runId && (
           <div className="px-4 pb-3">
             <Button icon="check" full onClick={()=> openReview(f.runId)}>
               {t("rec.review.open")}

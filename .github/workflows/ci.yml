@@ -189,10 +189,13 @@ jobs:
 
       # Hand-computed invariants for every module that produces a number the
       # UI shows: colony hulls, footprint area, spatial group sizes,
-      # repeat-survey deltas, and the GeoJSON/CSV/PDF builders.
+      # repeat-survey deltas, the review-progress figure, the coordinate a
+      # field team types in, and the GeoJSON/CSV/PDF builders.
       - name: Self-tests
         run: |
           node lib/colony.selftest.mjs
           node lib/analytics/analytics.selftest.mjs
+          node lib/analytics/review.selftest.mjs
+          node lib/parsers/latlng.selftest.mjs
           node lib/export/animals.selftest.mjs
           node lib/export/pdf.selftest.mjs

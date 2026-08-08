@@ -36,6 +36,7 @@ import { reviewStats, seasonReviewStats } from "@/lib/analytics/review";
 import { fetchJobs, type JobRow } from "@/lib/api";
 import { SectionHead } from "@/components/ui/primitives";
 import { useT } from "@/lib/i18n";
+import { ARCHIVED_FILENAME } from "@/store/useFootageStore";
 import type { Footage } from "@/lib/types";
 
 /** The engine's own note on how its false-positive risk was measured. */
@@ -121,6 +122,21 @@ export default function TrustPanel({
   const repeats = useMemo(() => {
     const byFile = new Map<string, { name: string; items: Footage[] }>();
     for (const f of footages) {
+      /* Only a run that actually went through the engine, under a name that
+         identifies one file.
+
+         A ground count hydrates with an empty filename and a `manual` basis,
+         so every shore count in the season collapsed into one group and two
+         independent counts at different beaches printed as "— 2 runs at the
+         same settings gave different results: 41 to 55": a determinism claim
+         about a pipeline that never ran, with an empty file name, in the one
+         panel whose whole job is to be checkable. A run whose media row is
+         gone is the same failure with a different label — every one of them
+         carries the identical "(archived survey)" placeholder. A name that
+         identifies nothing cannot support an identity claim, and a ground
+         count has no repeatability to measure; both say nothing instead. */
+      if (f.engine === "manual" || f.band?.basis === "manual") continue;
+      if (f.filename === "" || f.filename === ARCHIVED_FILENAME) continue;
       let e = byFile.get(f.filename);
       if (!e) { e = { name: f.filename, items: [] }; byFile.set(f.filename, e); }
       e.items.push(f);
@@ -200,18 +216,26 @@ export default function TrustPanel({
       <div className="mt-3">
         <div className="text-2xs text-ink3">{t("trust.verification")}</div>
         <div className="flex gap-3 mt-1.5">
-          {/* Three, not one. `verified / reviewable` alone hides the third:
-              562 animals of this season have no row a reviewer can open, and a
-              share that leaves them out of its denominator reports them as
-              neither done nor outstanding — as though they did not exist. */}
+          {/* Four, not one. A single share hides two of them: 562 animals of
+              this season have no row a reviewer can open, and a rejection is
+              work done that a "verified" figure never shows. A share that
+              leaves either out reports them as neither done nor outstanding —
+              as though the reviewer had not been there. */}
           <Figure value={season.verified} label={t("trust.verified")} />
+          <Figure value={season.rejected} label={t("trust.rejected")} />
           <Figure
-            value={Math.max(0, season.reviewable - season.verified)}
+            value={Math.max(0, season.reviewable - season.ruled)}
             label={t("trust.unreviewed")}
           />
           <Figure value={season.unreviewable} label={t("trust.notReviewable")} />
         </div>
         <p className="text-2xs text-ink3 mt-1.5 leading-relaxed">{t("trust.notReviewableWhy")}</p>
+        {/* What the per-sortie fraction counts, said once. Its numerator is
+            rulings of either kind, so a sortie whose animals were all rejected
+            reads as finished rather than as untouched. */}
+        {perSortie.length > 0 && (
+          <p className="text-2xs text-ink3 mt-1.5 leading-relaxed">{t("trust.rowsRuled")}</p>
+        )}
         {perSortie.length > 0 && (
           <ul className="mt-2 space-y-1">
             {perSortie.map((f) => {
@@ -221,7 +245,7 @@ export default function TrustPanel({
                   <span className="text-ink3 truncate" title={f.filename}>{f.filename}</span>
                   <span className="tnum text-ink2 shrink-0">
                     {rs.reviewable > 0
-                      ? t("trust.rowReviewed", { v: rs.verified, r: rs.reviewable })
+                      ? t("trust.rowReviewed", { v: rs.ruled, r: rs.reviewable })
                       : t("trust.rowNothing")}
                     {rs.unreviewable > 0 && (
                       <span className="text-ink3"> · {t("trust.rowNotReviewable", { n: rs.unreviewable })}</span>

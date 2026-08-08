@@ -839,6 +839,24 @@ async def upload_media(
     sea_ice_pct: Optional[str] = Form(None),
     operator: Optional[str] = Form(None),
     notes: Optional[str] = Form(None),
+    # Where this sortie happened, and how that was arrived at. A pin dropped on
+    # the map is the ONLY position a photo without telemetry will ever have, and
+    # until these three were declared here FastAPI dropped them silently: the
+    # client posted `location_source=pinned`, the archive stored NULL, and after
+    # a reload every uploaded sortie reported that its provenance was never
+    # recorded. An unknown form field is not an error in multipart, which is
+    # exactly why this had to be found by reading the row back rather than by a
+    # failing request.
+    lat: Optional[str] = Form(None),
+    lng: Optional[str] = Form(None),
+    location_source: Optional[str] = Form(None),
+    # Provenance of a quick count: the clip a still was cut out of, and the
+    # second it was taken at. Stored so that "one frame of a video" survives a
+    # reload - the trade it makes (no cross-frame band) is precisely the kind of
+    # thing a report has to state, and a free-text note the operator can edit is
+    # not a place to keep it.
+    from_video: Optional[str] = Form(None),
+    at_seconds: Optional[str] = Form(None),
 ):
     """Ingest one piece of media plus the metadata that makes it evidence.
 
@@ -951,6 +969,25 @@ async def upload_media(
         else:
             gsd, gsd_source = 0.0, "unknown"
 
+        # Position and its provenance, held to the same rules as the PATCH
+        # route: a lat of 450 is not a place, and `location_source` is a closed
+        # set because the UI draws a GPS fix differently from a dropped pin and
+        # an unrecognised fourth value would render as whichever branch happened
+        # to be the else.
+        pin = {"lat": _as_float(lat, "lat"), "lng": _as_float(lng, "lng")}
+        _latlng(pin)
+        loc_source = _clean(location_source, "location_source")
+        if loc_source is not None and loc_source not in _LOCATION_SOURCES:
+            raise HTTPException(
+                400,
+                f"location_source must be one of {', '.join(_LOCATION_SOURCES)}, "
+                f"got {loc_source!r}",
+            )
+        clip = _capped(from_video, "from_video", OPERATOR_MAX)
+        frame_at = _as_float(at_seconds, "at_seconds")
+        if frame_at is not None and frame_at < 0:
+            raise HTTPException(400, f"at_seconds cannot be negative, got {frame_at}")
+
         def persist() -> tuple[dict, dict, int, Optional[dict]]:
             with _conn() as conn:
                 if survey_id:
@@ -967,8 +1004,18 @@ async def upload_media(
                         gsd_source=gsd_source,
                         tide_state=_clean(tide_state),
                         sea_ice_pct=_as_float(sea_ice_pct, "sea_ice_pct"),
-                        operator=_clean(operator),
-                        notes=_clean(notes),
+                        # Capped here as well as on PATCH. The client caps too,
+                        # but the boundary that STORES the text is the one that
+                        # has to hold the limit - a buggy or hostile caller must
+                        # not be able to turn one survey row into a megabyte the
+                        # archive carries through every listing.
+                        operator=_capped(operator, "operator", OPERATOR_MAX),
+                        notes=_capped(notes, "notes", NOTES_MAX),
+                        lat=pin["lat"],
+                        lng=pin["lng"],
+                        location_source=loc_source,
+                        from_video=clip,
+                        at_seconds=frame_at,
                     )
                 media = db.create_media(
                     conn,
@@ -1941,7 +1988,24 @@ async def unretire_survey(survey_id: str):
 # The most recent run per survey. A survey can carry several pieces of media and
 # any of them can be re-run with different params; the newest run is the one
 # that represents it.
-_LATEST_RUN_CTE = """
+def _latest_run_cte(include_retired: bool) -> str:
+    """The CTE, honouring the same retirement filter as the archive listing.
+
+    It used to be a constant with no filter at all, and the result was a
+    /v1/stats that reported two different seasons depending on which key you
+    read: `latest_runs` dropped a withdrawn sortie while `over_time`, `per_site`
+    and `totals.surveys` went on charting and counting it. A payload that
+    silently describes two populations is the one option that cannot be
+    defended, so the filter is applied here too and `totals.surveys_retired`
+    states out loud how many rows the default answer leaves out.
+
+    Inside the ranked SELECT rather than after it, for the reason the listing
+    already documents: filtering after the window function would rank a retired
+    run into a survey's first place and then drop it, hiding a newer run that is
+    still counted.
+    """
+    live = "" if include_retired else "\n    WHERE sv.retired_at IS NULL"
+    return f"""
 WITH ranked AS (
     SELECT sv.id AS survey_id, sv.site_id, sv.captured_at, sv.tide_state,
            sv.sea_ice_pct, sv.gsd_cm_px,
@@ -1952,7 +2016,7 @@ WITH ranked AS (
            ) AS rn
     FROM survey sv
     JOIN media m ON m.survey_id = sv.id
-    JOIN run r ON r.media_id = m.id
+    JOIN run r ON r.media_id = m.id{live}
 ),
 latest AS (SELECT * FROM ranked WHERE rn = 1)
 """
@@ -1969,7 +2033,12 @@ _LATEST_RUNS_COLUMNS = """
        sv.gsd_cm_px, sv.gsd_source,
        sv.notes, sv.operator, sv.altitude_m,
        sv.lat AS survey_lat, sv.lng AS survey_lng, sv.location_source,
-       sv.retired_at,
+       sv.from_video, sv.at_seconds,
+       -- Who withdrew this sortie and why, not just that somebody did. The
+       -- client held both in a session-only map, so after a reload the banner
+       -- could say a sortie was retired and nothing about the decision - which
+       -- is the half that makes a withdrawal defensible a season later.
+       sv.retired_at, sv.retired_reason, sv.retired_by,
        si.id AS site_id, si.name AS site_name,
        si.lat AS site_lat, si.lng AS site_lng
 """
@@ -1985,7 +2054,7 @@ LEFT JOIN site si ON si.id = sv.site_id
 """
 # One bucket per survey, and per media for the media a survey never claimed -
 # an unattached upload is still its own sortie, and the inner joins of
-# `_LATEST_RUN_CTE` would drop it out of the archive entirely. A run with
+# `_latest_run_cte` would drop it out of the archive entirely. A run with
 # neither (a ground count) is its own bucket: it is one observation and must
 # never be collapsed with another.
 _RUN_BUCKET = "COALESCE(sv.id, 'media:' || m.id, 'run:' || r.id)"
@@ -2028,7 +2097,12 @@ async def stats(
                          hidden by it. No survey can be retired on a database
                          that predates the column, so today the two answers are
                          identical - which is the point: the filter is inert
-                         until somebody actually retires something.
+                         until somebody actually retires something. It reaches
+                         every branch of this payload, not only `latest_runs`:
+                         `over_time`, `per_site` and `totals.surveys` describe
+                         the same population as the archive, and
+                         `totals.surveys_retired` says how many rows that
+                         leaves out.
     """
     # Clamped rather than rejected: a caller asking for 10_000 runs wants "all
     # of them", and the honest answer to that is a page plus the real total.
@@ -2038,12 +2112,24 @@ async def stats(
     runs_limit = max(1, min(runs_limit, MAX_LATEST_RUNS_CEILING))
     runs_offset = max(0, runs_offset)
 
+    cte = _latest_run_cte(include_retired)
+    # `surveys` counts the population every other key in this payload describes;
+    # `surveys_retired` is always the whole withdrawn set, whichever way the
+    # flag is set, so a reader can tell "6 of 7, one withdrawn" from "6 of 6".
+    surveys_count = (
+        "(SELECT COUNT(*) FROM survey)"
+        if include_retired
+        else "(SELECT COUNT(*) FROM survey WHERE retired_at IS NULL)"
+    )
+
     def load() -> dict:
         with _conn() as conn:
             totals = dict(
                 conn.execute(
                     "SELECT (SELECT COUNT(*) FROM site) AS sites,"
-                    "       (SELECT COUNT(*) FROM survey) AS surveys,"
+                    f"       {surveys_count} AS surveys,"
+                    "       (SELECT COUNT(*) FROM survey WHERE retired_at IS NOT NULL)"
+                    "           AS surveys_retired,"
                     "       (SELECT COUNT(*) FROM media) AS media,"
                     "       (SELECT COUNT(*) FROM run) AS runs,"
                     "       (SELECT COUNT(*) FROM job WHERE status = 'queued') AS jobs_queued,"
@@ -2055,25 +2141,30 @@ async def stats(
             per_site = [
                 dict(r)
                 for r in conn.execute(
-                    _LATEST_RUN_CTE
+                    cte
                     + """
                     SELECT si.id AS site_id, si.name, si.region, si.lat, si.lng,
                            COUNT(DISTINCT sv.id) AS surveys,
                            COUNT(l.run_id) AS runs,
                            MAX(sv.captured_at) AS last_captured_at
                     FROM site si
+                    -- The retirement filter belongs in the JOIN, not a WHERE:
+                    -- moved outside it would turn the LEFT JOIN into an inner
+                    -- one and drop every site that has no surveys at all.
                     LEFT JOIN survey sv ON sv.site_id = si.id
+                         AND (:all_rows OR sv.retired_at IS NULL)
                     LEFT JOIN latest l ON l.survey_id = sv.id
                     GROUP BY si.id, si.name, si.region, si.lat, si.lng
                     ORDER BY si.name
-                    """
+                    """,
+                    {"all_rows": 1 if include_retired else 0},
                 )
             ]
 
             newest = {
                 r["site_id"]: dict(r)
                 for r in conn.execute(
-                    _LATEST_RUN_CTE
+                    cte
                     + """
                     , by_site AS (
                         SELECT site_id, survey_id, captured_at, run_id, basis,
@@ -2108,7 +2199,7 @@ async def stats(
             over_time = [
                 dict(r)
                 for r in conn.execute(
-                    _LATEST_RUN_CTE
+                    cte
                     + """
                     SELECT l.survey_id, l.site_id, si.name AS site_name, l.captured_at,
                            l.tide_state, l.sea_ice_pct, l.gsd_cm_px, l.run_id, l.basis,

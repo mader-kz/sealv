@@ -136,7 +136,13 @@ function verifiedText(lang: ReportLang, f: Footage): string {
   const rs = reviewStats(f);
   if (rs.total === 0) return "—";
   if (rs.reviewable === 0) return tr(lang, "rep.notReviewable");
-  return `${Math.round(rs.pct ?? 0)}% (${rs.verified}/${rs.reviewable})`;
+  /* Rulings over reachable rows. A rejection is a verdict and it is work done:
+     scoring only confirmations printed a sortie whose animals were every one of
+     them rejected as "0% (0/300)" — an accusation of neglect against the person
+     who had just finished reviewing it. The split (how many of those rulings
+     were confirmations) is on the provenance line below, where it does not have
+     to fit a column. */
+  return `${Math.round(rs.pct ?? 0)}% (${rs.ruled}/${rs.reviewable})`;
 }
 
 /** The tide as recorded, in the reader's language. An unrecognised token is
@@ -397,6 +403,15 @@ export async function buildReportDoc(footages: Footage[], lang: ReportLang, meta
     const site = plain(f.siteName, 120);
     if (site) parts.push(tr(lang, "rep.site", { name: site }));
 
+    /* A quick count says which clip and which second, and says out loud what
+       it traded away. `single_image` in the basis column is true but
+       incomplete: it does not distinguish a photograph from one frame of a
+       video that COULD have carried a cross-frame band and deliberately does
+       not. A reader weighing this number needs the difference. */
+    const clip = plain(f.quickCount?.fromVideo, 120);
+    if (clip && typeof f.quickCount?.atSeconds === "number")
+      parts.push(tr(lang, "rep.quickFrame", { name: clip, s: f.quickCount.atSeconds }));
+
     /* Survey conditions, when the survey recorded them. A haul-out count
        swings enormously with tide, so a count printed without the conditions
        it was made under is a number a reader cannot weigh. (Sea ice is in the
@@ -415,6 +430,10 @@ export async function buildReportDoc(footages: Footage[], lang: ReportLang, meta
       parts.push(tr(lang, "rep.dateNotRecorded", { date: fmtDate(lang, f.uploadedAt) }));
 
     if (f.unplaced) parts.push(tr(lang, "insp.withoutCoords", { n: f.unplaced }));
+    /* What the review column's fraction is made of. A reader has to be able to
+       tell "everything confirmed" from "everything rejected": both are 100%
+       reviewed and they are opposite results. */
+    if (rs.ruled > 0) parts.push(tr(lang, "rep.ruledSplit", { v: rs.verified, x: rs.rejected }));
     if (rs.reviewable === 0 && rs.unreviewable > 0)
       parts.push(tr(lang, "rep.notReviewableN", { n: rs.unreviewable }));
 

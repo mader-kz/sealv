@@ -54,6 +54,13 @@ CREATE TABLE IF NOT EXISTS survey (
     retired_at      TEXT,
     retired_reason  TEXT,
     retired_by      TEXT,
+    -- A quick count: one frame cut out of a clip and ingested as a still,
+    -- deliberately trading the cross-frame band for speed. `single_image` in
+    -- the run's basis says the count came from one image; only these two say
+    -- that image was a second of a video somebody chose not to analyse whole,
+    -- which is the part a report has to be able to state.
+    from_video      TEXT,             -- the clip's filename, NULL for a real still
+    at_seconds      REAL,             -- offset of the chosen frame, seconds
     created_at   TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

@@ -107,7 +107,14 @@ export type IngestReason = { key: I18nKey; vars?: Record<string, string | number
  *  cannot drift apart into two ideas of what a survey is. `survey_id` is the
  *  one addition: it is not a correction, it is which existing survey a
  *  re-count belongs to. */
-export type IngestMeta = SurveyPatch & { survey_id?: string };
+/* `from_video`/`at_seconds` are upload-only: they describe how the media was
+   PRODUCED, which a later correction cannot change, so they are not part of
+   SurveyPatch. */
+export type IngestMeta = SurveyPatch & {
+  survey_id?: string;
+  from_video?: string;
+  at_seconds?: number;
+};
 
 export type AnchorSource = "pinned" | "typed" | "telemetry";
 
@@ -888,6 +895,22 @@ async function runItem(id: string): Promise<void> {
 
       const meta: IngestMeta = { ...(current.meta ?? {}) };
       meta.location_source = geo.locationSource;
+      /* The coordinate itself, not only the label for it. The service reads a
+         sortie's position off the track for georeferencing, but the survey row
+         is what every panel reads after a reload — and it was staying NULL, so
+         an uploaded sortie came back from the archive reporting that its
+         position had never been recorded and the map's fallback centre for an
+         unplaced run had nothing to fall back to. */
+      meta.lat = centre.lat;
+      meta.lng = centre.lng;
+      /* A quick count's provenance, stored rather than only written into the
+         note. The note is the operator's and they may edit it; "this number
+         came from one frame of a clip, so it has no cross-frame band" is a
+         fact about the measurement and has to outlive any edit. */
+      if (current.quickCount) {
+        meta.from_video = current.quickCount.fromVideo;
+        meta.at_seconds = current.quickCount.atSeconds;
+      }
       /* Who filed it, read at upload time from the one identity the app has.
          Nobody having said who they are is a truthful record and stays null —
          it is not filled with "platform" the way every edit in the archive

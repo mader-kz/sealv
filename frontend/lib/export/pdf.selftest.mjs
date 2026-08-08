@@ -61,7 +61,19 @@ const ok = (name, cond, extra) => {
   else { failed++; console.error(`FAIL  ${name}${extra ? ` — ${extra}` : ""}`); }
 };
 
+/* Backend-shaped ids (`run-<run>-p<point>`). The rule under test is that a row
+   a reviewer can actually OPEN is what the denominator counts, and pointIdOf
+   decides that from the id — so a fixture with ids like "d1" was silently
+   exercising the unreachable branch for every row and could never have caught
+   a mistake in the reachable one. */
 const det = (id, status) => ({ id, footageId: "f1", t: 0, lat: 44.6, lng: 50.2, count: 1, confidence: 0.8, status });
+
+/* The one dot that stands in for a whole run the engine placed nothing from.
+   No point row behind it, so no verdict can ever reach it. */
+const aggregate = (runId, count) => ({
+  id: `run-${runId}-agg`, footageId: "fx", t: 0, lat: 44.9, lng: 50.9,
+  count, confidence: null, status: "auto",
+});
 
 const footages = [
   {
@@ -70,7 +82,13 @@ const footages = [
     status: "ready", source: "real", runId: "run-7",
     track: [], unplaced: 2,
     band: { low: 12, best: 14, high: 17, basis: "union_4_frames" },
-    detections: [det("d1", "auto"), det("d2", "validated"), det("d3", "false_positive")],
+    /* One untouched, one confirmed, one rejected: three reachable rows, two of
+       them ruled on. */
+    detections: [
+      det("run-7-p1", "auto"),
+      det("run-7-p2", "validated"),
+      det("run-7-p3", "false_positive"),
+    ],
     areaM2: 33180, gsdSource: "optics",
     caveats: ["GSD estimated from altitude only"],
   },
@@ -78,7 +96,7 @@ const footages = [
     id: "f2", filename: "sortie-02.mp4", size: 1, duration: 12,
     uploadedAt: "2026-04-12T09:00:00.000Z", center: { lat: 45.1, lng: 51.9 },
     status: "ready", source: "test",
-    track: [], detections: [det("d4", "auto")],
+    track: [], detections: [det("run-9-p1", "auto")],
   },
 ];
 
@@ -118,7 +136,15 @@ if (!pdftotext) {
   ok("the band prints as low–best–high", en.includes("12–14–17"), en.slice(0, 400));
   ok("the basis is stated, not implied", en.includes("combined from 4 frames"));
   ok("a sortie without a band prints its reviewed count", /sortie-02\.mp4 [^ ]+ 1 /.test(en), en.slice(0, 600));
-  ok("verified share is validated ÷ (validated + auto)", en.includes("50% (1/2)"), en.slice(0, 600));
+  /* Rulings over reachable rows, not confirmations over reachable rows. f1 has
+     three rows a reviewer can open and two verdicts on them (one confirmed,
+     one rejected), so the pass is two-thirds done. Scored the old way the
+     rejection vanished from both terms and the same sortie printed 50% (1/2) —
+     a reviewer who had ruled on two rows credited with one. */
+  ok("the review column counts rulings, not only confirmations",
+    en.includes("67% (2/3)"), en.slice(0, 700));
+  ok("the rulings are broken down, so 'all confirmed' and 'all rejected' differ",
+    /1[^0-9]{1,40}1/.test(en) && en.includes("rejected"), en.slice(0, 900));
   ok("animals without coordinates are declared", en.includes("2 without coordinates"));
   // One hectare formatter product-wide (lib/analytics/area.formatArea), so the
   // report cannot print a survey the panel that produced it renders differently.
@@ -138,6 +164,39 @@ if (!pdftotext) {
   const emptyText = textOf(emptyPdf);
   ok("an empty survey says so rather than showing zeros", emptyText.includes("Есепке кіретін ұшу жоқ"));
   ok("an empty survey qualifies nothing, because it totals nothing", !emptyText.includes("екі рет есептеледі"), emptyText.slice(0, 200));
+
+  /* A run the engine placed nothing from carries ONE aggregate marker standing
+     for hundreds of animals. Dividing by that list printed "0% (0/1)": a
+     denominator of one for 562 animals, and an accusation of neglect over work
+     this build never offered. It has to read as not reviewable, and the animals
+     have to be named out loud instead. */
+  const aggOnly = textOf(await bytes([{
+    id: "fx", filename: "transect-04.mp4", size: 1, duration: 120,
+    uploadedAt: "2026-04-13T07:00:00.000Z", center: { lat: 44.9, lng: 50.9 },
+    status: "ready", source: "real", runId: "11",
+    track: [], unplaced: 562,
+    band: { low: 500, best: 562, high: 610, basis: "consensus_4_frames" },
+    detections: [aggregate("11", 562)],
+  }], "en"));
+  ok("a run with only an aggregate marker is not reviewable, not 0%",
+    aggOnly.includes("not reviewable") && !aggOnly.includes("0% (0/1)"), aggOnly.slice(0, 800));
+  ok("and its animals are named rather than folded into a denominator",
+    aggOnly.includes("562"), aggOnly.slice(0, 800));
+
+  /* Every animal rejected is a FINISHED review that found nothing, not an
+     untouched one. Both are facts and the report must not print them alike. */
+  const allRejected = textOf(await bytes([{
+    id: "fy", filename: "sortie-05.mp4", size: 1, duration: 20,
+    uploadedAt: "2026-04-14T07:00:00.000Z", center: { lat: 44.7, lng: 50.4 },
+    status: "ready", source: "real", runId: "12",
+    track: [],
+    band: { low: 2, best: 2, high: 2, basis: "single_image" },
+    detections: [det("run-12-p1", "false_positive"), det("run-12-p2", "false_positive")],
+  }], "en"));
+  ok("a sortie whose animals were all rejected reads as fully reviewed",
+    allRejected.includes("100% (2/2)"), allRejected.slice(0, 800));
+  ok("and says the rulings were rejections, not confirmations",
+    allRejected.includes("0 confirmed, 2 rejected"), allRejected.slice(0, 800));
 
   const fictions = ["FORECAST", "Forecast", "AKTAU", "ANOMAL", "Avg group", "KPI"];
   for (const word of fictions) {

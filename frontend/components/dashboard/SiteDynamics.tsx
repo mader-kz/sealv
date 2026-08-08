@@ -229,7 +229,7 @@ export default function SiteDynamics({
                   {manual && <span className="text-ink2">{t("pill.manual")} · </span>}
                   {basis}
                   {rs.reviewable > 0
-                    ? ` · ${t("dyn.reviewed", { v: rs.verified, r: rs.reviewable })}`
+                    ? ` · ${t("dyn.reviewed", { v: rs.ruled, r: rs.reviewable })}`
                     : ""}
                   {rs.unreviewable > 0 ? ` · ${t("dyn.unreviewable", { n: rs.unreviewable })}` : ""}
                 </span>

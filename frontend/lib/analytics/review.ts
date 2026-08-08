@@ -44,11 +44,23 @@ export type ReviewFootageLike = {
 };
 
 export type ReviewStats = {
-  /** Detections a human has confirmed. */
+  /** Detections a human has confirmed as animals. */
   verified: number;
-  /** Detections a human COULD rule on here: the confirmed ones plus the
-   *  untouched ones that carry a real backend point id. The denominator of
-   *  `pct`, and never a number that includes work this build cannot offer. */
+  /** Detections a human has ruled out. A rejection is a verdict and it is
+   *  WORK DONE — it used to sit in neither term, so rejecting a hundred
+   *  animals of a three-hundred-animal sortie left the progress figure at 0%
+   *  and shrank the denominator instead, and rejecting all of them made the
+   *  panels print "nothing to review" over a sortie somebody had just finished
+   *  reviewing. The X key is half of triage; it has to move the number. */
+  rejected: number;
+  /** verified + rejected — every row a human has ruled on either way. The
+   *  numerator of `pct`, because the question the progress figure answers is
+   *  "how much of this is still waiting for me", not "how much of this turned
+   *  out to be a seal". */
+  ruled: number;
+  /** Detections a human COULD rule on here: the ruled ones plus the untouched
+   *  ones that carry a real backend point id. The denominator of `pct`, and
+   *  never a number that includes work this build cannot offer. */
   reviewable: number;
   /** Animals with no reviewable row in this build. Reported next to the
    *  percentage, never inside it. */
@@ -56,7 +68,7 @@ export type ReviewStats = {
   /** reviewable + unreviewable — every animal a complete review would have to
    *  rule on, including the ones only a later build can reach. */
   total: number;
-  /** Percent of `reviewable` that is verified, 0–100. NULL when there is
+  /** Percent of `reviewable` that has been RULED ON, 0–100. NULL when there is
    *  nothing to review: "no work done" and "no work to do" are different
    *  claims and only one of them accuses the reviewer. */
   pct: number | null;
@@ -87,13 +99,14 @@ const nonNegative = (v: unknown): number => {
 /** One sortie's review state. */
 export function reviewStats(f: ReviewFootageLike | null | undefined): ReviewStats {
   let verified = 0;
+  let rejected = 0;
   let openReviewable = 0;
   let aggregate = 0;
 
   for (const d of f?.detections ?? []) {
     if (!d) continue;
     if (isAggregateMarker(d)) {
-      // Stands for animals, not for a row. It is never verified and never
+      // Stands for animals, not for a row. It is never ruled on and never
       // reviewable; its count is the run's whole estimate.
       aggregate += nonNegative(d.count);
       continue;
@@ -102,13 +115,19 @@ export function reviewStats(f: ReviewFootageLike | null | undefined): ReviewStat
       verified += 1;
       continue;
     }
-    // A rejection is a verdict, but it is not a confirmation of an animal and
-    // it is not outstanding work either, so it sits in neither term — the same
-    // rule the inspector's reviewed share has always used.
+    // A rejection is a verdict a person wrote, so it is ruled-on work — it
+    // belongs in the numerator AND the denominator. Dropping it from both (the
+    // old rule) made a finished triage pass indistinguishable from an
+    // untouched one.
+    if (d.status === "false_positive") {
+      rejected += 1;
+      continue;
+    }
     if (d.status === "auto" && pointIdOf(d.id) !== null) openReviewable += 1;
   }
 
-  const reviewable = verified + openReviewable;
+  const ruled = verified + rejected;
+  const reviewable = ruled + openReviewable;
   const unplaced = nonNegative(f?.unplaced);
   /* MAX, not sum. The aggregate marker only exists when the run placed nothing
      at all, so its count already covers every unplaced animal of that run —
@@ -118,10 +137,12 @@ export function reviewStats(f: ReviewFootageLike | null | undefined): ReviewStat
 
   return {
     verified,
+    rejected,
+    ruled,
     reviewable,
     unreviewable,
     total: reviewable + unreviewable,
-    pct: reviewable === 0 ? null : (verified / reviewable) * 100,
+    pct: reviewable === 0 ? null : (ruled / reviewable) * 100,
   };
 }
 
@@ -131,19 +152,24 @@ export function reviewStats(f: ReviewFootageLike | null | undefined): ReviewStat
  *  a five-hundred-animal one. */
 export function seasonReviewStats(fs: ReviewFootageLike[] | null | undefined): ReviewStats {
   let verified = 0;
+  let rejected = 0;
   let reviewable = 0;
   let unreviewable = 0;
   for (const f of fs ?? []) {
     const s = reviewStats(f);
     verified += s.verified;
+    rejected += s.rejected;
     reviewable += s.reviewable;
     unreviewable += s.unreviewable;
   }
+  const ruled = verified + rejected;
   return {
     verified,
+    rejected,
+    ruled,
     reviewable,
     unreviewable,
     total: reviewable + unreviewable,
-    pct: reviewable === 0 ? null : (verified / reviewable) * 100,
+    pct: reviewable === 0 ? null : (ruled / reviewable) * 100,
   };
 }

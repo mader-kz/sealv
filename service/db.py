@@ -56,6 +56,7 @@ _SURVEY_UPDATABLE = (
     "tide_state", "sea_ice_pct", "operator", "notes",
     "lat", "lng", "location_source",
     "retired_at", "retired_reason", "retired_by",
+    "from_video", "at_seconds",
 )
 _SITE_UPDATABLE = ("name", "region", "lat", "lng")
 _JOB_UPDATABLE = (
@@ -152,6 +153,14 @@ def _widen(conn: sqlite3.Connection) -> None:
         ("survey", "retired_at", "ALTER TABLE survey ADD COLUMN retired_at TEXT"),
         ("survey", "retired_reason", "ALTER TABLE survey ADD COLUMN retired_reason TEXT"),
         ("survey", "retired_by", "ALTER TABLE survey ADD COLUMN retired_by TEXT"),
+        # A quick count is one frame cut out of a clip and ingested as a still.
+        # The band it gets says `single_image`, which is true but incomplete:
+        # the reader also needs to know it could have had a cross-frame band and
+        # deliberately did not. Keeping the clip's name and the frame's second
+        # here means that survives a reload; keeping it only in the operator's
+        # note meant it survived until someone edited the note.
+        ("survey", "from_video", "ALTER TABLE survey ADD COLUMN from_video TEXT"),
+        ("survey", "at_seconds", "ALTER TABLE survey ADD COLUMN at_seconds REAL"),
         # Nullable with no default, which is the only shape SQLite will accept
         # for an added REFERENCES column - and the only shape that is correct:
         # every existing run reaches its survey through its media.
@@ -193,9 +202,12 @@ def _relax(conn: sqlite3.Connection) -> None:
         so a future column added to one side and not the other would silently
         shift every value one column left - counts landing in `seconds`.
 
-    Afterwards `PRAGMA foreign_key_check` has to come back empty. If it does
-    not, something referenced a run that did not survive the copy, and this
-    raises rather than let the service open on a damaged archive.
+    `PRAGMA foreign_key_check` has to come back empty, and it runs INSIDE the
+    transaction. Run after the commit it was still a refusal to start, but over
+    a database that had already been rewritten - "we detected the damage and
+    kept it" - and the recovery story on a boat is a backup nobody took. Inside,
+    the raise rolls the whole rebuild back, the archive is byte-for-byte what it
+    was, and the next start retries against the original.
     """
     cols = {row["name"]: row["notnull"] for row in conn.execute("PRAGMA table_info(run)")}
     if not cols:
@@ -237,12 +249,15 @@ def _relax(conn: sqlite3.Connection) -> None:
             conn.execute("DROP TABLE run")
             conn.execute("ALTER TABLE run_new RENAME TO run")
             conn.execute("CREATE INDEX IF NOT EXISTS ix_run_media ON run(media_id, created_at)")
-        broken = conn.execute("PRAGMA foreign_key_check").fetchall()
-        if broken:
-            raise sqlite3.IntegrityError(
-                f"relaxing run.job_id/run.media_id left {len(broken)} dangling "
-                f"reference(s): {[tuple(r) for r in broken[:5]]}"
-            )
+            broken = conn.execute("PRAGMA foreign_key_check").fetchall()
+            if broken:
+                # Raising inside `with _tx(...)` rolls the rebuild back: the old
+                # `run` table, its rows and every point and edit that hangs off
+                # them are exactly as they were before this function ran.
+                raise sqlite3.IntegrityError(
+                    f"relaxing run.job_id/run.media_id left {len(broken)} dangling "
+                    f"reference(s): {[tuple(r) for r in broken[:5]]}"
+                )
     finally:
         # Re-asserted on every path. Leaving this connection with foreign keys
         # off would turn the next bad write in the same process into silent
@@ -469,6 +484,8 @@ def create_survey(
     lat: float | None = None,
     lng: float | None = None,
     location_source: str | None = None,
+    from_video: str | None = None,
+    at_seconds: float | None = None,
 ) -> dict:
     """Create a survey. `tide_state` and `sea_ice_pct` are worth capturing even
     when nothing reads them yet - haul-out counts swing enormously with both,
@@ -476,17 +493,23 @@ def create_survey(
 
     `location_source` is stored beside `lat`/`lng` rather than inferred from
     which of them is set: telemetry, a dropped pin and a typed-in ground count
-    all produce a coordinate, and only the label says which one this is."""
+    all produce a coordinate, and only the label says which one this is.
+
+    `from_video`/`at_seconds` are set only by a quick count - a single frame cut
+    out of a clip and ingested as a still. They are the difference between "a
+    photo" and "one second of a video someone chose not to analyse whole", and
+    the second reading is the one a report has to be able to make."""
     sid = survey_id or new_id()
     conn.execute(
         """INSERT INTO survey
                (id, site_id, captured_at, altitude_m, gsd_cm_px, gsd_source,
                 tide_state, sea_ice_pct, operator, notes,
-                lat, lng, location_source)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                lat, lng, location_source, from_video, at_seconds)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (sid, site_id, captured_at, altitude_m, gsd_cm_px, gsd_source,
          tide_state, sea_ice_pct, operator, notes,
-         _as_float(lat, "survey.lat"), _as_float(lng, "survey.lng"), location_source),
+         _as_float(lat, "survey.lat"), _as_float(lng, "survey.lng"), location_source,
+         from_video, _as_float(at_seconds, "survey.at_seconds")),
     )
     return get_survey(conn, sid)
 
@@ -1607,7 +1630,8 @@ if __name__ == "__main__":
               and get_run(legacy, "r-old")["survey_id"] is None)
         check("a legacy database also grows the new survey/media columns",
               {"lat", "lng", "location_source", "retired_at", "retired_reason",
-               "retired_by"} <= {r["name"] for r in legacy.execute("PRAGMA table_info(survey)")}
+               "retired_by", "from_video",
+               "at_seconds"} <= {r["name"] for r in legacy.execute("PRAGMA table_info(survey)")}
               and "content_hash" in
                   {r["name"] for r in legacy.execute("PRAGMA table_info(media)")})
         # The point of the whole rebuild.
@@ -1618,6 +1642,63 @@ if __name__ == "__main__":
         raises("a run still cannot point at a job that does not exist",
                sqlite3.IntegrityError, create_run, legacy, "no-such-job", None, "countgd")
         legacy.close()
+
+        # --- the rebuild refuses over an UNTOUCHED archive -------------------
+        # The integrity check has to fail the start AND leave the database
+        # exactly as it found it. Run after the commit it did the first half
+        # only: "we detected the damage and kept it", with the original gone and
+        # the recovery story a backup nobody took. Seeded here with a point
+        # whose run does not exist - written with foreign keys off, which is the
+        # state a damaged archive actually arrives in.
+        broken_path = tmp / "broken.db"
+        broken = connect(broken_path)
+        broken.executescript(
+            """
+            CREATE TABLE survey (id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')));
+            CREATE TABLE media (id TEXT PRIMARY KEY, survey_id TEXT, path TEXT NOT NULL,
+                filename TEXT, kind TEXT NOT NULL, width INTEGER, height INTEGER,
+                duration_s REAL, bytes INTEGER,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')));
+            CREATE TABLE job (id TEXT PRIMARY KEY,
+                media_id TEXT NOT NULL REFERENCES media(id) ON DELETE CASCADE,
+                params TEXT NOT NULL, status TEXT NOT NULL, progress TEXT, error TEXT,
+                claimed_by TEXT, claimed_at TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')), finished_at TEXT);
+            CREATE TABLE run (id TEXT PRIMARY KEY,
+                job_id TEXT NOT NULL REFERENCES job(id) ON DELETE CASCADE,
+                media_id TEXT NOT NULL REFERENCES media(id) ON DELETE CASCADE,
+                survey_id TEXT REFERENCES survey(id),
+                engine TEXT NOT NULL, engine_params TEXT, count_low INTEGER,
+                count_best INTEGER, count_high INTEGER, basis TEXT, quality TEXT,
+                seconds REAL, created_at TEXT NOT NULL DEFAULT (datetime('now')));
+            CREATE TABLE point (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL REFERENCES run(id) ON DELETE CASCADE,
+                frame_idx INTEGER, x REAL NOT NULL, y REAL NOT NULL, lat REAL, lng REAL,
+                score REAL, support INTEGER, status TEXT NOT NULL DEFAULT 'auto');
+            INSERT INTO media (id, path, kind) VALUES ('m-b', '/tmp/b.jpg', 'image');
+            INSERT INTO job (id, media_id, params, status) VALUES ('j-b','m-b','{}','done');
+            INSERT INTO run (id, job_id, media_id, engine) VALUES ('r-b','j-b','m-b','countgd');
+            """
+        )
+        broken.execute("PRAGMA foreign_keys = OFF")
+        broken.execute("INSERT INTO point (run_id, x, y) VALUES ('r-gone', 1.0, 2.0)")
+        broken.commit()
+        broken.execute("PRAGMA foreign_keys = ON")
+        ddl_before = broken.execute(
+            "SELECT sql FROM sqlite_master WHERE name = 'run'"
+        ).fetchone()[0]
+        raises("a dangling reference fails the rebuild",
+               sqlite3.IntegrityError, _relax, broken)
+        check("the failed rebuild left the run table exactly as it was",
+              broken.execute("SELECT sql FROM sqlite_master WHERE name='run'").fetchone()[0]
+              == ddl_before
+              and broken.execute("SELECT COUNT(*) FROM sqlite_master WHERE "
+                                 "name='run_new'").fetchone()[0] == 0
+              and broken.execute("SELECT COUNT(*) FROM run").fetchone()[0] == 1)
+        check("foreign keys are back ON after the refused rebuild",
+              broken.execute("PRAGMA foreign_keys").fetchone()[0] == 1)
+        broken.close()
 
         # --- claim_job, two workers racing -----------------------------
         N_JOBS = 60

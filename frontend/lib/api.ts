@@ -19,6 +19,12 @@ const API = process.env.NEXT_PUBLIC_API_BASE ?? "";
 export const NOTES_MAX = 4000;
 export const OPERATOR_MAX = 120;
 export const REASON_MAX = 500;
+/* The service caps a ground count's `method` with OPERATOR_MAX, not with a cap
+   of its own. Named here so a caller cannot mirror the wrong number: an input
+   that let 200 characters through against a 120-character column produced a
+   400 behind a generic failure toast, which is the exact failure this block of
+   constants exists to prevent. */
+export const METHOD_MAX = OPERATOR_MAX;
 
 export type CountBand = {
   low: number | null;
@@ -135,8 +141,20 @@ export type StatsLatestRun = {
   operator?: string | null;
   /* Set on a sortie withdrawn from the estimate. Rows only carry a non-null
      value when the caller asked for `include_retired`, because the default
-     archive does not contain them at all. */
+     archive does not contain them at all. The reason and the person come with
+     it: a banner that can say a sortie was withdrawn and nothing about the
+     decision is missing the half that makes the withdrawal defensible a season
+     later, and the client's own copy of it does not survive a reload. */
   retired_at?: string | null;
+  retired_reason?: string | null;
+  retired_by?: string | null;
+  /* A quick count: the clip this still was cut out of, and the second it was
+     taken at. Null for a real photograph. `basis: single_image` already says
+     the count came from one image; only these say that image was one second of
+     a video somebody chose not to analyse whole — which is a trade (no
+     cross-frame band) the report has to be able to state. */
+  from_video?: string | null;
+  at_seconds?: number | null;
   /* Flight metadata. `altitude_m` is what GSD - and therefore the surveyed
      area - is derived from when no scale was measured. */
   altitude_m?: number | null;
@@ -565,6 +583,14 @@ export type StatsQuery = {
   latestPerSurvey?: boolean;
   limit?: number;
   offset?: number;
+  /* Include sorties withdrawn from the estimate. The archive listing excludes
+     them by default, and hydrating without this made retirement irreversible
+     from the UI: after a reload the row was simply absent, so the "show
+     retired" toggle never appeared, the Undo button was unreachable, and the
+     unretire endpoint could only ever be called in the same tab that had
+     retired the sortie. The retire form promises the sortie "stays in the
+     archive"; this is what makes that true past an F5. */
+  includeRetired?: boolean;
   signal?: AbortSignal;
 };
 
@@ -573,6 +599,7 @@ export async function fetchStats(q: StatsQuery = {}): Promise<Stats> {
   if (q.latestPerSurvey) p.set("latest_per_survey", "1");
   if (q.limit != null) p.set("runs_limit", String(q.limit));
   if (q.offset != null) p.set("runs_offset", String(q.offset));
+  if (q.includeRetired) p.set("include_retired", "1");
   const qs = p.toString();
   return jsonOrThrow(await fetch(`${API}/v1/stats${qs ? `?${qs}` : ""}`, { signal: q.signal }));
 }
