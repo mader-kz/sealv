@@ -3,6 +3,8 @@ import { create } from "zustand";
 import type { Footage, Detection, TrackPoint, MapLayerState } from "@/lib/types";
 import { mockDetections, generateSeedTrack, KZ_SITES } from "@/lib/mock/detections";
 import { fetchStats, fetchRunPoints, fetchTrack, pointsToDetections, mediaFileUrl, editPoint } from "@/lib/api";
+import type { Stats, StatsLatestRun } from "@/lib/api";
+import { footprintM2 } from "@/lib/analytics/area";
 
 type Store = {
   footages: Footage[];
@@ -99,9 +101,9 @@ export const useFootageStore = create<Store>((set, get) => ({
      empty map must not toast errors at someone opening the app offline. */
   hydrate: async () => {
     if (get().footages.length > 0) return;
-    let stats: any;
+    let stats: Stats | undefined;
     try { stats = await fetchStats(); } catch { return; }
-    const runs: any[] = (stats?.latest_runs ?? []).filter((r: any) => r.run_id);
+    const runs: StatsLatestRun[] = (stats?.latest_runs ?? []).filter((r) => r.run_id);
     const out: Footage[] = [];
     for (const r of runs.slice(0, 20)) {
       try {
@@ -150,6 +152,15 @@ export const useFootageStore = create<Store>((set, get) => ({
           band: { low: r.low ?? null, best, high: r.high ?? null, basis: r.basis ?? "" },
           unplaced,
           pixels,
+          /* Only a list the service actually sent becomes caveats. A service
+             too old to report them leaves this undefined, so the inspector
+             stays silent instead of certifying the run as clean. */
+          caveats: Array.isArray(r.caveats) ? r.caveats : undefined,
+          gsdCmPx: r.gsd_cm_px ?? null,
+          gsdSource: r.gsd_source ?? null,
+          areaM2: footprintM2({
+            widthPx: r.width ?? 0, heightPx: r.height ?? 0, gsdCmPx: r.gsd_cm_px,
+          }),
         });
       } catch {
         /* one unreadable run must not sink the other nineteen */

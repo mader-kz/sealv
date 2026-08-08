@@ -5,6 +5,7 @@ import { parseSRT, validateTrackInCaspian } from "@/lib/parsers/srt";
 import { parseJSONSidecar } from "@/lib/parsers/json";
 import { parseMP4Metadata } from "@/lib/parsers/mp4";
 import { uploadMedia, createJob, watchJob, pointsToDetections } from "@/lib/api";
+import { footprintM2 } from "@/lib/analytics/area";
 import { toast } from "sonner";
 import { snapToWater, isWater } from "@/lib/caspian";
 import type { Footage, TrackPoint } from "@/lib/types";
@@ -91,7 +92,17 @@ export default function Dropzone(){
           count: best, confidence: 1, status: "auto" as const,
         }];
       }
-      completeFootage(id, { status: "ready", detections, band: result.count, unplaced, runId: result.run_id, mediaId: up.id, pixels });
+      /* The band and the engine's reasons to doubt it are one result, not a
+         number with an optional footnote - so the caveats land in the store on
+         the same call, alongside the scale the area is derived from. */
+      completeFootage(id, {
+        status: "ready", detections, band: result.count, unplaced,
+        runId: result.run_id, mediaId: up.id, pixels,
+        caveats: result.caveats ?? [],
+        gsdCmPx: up.gsd_cm_px ?? null,
+        gsdSource: up.gsd_source ?? null,
+        areaM2: footprintM2({ widthPx: up.width, heightPx: up.height, gsdCmPx: up.gsd_cm_px }),
+      });
       const bandTxt = result.count && result.count.low != null && result.count.high != null && result.count.low !== result.count.high
         ? ` (${t("misc.range", { low: result.count.low, high: result.count.high })})` : "";
       toast.success(`${footage.filename}: ${best ?? "?"} ${tp(best ?? 0, "unit.seals")}${bandTxt}`);

@@ -65,6 +65,21 @@ export type Footage = {
   /* Backend media id for this sortie's source file - what /media/{id}/file
      is fed to show the actual footage behind the count. */
   mediaId?: string;
+  /* Ground one media footprint covers, in square metres: width * height *
+     (gsd/100)^2. Null when the scale is unknown - there is no honest area
+     without a GSD, and a made-up one would put a fabricated denominator under
+     every density figure downstream. */
+  areaM2?: number | null;
+  /* The engine's own reasons not to trust its band, verbatim from the run's
+     quality ledger (failed tiles, dropped frames, a union passed off as
+     consensus). An empty array is a clean run; ABSENT means the engine never
+     reported - which is not the same claim, and must not be rendered as one. */
+  caveats?: string[];
+  /* Scale, and how it was arrived at (explicit | optics | assumed_* |
+     unknown). The source matters as much as the number: an assumed GSD is a
+     guess that silently shifts every derived area. */
+  gsdCmPx?: number | null;
+  gsdSource?: string | null;
   error?: string;
 };
 

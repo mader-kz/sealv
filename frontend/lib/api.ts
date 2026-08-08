@@ -52,6 +52,32 @@ export type RunResult = {
 
 export type JobProgress = { stage?: string; frames_done?: number; frames_total?: number };
 
+/* One row of /v1/stats.latest_runs - the archive hydrate() rebuilds the map
+   from. Everything past the run id is optional: rows written before a column
+   existed still come back, and a survey missing its frame size is a survey
+   with no area, not a survey to drop. */
+export type StatsLatestRun = {
+  run_id: string;
+  created_at?: string | null;
+  media_id?: string | null;
+  filename?: string | null;
+  kind?: "image" | "video" | null;
+  low?: number | null;
+  best?: number | null;
+  high?: number | null;
+  basis?: string | null;
+  width?: number | null;
+  height?: number | null;
+  gsd_cm_px?: number | null;
+  gsd_source?: string | null;
+  caveats?: string[] | null;
+};
+
+/* The dashboard reads totals/per_site/over_time off the same payload, so the
+   index signature stays: this type sharpens the one branch that is mapped into
+   Footage without pretending to describe the whole endpoint. */
+export type Stats = { latest_runs?: StatsLatestRun[]; [k: string]: any };
+
 async function jsonOrThrow(r: Response): Promise<any> {
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(d.detail || d.error || `${r.status} ${r.statusText}`);
@@ -210,7 +236,7 @@ export function pointsToDetections(
    These three feed hydrate(): the platform reloads yesterday's surveys the
    same way it shows today's, so an F5 no longer wipes the map. */
 
-export async function fetchStats(): Promise<any> {
+export async function fetchStats(): Promise<Stats> {
   return jsonOrThrow(await fetch(`${API}/v1/stats`));
 }
 

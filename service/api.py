@@ -1324,22 +1324,67 @@ async def stats():
                 )
             ]
 
-            latest_runs = [
-                dict(r)
-                for r in conn.execute(
-                    "SELECT r.id AS run_id, r.created_at, r.engine, r.basis, r.seconds,"
-                    "       r.count_low AS low, r.count_best AS best, r.count_high AS high,"
-                    "       m.id AS media_id, m.filename, m.kind,"
-                    "       sv.id AS survey_id, sv.captured_at, sv.tide_state,"
-                    "       si.id AS site_id, si.name AS site_name "
-                    "FROM run r "
-                    "JOIN media m ON m.id = r.media_id "
-                    "LEFT JOIN survey sv ON sv.id = m.survey_id "
-                    "LEFT JOIN site si ON si.id = sv.site_id "
-                    "ORDER BY r.created_at DESC, r.id DESC LIMIT ?",
-                    (MAX_LATEST_RUNS,),
+            # Frame size and scale ride along because a count without the ground
+            # it covers is not a survey figure, and `gsd_source` is what says
+            # whether that scale was measured or assumed. `quality` is fetched
+            # only to derive the caveats: a caller rebuilding the archive must
+            # see the same reasons-to-doubt a fresh run carries, or reloading
+            # the page quietly launders a floor into a measurement.
+            latest_runs = []
+            for row in conn.execute(
+                "SELECT r.id AS run_id, r.created_at, r.engine, r.basis, r.seconds,"
+                "       r.count_low AS low, r.count_best AS best, r.count_high AS high,"
+                "       r.quality,"
+                "       m.id AS media_id, m.filename, m.kind, m.width, m.height,"
+                "       sv.id AS survey_id, sv.captured_at, sv.tide_state,"
+                "       sv.gsd_cm_px, sv.gsd_source,"
+                "       si.id AS site_id, si.name AS site_name "
+                "FROM run r "
+                "JOIN media m ON m.id = r.media_id "
+                "LEFT JOIN survey sv ON sv.id = m.survey_id "
+                "LEFT JOIN site si ON si.id = sv.site_id "
+                "ORDER BY r.created_at DESC, r.id DESC LIMIT ?",
+                (MAX_LATEST_RUNS,),
+            ):
+                run = dict(row)
+                # Raw SQL bypasses db.py's JSON column handling, so the ledger
+                # arrives as text and is parsed here. A malformed one costs this
+                # row its caveats, never the whole dashboard.
+                raw = run.pop("quality", None)
+                quality: Optional[dict] = None
+                if isinstance(raw, dict):
+                    quality = raw
+                elif isinstance(raw, str):
+                    try:
+                        parsed = json.loads(raw)
+                    except ValueError:
+                        parsed = None
+                    quality = parsed if isinstance(parsed, dict) else None
+
+                # The band check inside `_caveats` reads no counters, so it still
+                # runs on a ledgerless row - an incoherent band is a service
+                # defect and must surface wherever the number does.
+                caveats = _caveats(
+                    quality or {},
+                    {
+                        "low": run["low"],
+                        "best": run["best"],
+                        "high": run["high"],
+                        "basis": run["basis"],
+                    },
                 )
-            ]
+                if quality is None:
+                    # NULL or unreadable ledger. Returning [] here would render
+                    # downstream as "clean run - no caveats", which is a claim
+                    # this row cannot support: no completeness counter was ever
+                    # read. Absence of evidence is said out loud instead.
+                    caveats.append(
+                        "this run's quality ledger is missing or unreadable, so the "
+                        "completeness checks never ran - the absence of caveats here "
+                        "is unknown, not clean"
+                    )
+                run["caveats"] = caveats
+                latest_runs.append(run)
 
             return {
                 "totals": totals,
