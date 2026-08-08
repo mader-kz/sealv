@@ -174,7 +174,12 @@
     "dash.nothingToVerify": "Тексеретін нүкте әзірге жоқ — расталған да, қабылданбаған да ештеңе жоқ.",
     "wb.score": "Балл",
     "rail.expand": "Мәзірді жаю",
-    "rail.collapse": "Мәзірді жию"
+    "rail.collapse": "Мәзірді жию",
+    "insp.copied": "Көшірілді",
+    "insp.copyFailed": "Көшіру мүмкін болмады",
+    "insp.rejected": "{n} қабылданбады",
+    "insp.bandUnusable": "аралық жарамсыз",
+    "insp.bandUnusableWhy": "Негізгі мән өз аралығының шегінен тыс, сондықтан белгі көрсетілмейді. Ескертпелерді қараңыз."
   },
   "ru": {
     "brand.sub": "Учёт каспийского тюленя",
@@ -351,7 +356,12 @@
     "dash.nothingToVerify": "Проверять пока нечего — ни одна точка не подтверждена и не отклонена.",
     "wb.score": "Балл",
     "rail.expand": "Развернуть меню",
-    "rail.collapse": "Свернуть меню"
+    "rail.collapse": "Свернуть меню",
+    "insp.copied": "Скопировано",
+    "insp.copyFailed": "Не удалось скопировать",
+    "insp.rejected": "{n} отклонено",
+    "insp.bandUnusable": "диапазон непригоден",
+    "insp.bandUnusableWhy": "Основное значение выходит за пределы собственного диапазона, поэтому отметка не показана. См. оговорки."
   },
   "en": {
     "brand.sub": "Caspian seal survey",
@@ -528,6 +538,11 @@
     "dash.nothingToVerify": "Nothing to review yet — no point has been verified or rejected.",
     "wb.score": "Score",
     "rail.expand": "Expand menu",
-    "rail.collapse": "Collapse menu"
+    "rail.collapse": "Collapse menu",
+    "insp.copied": "Copied",
+    "insp.copyFailed": "Copy failed",
+    "insp.rejected": "{n} rejected",
+    "insp.bandUnusable": "range unusable",
+    "insp.bandUnusableWhy": "The best estimate falls outside its own low–high range, so no marker is drawn. See the caveats."
   }
 }

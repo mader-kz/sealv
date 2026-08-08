@@ -1,6 +1,6 @@
 "use client";
 import { useFootageStore } from "@/store/useFootageStore";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button, Row, SectionHead, Pill } from "@/components/ui/primitives";
 import Icon from "@/components/ui/Icon";
 import EvidenceView, { EvidenceFrame } from "@/components/evidence/EvidenceView";
@@ -15,6 +15,19 @@ export default function RightInspector({ compact }: { compact?: boolean }){
   const select = useFootageStore(s=>s.select);
   const [evidenceOpen, setEvidenceOpen] = useState(false);
   const f = useMemo(()=> footages.find(x=>x.id===selectedId) || null, [footages, selectedId]);
+
+  /* Copy-to-clipboard outcome, shown for ~1.5s. It is not cosmetic: the
+     documented deployment is a FastAPI container on a plain-http LAN, where
+     `navigator.clipboard` does not exist at all, and the old handler threw
+     into the void and looked exactly like a success. */
+  const [copyState, setCopyState] = useState<null | "ok" | "fail">(null);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (copyTimer.current) clearTimeout(copyTimer.current); }, []);
+  const flashCopy = (ok: boolean) => {
+    setCopyState(ok ? "ok" : "fail");
+    if (copyTimer.current) clearTimeout(copyTimer.current);
+    copyTimer.current = setTimeout(() => setCopyState(null), 1500);
+  };
 
   /* A selection change swaps the sortie under the dialog; showing sortie B's
      photo in a dialog opened for sortie A would be quiet misinformation. */
@@ -37,7 +50,12 @@ export default function RightInspector({ compact }: { compact?: boolean }){
     );
   }
 
-  const det = f.detections[0] || null;
+  /* Only for the legacy bbox placeholder below, and only a surviving
+     detection: a box drawn round something a reviewer already rejected is
+     not evidence of anything. This is one animal out of the sortie's many and
+     nothing else may read it as the sortie's own verdict — two pills under
+     the count did exactly that until this change. */
+  const det = f.detections.find(d => d.status !== "false_positive") || null;
   /* The Evidence view exists only where its raw material does: a photo
      sortie whose engine run left us the media id and per-animal pixels.
      Everything here is optional on Footage - guard all of it, or the
@@ -52,12 +70,40 @@ export default function RightInspector({ compact }: { compact?: boolean }){
      rule, shared with the panel, the report and the CSV — the fallback here
      used to include detections a reviewer had already rejected. */
   const totalSeals = countOf(f);
-  const hasRange = !!f.band && f.band.low != null && f.band.high != null && f.band.low !== f.band.high;
+  const low = f.band?.low ?? null;
+  const best = f.band?.best ?? null;
+  const high = f.band?.high ?? null;
+  const hasRange = low != null && high != null && low !== high;
+  /* The service serves runs whose lead number sits outside its own bounds
+     (it emits a `band is incoherent` caveat for exactly this, and rows
+     predating the engine fix are still in the database). Deriving the state
+     from the numbers rather than from that English sentence keeps this
+     honest in all three languages and if the wording ever changes. */
+  const bandBroken = hasRange && best != null && (best < low || best > high);
+  /* Fraction of the strip the best estimate sits at, in the 6–94% the track
+     actually occupies. Clamped: the arithmetic is only inside those bounds
+     while low ≤ best ≤ high, and an out-of-band best used to place an
+     absolutely-positioned marker off the end of its own track. */
+  const markerLeft =
+    hasRange && best != null && !bandBroken
+      ? Math.min(94, Math.max(6, 6 + 88 * ((best - low) / Math.max(1, high - low))))
+      : null;
   /* How much of this count a human has actually signed off on. False positives
      are excluded from both sides: a rejected detection is not evidence for or
      against the animals that remain. */
   const validated = f.detections.filter(d => d.status === "validated").length;
   const reviewable = validated + f.detections.filter(d => d.status === "auto").length;
+  /* "On map" means animals, so it counts animals. `detections.length` is the
+     rows the endpoint returned, and those now include the ones a reviewer
+     rejected — printing that as the number on the map would silently put
+     them back into the count. Rejections are stated, not disappeared. */
+  const placed = f.detections.filter(d => d.status !== "false_positive").length;
+  const rejected = f.detections.length - placed;
+  const provenance = [
+    f.band ? t("insp.onMap", { n: placed }) : null,
+    f.band && f.unplaced ? t("insp.withoutCoords", { n: f.unplaced }) : null,
+    rejected > 0 ? t("insp.rejected", { n: rejected }) : null,
+  ].filter(Boolean).join(" · ");
 
   return (
     <div className={shell}>
@@ -83,18 +129,29 @@ export default function RightInspector({ compact }: { compact?: boolean }){
         {/* The range is not decoration: frames of the same colony disagree,
             and a single integer would be false precision. Test data has no
             band, so this strip only appears over a real count. */}
-        {hasRange && f.band && (
+        {hasRange && (
           <div className="mt-3">
             <div className="relative h-1.5 rounded-full bg-surface2">
-              <div className="absolute inset-y-0 rounded-full bg-accent-soft"
+              <div className={`absolute inset-y-0 rounded-full ${bandBroken ? "bg-line" : "bg-accent-soft"}`}
                    style={{ left: "6%", right: "6%" }} />
-              <div className="absolute top-1/2 -translate-y-1/2 h-3 w-0.5 rounded bg-accent"
-                   style={{ left: `${6 + 88 * (((f.band.best ?? 0) - (f.band.low ?? 0)) / Math.max(1, (f.band.high ?? 1) - (f.band.low ?? 0)))}%` }} />
+              {/* No marker on a band the service has already called
+                  indefensible. A precise indicator over broken bounds is a
+                  drawing of a measurement that does not exist. */}
+              {markerLeft != null && (
+                <div className="absolute top-1/2 -translate-y-1/2 h-3 w-0.5 rounded bg-accent"
+                     style={{ left: `${markerLeft}%` }} />
+              )}
             </div>
             <div className="flex justify-between mt-1 text-2xs tnum text-ink3">
-              <span>{f.band.low}</span>
-              <span className="text-ink2">{t("insp.rangeBetweenFrames")}</span>
-              <span>{f.band.high}</span>
+              <span>{low}</span>
+              {bandBroken ? (
+                <span className="text-bad" title={t("insp.bandUnusableWhy")}>
+                  {t("insp.bandUnusable")}
+                </span>
+              ) : (
+                <span className="text-ink2">{t("insp.rangeBetweenFrames")}</span>
+              )}
+              <span>{high}</span>
             </div>
           </div>
         )}
@@ -105,16 +162,13 @@ export default function RightInspector({ compact }: { compact?: boolean }){
               output; printing it as "NN% confidence" dressed it up as a
               probability the number cannot support. The band is the honest
               uncertainty, and it is already above. */}
+          {/* No per-detection verdict pill either. It read `detections[0]` and
+              printed one arbitrary animal's status as the whole sortie's — a
+              sortie carries one detection per animal, so the label flipped
+              with array order. The reviewed share is the honest figure and it
+              is already computed and shown in the Review row below. */}
           {f.band?.basis && <Pill tone="neutral">{basisText(lang, f.band.basis)}</Pill>}
-          {det?.status === "validated" && <Pill tone="good">{t("status.validated")}</Pill>}
-          {det?.status === "false_positive" && <Pill tone="bad">{t("status.falsePositive")}</Pill>}
-          {f.band && (
-            <span className="text-2xs text-ink3">
-              {f.unplaced
-                ? `${t("insp.onMap", { n: f.detections.length })} · ${t("insp.withoutCoords", { n: f.unplaced })}`
-                : t("insp.onMap", { n: f.detections.length })}
-            </span>
-          )}
+          {provenance && <span className="text-2xs text-ink3">{provenance}</span>}
         </div>
       </div>
 
@@ -126,7 +180,13 @@ export default function RightInspector({ compact }: { compact?: boolean }){
           <video src={f.videoUrl} controls className="w-full h-full object-contain" />
         ) : evidence ? (
           <>
-            <EvidenceFrame mediaId={evidence.mediaId} pixels={evidence.pixels} />
+            {/* Not while the dialog is up: the two frames are the same
+                original, so both <img> elements decode the full-resolution
+                still and both overlays stay mounted behind an opaque
+                dialog nobody can see through. */}
+            {!evidenceOpen && (
+              <EvidenceFrame mediaId={evidence.mediaId} pixels={evidence.pixels} />
+            )}
             <Button
               icon="search"
               className="absolute bottom-2 right-2 shadow-pop"
@@ -248,14 +308,61 @@ export default function RightInspector({ compact }: { compact?: boolean }){
             CSV
           </Button>
           <Button
-            icon="copy"
-            title={t("btn.copyCoords")}
-            onClick={()=> navigator.clipboard.writeText(`${f.center.lat},${f.center.lng}`)}
-          />
+            icon={copyState === "ok" ? "check" : copyState === "fail" ? "alert" : "copy"}
+            title={
+              copyState === "ok" ? t("insp.copied")
+              : copyState === "fail" ? t("insp.copyFailed")
+              : t("btn.copyCoords")
+            }
+            onClick={async () => {
+              flashCopy(await copyText(`${f.center.lat},${f.center.lng}`));
+            }}
+          >
+            {copyState === "ok" ? t("insp.copied") : copyState === "fail" ? t("insp.copyFailed") : undefined}
+          </Button>
+          {/* The icon swap is for the operator; this is for a screen reader,
+              which otherwise gets no signal that anything happened. */}
+          <span className="sr-only" role="status" aria-live="polite">
+            {copyState === "ok" ? t("insp.copied") : copyState === "fail" ? t("insp.copyFailed") : ""}
+          </span>
         </div>
       </div>
     </div>
   );
+}
+
+/* Copy that works where this product actually runs. The async Clipboard API
+   is only defined in a secure context, and the documented field deployment is
+   the FastAPI container serving this export over plain http on a LAN - there,
+   `navigator.clipboard` is undefined and the old one-liner threw an unhandled
+   rejection while looking exactly like a success. Returns whether the text
+   really reached the clipboard, so the button can say so. */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    /* Permission denied or a non-secure origin - try the legacy path. */
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    /* Off-screen but focusable: `display:none` cannot be selected. */
+    ta.style.position = "fixed";
+    ta.style.top = "0";
+    ta.style.left = "-9999px";
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, text.length);
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
 }
 
 /* Scale and where it came from. `gsd_source` stays a machine word (optics,
