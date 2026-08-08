@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useFootageStore } from "@/store/useFootageStore";
+import { useIngestStore } from "@/store/useIngestStore";
 import { colonyHull, expandHull, colonyBounds } from "@/lib/colony";
 import { countOf } from "@/lib/analytics/count";
 import { footagesInRange, detectionsFor } from "@/lib/analytics/brush";
@@ -19,6 +20,9 @@ const ZOOM_COLONY = 8.2;   // hull outlines appear
 const ZOOM_ANIMALS = 11.5; // per-animal dots appear
 
 const EMPTY_FC = { type: "FeatureCollection", features: [] as any[] };
+
+/** A hand-placed coordinate, at the precision a click supports (~110 m). */
+const round3 = (v: number) => Math.round(v * 1000) / 1000;
 
 const DARK_STYLE: any = {
   version: 8,
@@ -65,6 +69,10 @@ type ColonyChip = {
   count: number;
   low: number | null;
   high: number | null;
+  /* The site this sortie belongs to, once someone has named it. Unnamed sites
+     keep their coordinates and this stays null — a placeholder name would be
+     a fact about the map, not about the coast. */
+  name: string | null;
 };
 
 /* Where a chip wants to sit, in world coordinates. Computed from the data
@@ -75,6 +83,15 @@ type ChipAnchor = {
   count: number;
   low: number | null;
   high: number | null;
+  name: string | null;
+};
+
+/** The site name a sortie carries, read defensively: the field is written by
+ *  the site registry and an archive row loaded before any site was named
+ *  simply does not have it. */
+const siteNameOf = (f: unknown): string | null => {
+  const n = (f as { siteName?: unknown } | null)?.siteName;
+  return typeof n === "string" && n.trim() ? n.trim() : null;
 };
 
 /* A colony outline, ready for GeoJSON: [lng,lat] pairs with the ring closed.
@@ -107,6 +124,9 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
   const mapRef = useRef<any | null>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
   const [satellite, setSatellite] = useState(false);
+  /* The live zoom, kept for the pin readout. Updated in the same rAF pass the
+     chip overlay already runs, so it costs nothing extra. */
+  const [zoomNow, setZoomNow] = useState<number | null>(null);
   const footagesRaw = useFootageStore(s=>s.footages);
   const detectionsRaw = useFootageStore(s=>s.detections);
   const timeRange = useFootageStore(s=>s.timeRange);
@@ -230,7 +250,13 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
           // of it, and the animals scattered around the ring. The anchor is
           // the centre of the shot; the engine lays the animals out around it
           // by their true pixel positions.
-          setPinPoints([{ t: 0, lat: e.lngLat.lat, lng: e.lngLat.lng }]);
+          /* Three decimals, ~110 m — the precision one click supports. Four
+             decimals is ~11 m, a claim no gesture at basin zoom can make, and
+             the GeoJSON, the CSV and the PDF would all print it as if the
+             coordinate had been surveyed. The zoom goes with it so the
+             sortie's note can say how close the operator actually was. */
+          setPinPoints([{ t: 0, lat: round3(e.lngLat.lat), lng: round3(e.lngLat.lng) }]);
+          try { useIngestStore.getState().notePin("click", map.getZoom()); } catch {}
           // Centre on the anchor: the acknowledgement is the map itself
           // moving, so the bullseye can never land off-screen or under a
           // panel and read as "nothing happened".
@@ -524,6 +550,7 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
         count: countOf(f),
         low: hasBand ? f.band!.low : null,
         high: hasBand ? f.band!.high : null,
+        name: siteNameOf(f),
       });
     }
     return out;
@@ -552,9 +579,13 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
         for(const a of chipAnchors){
           const pr = m.project([a.lng, a.lat]);
           if(rect && (pr.x < -120 || pr.x > rect.width+120 || pr.y < -120 || pr.y > rect.height+120)) continue;
-          chips.push({ x:pr.x, y:pr.y, fid:a.fid, count:a.count, low:a.low, high:a.high });
+          chips.push({ x:pr.x, y:pr.y, fid:a.fid, count:a.count, low:a.low, high:a.high, name:a.name });
         }
         setOverlayChips(prev=> sameChips(prev, chips) ? prev : chips);
+        /* The zoom, for the pin readout: a coordinate clicked at basin zoom
+           and one clicked at 200 m are not the same claim, and the sortie's
+           note records which it was. */
+        try{ setZoomNow(m.getZoom()); }catch{}
       } catch { /* map torn down or unprojectable mid-frame — next event retries */ }
     };
     const schedule = ()=>{ if(frame) return; frame = requestAnimationFrame(update); };
@@ -622,7 +653,15 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
             <button
               key={c.fid}
               onClick={()=>handleChipClick(c.fid)}
-              title={c.low!=null ? `${c.count} ${tp(c.count, "unit.seals")} (${t("misc.range", { low: c.low, high: c.high as number })})` : `${c.count} ${tp(c.count, "unit.seals")}`}
+              /* The site's name first when it has one — a chip reading "Kenderli ·
+                 218 seals" is a sentence an ecologist can act on; "218 seals"
+                 over a dot is a number they have to go and identify. */
+              title={[
+                c.name,
+                c.low!=null
+                  ? `${c.count} ${tp(c.count, "unit.seals")} (${t("misc.range", { low: c.low, high: c.high as number })})`
+                  : `${c.count} ${tp(c.count, "unit.seals")}`,
+              ].filter(Boolean).join(" · ")}
               className={`colony-chip ${isSel ? "selected z-10" : ""}`}
               style={{ left:c.x, top:c.y }}
             >
@@ -645,9 +684,16 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
           <Toggle checked={layerState.detections} onChange={v=>setLayer("detections",v)} label={t("map.colonies")} />
         </div>
         {pinMode && (
-          <div className="bg-accent text-accent-ink text-xs px-2.5 h-7 rounded flex items-center">
-            {pinPoints.length ? t("map.anchorSet") : t("map.clickCentre")}
-          </div>
+          <PinReadout
+            value={pinPoints.length ? { lat: pinPoints[0].lat, lng: pinPoints[0].lng } : null}
+            zoom={zoomNow}
+            onChange={(p)=>{
+              setPinPoints([{ t: 0, lat: p.lat, lng: p.lng }]);
+              try { useIngestStore.getState().notePin("typed", zoomNow); } catch {}
+              const m = mapRef.current;
+              if(m){ try{ m.easeTo({ center:[p.lng, p.lat], duration: 250 }); }catch{} }
+            }}
+          />
         )}
       </div>
 
@@ -666,7 +712,7 @@ function sameChips(a: ColonyChip[], b: ColonyChip[]){
   if(a.length!==b.length) return false;
   for(let i=0;i<a.length;i++){
     const x=a[i], y=b[i];
-    if(x.fid!==y.fid || x.count!==y.count || x.low!==y.low || x.high!==y.high) return false;
+    if(x.fid!==y.fid || x.count!==y.count || x.low!==y.low || x.high!==y.high || x.name!==y.name) return false;
     if(Math.abs(x.x-y.x)>0.5 || Math.abs(x.y-y.y)>0.5) return false;
   }
   return true;
@@ -685,6 +731,79 @@ function sameTracks(a:any[], b:any[]){
     }
   }
   return true;
+}
+
+/**
+ * PinReadout — where the pin is, in words, while it is being placed.
+ *
+ * Two ways in, one control: click the map, or type the coordinate. Pinning
+ * used to be a badge that said "anchor set" and nothing else, so the operator
+ * confirmed a coordinate they had never seen — and a field team arriving with
+ * a GPS reading had no way at all to enter it.
+ *
+ * Self-contained on purpose (value in, coordinate out, no store): the manual
+ * ground-count entry needs exactly this control for exactly the same reason,
+ * and a second copy of it would drift.
+ */
+export function PinReadout({
+  value,
+  zoom,
+  onChange,
+}: {
+  value: { lat: number; lng: number } | null;
+  zoom: number | null;
+  onChange: (p: { lat: number; lng: number }) => void;
+}) {
+  const { t } = useT();
+  const [text, setText] = useState("");
+  const [bad, setBad] = useState(false);
+
+  const apply = () => {
+    // "43.65, 51.18" — comma, semicolon or space, decimal point or comma.
+    const m = text.trim().replace(/,(\d)/g, ".$1").match(/^(-?\d+(?:\.\d+)?)[\s,;]+(-?\d+(?:\.\d+)?)$/);
+    const lat = m ? Number(m[1]) : NaN;
+    const lng = m ? Number(m[2]) : NaN;
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+      setBad(true);
+      return;
+    }
+    setBad(false);
+    setText("");
+    onChange({ lat, lng });
+  };
+
+  return (
+    <div className="bg-surface border border-line rounded shadow-pop px-2 py-1.5 max-w-[260px]">
+      <div className="text-2xs text-ink3">{value ? t("map.anchorSet") : t("map.clickCentre")}</div>
+      {value && (
+        <div className="text-xs text-ink tnum font-mono mt-0.5">
+          {value.lat.toFixed(3)}, {value.lng.toFixed(3)}
+        </div>
+      )}
+      {/* The precision claim, out loud. Three decimals is about 110 m; the
+          zoom says how much of that the gesture could actually see. */}
+      <div className="text-2xs text-ink3 mt-0.5 leading-tight">
+        {zoom != null ? t("map.pinPrecisionZoom", { z: zoom.toFixed(1) }) : t("map.pinPrecision")}
+      </div>
+      <div className="flex items-center gap-1 mt-1">
+        <input
+          value={text}
+          onChange={(e) => { setText(e.target.value); setBad(false); }}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); apply(); } }}
+          placeholder={t("map.coordPlaceholder")}
+          aria-label={t("map.coordEnter")}
+          className={`w-[132px] h-6 bg-surface2 border rounded px-1.5 text-2xs text-ink font-mono focus:outline-none ${bad ? "border-bad" : "border-line focus:border-ink3"}`}
+        />
+        <button
+          onClick={apply}
+          className="h-6 px-2 rounded border border-line bg-surface2 text-2xs text-ink2 hover:text-ink hover:border-ink3 transition-colors"
+        >
+          {t("map.coordApply")}
+        </button>
+      </div>
+      {bad && <div className="text-2xs text-bad mt-0.5">{t("map.coordBad")}</div>}
+    </div>
+  );
 }
 
 function Toggle({ checked, onChange, label }: { checked:boolean; onChange:(v:boolean)=>void; label:string }){

@@ -6,10 +6,12 @@ import Rail from "@/components/layout/Rail";
 import LeftPanel from "@/components/layout/LeftPanel";
 import RightInspector from "@/components/layout/RightInspector";
 import Dropzone from "@/components/upload/Dropzone";
+import { FailedIngests } from "@/components/upload/IngestQueue";
 import Dashboard from "@/components/dashboard/Dashboard";
 import Timeline from "@/components/layout/Timeline";
 import Workbench from "@/components/workbench/Workbench";
 import { useFootageStore } from "@/store/useFootageStore";
+import { useIngestStore, isRunning } from "@/store/useIngestStore";
 import { seasonEstimate } from "@/lib/analytics/estimate";
 import { footagesInRange } from "@/lib/analytics/brush";
 import { Button, IconButton } from "@/components/ui/primitives";
@@ -92,6 +94,21 @@ export default function Page(){
   // a second caller, so React 18's strict-mode double-invoke of this effect
   // joins the first hydrate instead of starting a rival one.
   useEffect(()=>{ hydrate(); },[hydrate]);
+
+  /* What the SERVICE remembers going wrong. A job-stage failure writes no run
+     row, so hydrate() cannot rebuild it: without this call an F5 after seven
+     failed ingests shows a clean map and seven counts that never happened. */
+  const ingestItems = useIngestStore(s=>s.items);
+  const refreshFailed = useIngestStore(s=>s.refreshFailed);
+  useEffect(()=>{ void refreshFailed(); },[refreshFailed]);
+  const ingestBusy = useMemo(
+    ()=> ingestItems.filter(i=> isRunning(i.phase) || i.phase==="queued").length,
+    [ingestItems],
+  );
+  const ingestNeedsYou = useMemo(
+    ()=> ingestItems.filter(i=> ["duplicate_choice","needs_location","frame_choice"].includes(i.phase)).length,
+    [ingestItems],
+  );
 
   /* Selection opens the inspector without closing analytics. Closing the
      inspector clears the selection, which is also what makes re-clicking the
@@ -211,13 +228,24 @@ export default function Page(){
                     )}
                   </div>
                 )}
+                {/* No `disabled={hydrating}`. Ingest writes new rows and
+                    hydrate() upserts by id, skipping anything already there,
+                    so the two cannot collide — and locking the only way INTO
+                    the product for the length of an archive fetch is the worst
+                    moment to do it. `seedTestData` keeps its gate: synthetic
+                    sorties really do race the archive. */}
                 <Button
                   icon="plus"
                   variant={showUpload ? "primary" : "default"}
-                  disabled={hydrating}
                   onClick={()=> setShowUpload(v=>!v)}
+                  title={ingestNeedsYou ? t("ingest.needsYou", { n: ingestNeedsYou }) : undefined}
                 >
                   {t("page.ingest")}
+                  {(ingestBusy>0 || ingestNeedsYou>0) && (
+                    <span className={`tnum text-2xs ${ingestNeedsYou>0 ? "text-accent" : "text-ink3"}`}>
+                      {ingestNeedsYou>0 ? `· ${ingestNeedsYou}!` : `· ${ingestBusy}`}
+                    </span>
+                  )}
                 </Button>
               </div>
 
@@ -229,6 +257,13 @@ export default function Page(){
                   {hydrateSkipped>0 && <div>{t("est.loadFailedN", { n: hydrateSkipped })}</div>}
                 </div>
               )}
+
+              {/* Ingests the service recorded as failed, reachable WITHOUT
+                  opening the Ingest panel — a failure nobody can find is a
+                  failure the archive is quietly missing a count for. */}
+              <div className="w-[300px] max-w-[80vw] text-left empty:hidden bg-surface border border-line rounded p-2 shadow-pop">
+                <FailedIngests compact />
+              </div>
             </div>
 
             {/* Ingest panel */}
@@ -249,8 +284,8 @@ export default function Page(){
                 service that could not be reached — is the app inventing a fact
                 about the user's data that it does not have. */}
             {empty && !showUpload && (
-              <div className="absolute inset-0 z-20 grid place-items-center bg-bg">
-                <div className="text-center max-w-[320px] px-6">
+              <div className="absolute inset-0 z-20 grid place-items-center bg-bg overflow-y-auto py-6">
+                <div className={`text-center px-6 ${restoring || unreachable ? "max-w-[320px]" : "max-w-[440px]"}`}>
                   {restoring ? (
                     <>
                       <Icon name="download" size={22} className="text-ink3 mx-auto" />
@@ -268,12 +303,38 @@ export default function Page(){
                       </div>
                     </>
                   ) : (
+                    /* First run. A bare "upload something" button tells a new
+                       ecologist what to click and nothing about what this
+                       platform then does with it — so the empty screen teaches
+                       the three flows that make up a working day, and names
+                       the file types it can actually read. */
                     <>
                       <Icon name="upload" size={22} className="text-ink3 mx-auto" />
                       <h2 className="text-lead text-ink mt-3">{t("page.emptyTitle")}</h2>
                       <p className="text-sm text-ink2 mt-1.5 leading-relaxed">
                         {t("page.emptyBody")}
                       </p>
+                      <ol className="mt-4 space-y-2 text-left">
+                        {([
+                          { n: 1, icon: "upload" as const, title: t("first.uploadTitle"), body: t("first.uploadBody") },
+                          { n: 2, icon: "check" as const, title: t("first.reviewTitle"), body: t("first.reviewBody") },
+                          { n: 3, icon: "download" as const, title: t("first.reportTitle"), body: t("first.reportBody") },
+                        ]).map(step=>(
+                          <li key={step.n} className="flex items-start gap-2.5 rounded border border-line-soft bg-surface px-2.5 py-2">
+                            <span className="w-5 h-5 shrink-0 grid place-items-center rounded-full border border-line text-2xs text-ink3 tnum mt-0.5">
+                              {step.n}
+                            </span>
+                            <span className="min-w-0">
+                              <span className="flex items-center gap-1.5 text-xs text-ink">
+                                <Icon name={step.icon} size={12} className="text-ink3" />
+                                {step.title}
+                              </span>
+                              <span className="block text-2xs text-ink3 mt-0.5 leading-relaxed">{step.body}</span>
+                            </span>
+                          </li>
+                        ))}
+                      </ol>
+                      <p className="text-2xs text-ink3 mt-2.5 leading-relaxed">{t("ingest.acceptedTypes")}</p>
                       <div className="flex items-center justify-center gap-1.5 mt-4">
                         <Button variant="primary" icon="upload" onClick={()=> setShowUpload(true)}>
                           {t("page.upload")}
