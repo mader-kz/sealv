@@ -1,12 +1,11 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import dynamic from "next/dynamic";
 import TopBar from "@/components/layout/TopBar";
 import Rail from "@/components/layout/Rail";
 import LeftPanel from "@/components/layout/LeftPanel";
 import RightInspector from "@/components/layout/RightInspector";
 import Dropzone from "@/components/upload/Dropzone";
-import CommandPalette from "@/components/layout/CommandPalette";
 import Dashboard from "@/components/dashboard/Dashboard";
 import Timeline from "@/components/layout/Timeline";
 import Workbench from "@/components/workbench/Workbench";
@@ -27,7 +26,6 @@ const CaspianMap = dynamic(()=> import("@/components/map/CaspianMap"), {
 
 export default function Page(){
   const { t, tp } = useT();
-  const [cmdOpen, setCmdOpen] = useState(false);
   const [showLeft, setShowLeft] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
   const [rightPane, setRightPane] = useState<"inspector"|"analytics"|null>(null);
@@ -61,11 +59,16 @@ export default function Page(){
 
   const totalSeals = detections.reduce((s,d)=> s + (d.status!=="false_positive" ? d.count : 0), 0);
   const empty = footages.length===0;
+  // The timeline is a date brush; with everything flown on one day there is
+  // nothing to brush. It earns its strip only once a season has history.
+  const multiDay = useMemo(
+    ()=> new Set(footages.map(f=> new Date(f.uploadedAt).toDateString())).size > 1,
+    [footages],
+  );
 
   return (
     <div className="h-screen w-screen flex flex-col bg-bg">
-      <TopBar onCmdK={()=> setCmdOpen(v=>!v)} />
-      <button id="cmdk-trigger" className="hidden" onClick={()=> setCmdOpen(true)} />
+      <TopBar />
       <Workbench open={workbenchOpen} onClose={()=> setWorkbenchOpen(false)} />
 
       <div className="flex flex-1 min-h-0">
@@ -140,7 +143,7 @@ export default function Page(){
             )}
           </div>
 
-          {footages.length>1 && <Timeline minimal />}
+          {multiDay && <Timeline minimal />}
         </div>
 
         {rightPane==="analytics" && <Dashboard onClose={()=> setRightPane(null)} />}
@@ -154,8 +157,6 @@ export default function Page(){
           </div>
         )}
       </div>
-
-      <CommandPalette open={cmdOpen} onClose={()=> setCmdOpen(false)} />
     </div>
   );
 }

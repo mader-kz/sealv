@@ -1,6 +1,5 @@
 "use client";
 import { useEffect } from "react";
-import Icon from "@/components/ui/Icon";
 import { LANGS, initLang, useLang, useT, type Lang } from "@/lib/i18n";
 
 /* The switcher shows each language in its own name — these are not
@@ -8,7 +7,7 @@ import { LANGS, initLang, useLang, useT, type Lang } from "@/lib/i18n";
    language first, default first. */
 const LANG_LABELS: Record<Lang, string> = { kk: "ҚАЗ", ru: "РУС", en: "ENG" };
 
-export default function TopBar({ onCmdK }: { onCmdK: ()=>void }){
+export default function TopBar(){
   const { t } = useT();
   const [lang, setLang] = useLang();
 
@@ -40,15 +39,6 @@ export default function TopBar({ onCmdK }: { onCmdK: ()=>void }){
           </button>
         ))}
       </div>
-
-      <button
-        onClick={onCmdK}
-        className="hidden sm:flex items-center gap-2 h-7 bg-surface border border-line rounded pl-2.5 pr-1.5 text-xs text-ink3 hover:text-ink2 hover:border-ink3 transition-colors"
-      >
-        <Icon name="search" size={13} />
-        <span>{t("topbar.search")}</span>
-        <kbd className="font-mono text-2xs text-ink3 border border-line rounded px-1 py-0.5 leading-none ml-4">⌘K</kbd>
-      </button>
     </div>
   );
 }

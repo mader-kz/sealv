@@ -139,21 +139,11 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
       map.addSource("animals", { type: "geojson", data: { type:"FeatureCollection", features: [] } });
       map.addLayer({ id: "footprints-line", type:"line", source:"footprints", paint:{ "line-color":"#ffffff", "line-width":1, "line-opacity":0.3 } });
       map.addLayer({ id:"footprints-fill", type:"fill", source:"footprints", paint:{ "fill-color":"#ffffff", "fill-opacity":0.04 } });
-      // heatmap — density of placed animals, weighted by each detection's count
-      map.addSource("heatmap-src", { type:"geojson", data: { type:"FeatureCollection", features: [] } });
-      map.addLayer({ id:"seal-heat", type:"heatmap", source:"heatmap-src", paint:{
-        "heatmap-weight": ["interpolate",["linear"],["get","count"],1,0.3,12,1],
-        "heatmap-intensity": ["interpolate",["linear"],["zoom"],5,0.6,8,1.2,10,1.8],
-        "heatmap-radius": ["interpolate",["linear"],["zoom"],5,18,8,28,10,38],
-        "heatmap-opacity": 0.8,
-        "heatmap-color": ["interpolate",["linear"],["heatmap-density"],0,"rgba(224,161,60,0)",0.3,"rgba(224,161,60,0.28)",0.6,"rgba(224,161,60,0.55)",1,"rgba(240,196,120,0.85)"]
-      }});
-      map.setLayoutProperty("seal-heat","visibility","none");
       // Colony outline: the haul-out drawn as an area, not a soup of dots.
       // Appears from mid zoom; far out the chip alone carries the story.
       map.addLayer({ id:"colony-fill", type:"fill", source:"colonies", minzoom: ZOOM_COLONY, paint:{
         "fill-color":"#e0a13c",
-        "fill-opacity":0.16, // lifted raster floor eats a little of the tint — keep in sync with the pin/heat toggles below
+        "fill-opacity":0.16, // lifted raster floor eats a little of the tint — keep in sync with the pin toggle below
       }});
       map.addLayer({ id:"colony-line", type:"line", source:"colonies", minzoom: ZOOM_COLONY, paint:{
         "line-color":"#e0a13c",
@@ -267,18 +257,6 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
     }
   }, [satellite, mapLoaded]);
 
-  // heatmap toggle
-  useEffect(()=>{
-    const map=mapRef.current; if(!map||!mapLoaded) return;
-    const vis = layerState.heatmap ? "visible" : "none";
-    try{
-      if(map.getLayer("seal-heat")) map.setLayoutProperty("seal-heat","visibility",vis);
-      // step the colony drawing back while the density field is on
-      if(map.getLayer("animal-dots")) map.setPaintProperty("animal-dots","circle-opacity", layerState.heatmap ? 0.35 : 1);
-      if(map.getLayer("colony-fill")) map.setPaintProperty("colony-fill","fill-opacity", layerState.heatmap ? 0.05 : 0.16);
-    }catch{}
-  },[layerState.heatmap, mapLoaded]);
-
   // push data to map
   useEffect(()=>{
     const map = mapRef.current; if(!map||!mapLoaded) return;
@@ -309,14 +287,13 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
 
     const csrc = map.getSource("colonies") as any;
     const asrc = map.getSource("animals") as any;
-    const hsrc = map.getSource("heatmap-src") as any;
     if(!csrc || !asrc) return;
     if(!layerState.detections){
-      csrc.setData(EMPTY_FC); asrc.setData(EMPTY_FC); hsrc?.setData(EMPTY_FC);
+      csrc.setData(EMPTY_FC); asrc.setData(EMPTY_FC);
       return;
     }
     // A false positive is a reviewed "not an animal" — it is out of the
-    // outline, out of the dots, out of the heat. Everything placed else is in.
+    // outline and out of the dots. Everything else placed is in.
     const placed = detections.filter(d=> d.status!=="false_positive");
     const byFootage = new Map<string, Detection[]>();
     for(const d of placed){
@@ -347,8 +324,6 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
       properties:{ detId:d.id, fid:d.footageId, status:d.status, count:d.count }
     }));
     asrc.setData({ type:"FeatureCollection", features: animalFeatures });
-    // heatmap: the same placed animals, no cluster sums — density is honest
-    hsrc?.setData({ type:"FeatureCollection", features: animalFeatures });
   }, [footages, detections, selectedId, layerState, mapLoaded, pinMode, pinPoints]);
 
   // fly to selected now handled by click handlers (chip → fitBounds, list → center) to avoid double-ease fighting drag
@@ -510,7 +485,6 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
           <span className="w-px h-4 bg-line mx-0.5" />
           <Toggle checked={layerState.footprints} onChange={v=>setLayer("footprints",v)} label={t("map.tracks")} />
           <Toggle checked={layerState.detections} onChange={v=>setLayer("detections",v)} label={t("map.colonies")} />
-          <Toggle checked={layerState.heatmap} onChange={v=>setLayer("heatmap",v)} label={t("map.heat")} />
         </div>
         {pinMode && (
           <div className="bg-accent text-accent-ink text-xs px-2.5 h-7 rounded flex items-center">
