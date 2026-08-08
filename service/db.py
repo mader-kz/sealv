@@ -54,7 +54,10 @@ _JSON_COLUMNS: dict[str, tuple[str, ...]] = {
 _SURVEY_UPDATABLE = (
     "site_id", "captured_at", "altitude_m", "gsd_cm_px", "gsd_source",
     "tide_state", "sea_ice_pct", "operator", "notes",
+    "lat", "lng", "location_source",
+    "retired_at", "retired_reason", "retired_by",
 )
+_SITE_UPDATABLE = ("name", "region", "lat", "lng")
 _JOB_UPDATABLE = (
     "status", "progress", "error", "claimed_by", "claimed_at", "finished_at", "params",
 )
@@ -127,6 +130,7 @@ def init_db(conn: sqlite3.Connection) -> sqlite3.Connection:
     # transaction, so re-assert it rather than trust the script's copy.
     conn.execute("PRAGMA foreign_keys = ON")
     _widen(conn)
+    _relax(conn)
     return conn
 
 
@@ -141,10 +145,109 @@ def _widen(conn: sqlite3.Connection) -> None:
     """
     for table, column, ddl in (
         ("job", "attempts", "ALTER TABLE job ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0"),
+        ("media", "content_hash", "ALTER TABLE media ADD COLUMN content_hash TEXT"),
+        ("survey", "lat", "ALTER TABLE survey ADD COLUMN lat REAL"),
+        ("survey", "lng", "ALTER TABLE survey ADD COLUMN lng REAL"),
+        ("survey", "location_source", "ALTER TABLE survey ADD COLUMN location_source TEXT"),
+        ("survey", "retired_at", "ALTER TABLE survey ADD COLUMN retired_at TEXT"),
+        ("survey", "retired_reason", "ALTER TABLE survey ADD COLUMN retired_reason TEXT"),
+        ("survey", "retired_by", "ALTER TABLE survey ADD COLUMN retired_by TEXT"),
+        # Nullable with no default, which is the only shape SQLite will accept
+        # for an added REFERENCES column - and the only shape that is correct:
+        # every existing run reaches its survey through its media.
+        ("run", "survey_id", "ALTER TABLE run ADD COLUMN survey_id TEXT REFERENCES survey(id)"),
     ):
         have = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
         if column not in have:
             conn.execute(ddl)
+    # The column above is worth nothing without the index: the duplicate check
+    # runs on every upload, and a full scan of `media` on a season's archive is
+    # exactly the kind of cost that gets a safety check switched off. CREATE
+    # INDEX IF NOT EXISTS is idempotent, so it needs no guard of its own - only
+    # the column, which has to exist first.
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_media_hash ON media(content_hash)")
+
+
+def _relax(conn: sqlite3.Connection) -> None:
+    """Drop the NOT NULL from `run.job_id` and `run.media_id`. Idempotent.
+
+    This is the one migration in this schema that is not additive, and it is
+    here because SQLite's ALTER cannot relax a constraint: the only way is the
+    12-step table rebuild from the SQLite docs. It is needed for a single row
+    shape - a ground count, which ran no job and has no media (see the comment
+    on `run` in schema.sql).
+
+    The guard is the point. `PRAGMA table_info` reports `notnull` per column, so
+    a database already rebuilt returns immediately and the boat's archive is
+    rewritten exactly once, on the first start after this ships.
+
+    Three things keep the rewrite safe on real data:
+
+      * `PRAGMA foreign_keys=OFF` OUTSIDE the transaction. It is a no-op inside
+        one, and with foreign keys still on, `DROP TABLE run` would cascade -
+        deleting every `point` and every `edit` in the archive. That is the
+        whole survey's evidence, and it would look like a successful start.
+      * one IMMEDIATE transaction, so a crash mid-rewrite rolls back to the old
+        table rather than leaving neither.
+      * an EXPLICIT column list on the copy. `SELECT *` would bind by position,
+        so a future column added to one side and not the other would silently
+        shift every value one column left - counts landing in `seconds`.
+
+    Afterwards `PRAGMA foreign_key_check` has to come back empty. If it does
+    not, something referenced a run that did not survive the copy, and this
+    raises rather than let the service open on a damaged archive.
+    """
+    cols = {row["name"]: row["notnull"] for row in conn.execute("PRAGMA table_info(run)")}
+    if not cols:
+        return  # no `run` table yet - schema.sql just created it in the new shape
+    if not (cols.get("job_id") or cols.get("media_id")):
+        return  # already relaxed
+
+    # Outside the transaction: SQLite ignores this pragma while one is open.
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        with _tx(conn, "IMMEDIATE"):
+            conn.execute(
+                """CREATE TABLE run_new (
+                       id             TEXT PRIMARY KEY,
+                       job_id         TEXT REFERENCES job(id) ON DELETE CASCADE,
+                       media_id       TEXT REFERENCES media(id) ON DELETE CASCADE,
+                       survey_id      TEXT REFERENCES survey(id),
+                       engine         TEXT NOT NULL,
+                       engine_params  TEXT,
+                       count_low      INTEGER,
+                       count_best     INTEGER,
+                       count_high     INTEGER,
+                       basis          TEXT,
+                       quality        TEXT,
+                       seconds        REAL,
+                       created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+                   )"""
+            )
+            conn.execute(
+                """INSERT INTO run_new
+                       (id, job_id, media_id, survey_id, engine, engine_params,
+                        count_low, count_best, count_high, basis, quality,
+                        seconds, created_at)
+                   SELECT id, job_id, media_id, survey_id, engine, engine_params,
+                          count_low, count_best, count_high, basis, quality,
+                          seconds, created_at
+                     FROM run"""
+            )
+            conn.execute("DROP TABLE run")
+            conn.execute("ALTER TABLE run_new RENAME TO run")
+            conn.execute("CREATE INDEX IF NOT EXISTS ix_run_media ON run(media_id, created_at)")
+        broken = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if broken:
+            raise sqlite3.IntegrityError(
+                f"relaxing run.job_id/run.media_id left {len(broken)} dangling "
+                f"reference(s): {[tuple(r) for r in broken[:5]]}"
+            )
+    finally:
+        # Re-asserted on every path. Leaving this connection with foreign keys
+        # off would turn the next bad write in the same process into silent
+        # corruption instead of an IntegrityError.
+        conn.execute("PRAGMA foreign_keys = ON")
 
 
 @contextmanager
@@ -186,6 +289,13 @@ def _utcnow() -> str:
     unique per worker, which `claim_job` relies on when RETURNING is missing.
     """
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")
+
+
+#: Public alias. The API stamps `survey.retired_at` itself, and it has to sort
+#: and compare against every other timestamp in the archive - a second copy of
+#: that format string in another module is exactly how two timestamp columns
+#: quietly stop being comparable.
+utcnow = _utcnow
 
 
 # --------------------------------------------------------------------------
@@ -325,6 +435,21 @@ def list_sites(conn: sqlite3.Connection, limit: int = 500) -> list[dict]:
     )
 
 
+def update_site(conn: sqlite3.Connection, site_id: str, **fields: Any) -> Optional[dict]:
+    """Patch a site - naming a colony, mostly.
+
+    A 2km cluster of sorties is a place, and until somebody names it the only
+    thing this archive can call it is a pair of coordinates. The name is
+    therefore the operator's contribution to the record, not a decoration: it
+    follows the site into repeat surveys, the dynamics chart, the PDF and the
+    exports, so every one of them says "Tyulenii Island" instead of 45.29/50.20.
+    """
+    if fields:
+        setters, vals = _updates(fields, _SITE_UPDATABLE, "site")
+        conn.execute(f"UPDATE site SET {setters} WHERE id = ?", (*vals, site_id))
+    return get_site(conn, site_id)
+
+
 # --------------------------------------------------------------------------
 # survey
 # --------------------------------------------------------------------------
@@ -341,18 +466,27 @@ def create_survey(
     operator: str | None = None,
     notes: str | None = None,
     survey_id: str | None = None,
+    lat: float | None = None,
+    lng: float | None = None,
+    location_source: str | None = None,
 ) -> dict:
     """Create a survey. `tide_state` and `sea_ice_pct` are worth capturing even
     when nothing reads them yet - haul-out counts swing enormously with both,
-    and a trend line built without them looks meaningful and is wrong."""
+    and a trend line built without them looks meaningful and is wrong.
+
+    `location_source` is stored beside `lat`/`lng` rather than inferred from
+    which of them is set: telemetry, a dropped pin and a typed-in ground count
+    all produce a coordinate, and only the label says which one this is."""
     sid = survey_id or new_id()
     conn.execute(
         """INSERT INTO survey
                (id, site_id, captured_at, altitude_m, gsd_cm_px, gsd_source,
-                tide_state, sea_ice_pct, operator, notes)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                tide_state, sea_ice_pct, operator, notes,
+                lat, lng, location_source)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (sid, site_id, captured_at, altitude_m, gsd_cm_px, gsd_source,
-         tide_state, sea_ice_pct, operator, notes),
+         tide_state, sea_ice_pct, operator, notes,
+         _as_float(lat, "survey.lat"), _as_float(lng, "survey.lng"), location_source),
     )
     return get_survey(conn, sid)
 
@@ -387,19 +521,34 @@ def create_media(
     duration_s: float | None = None,
     size_bytes: int | None = None,
     media_id: str | None = None,
+    content_hash: str | None = None,
 ) -> dict:
     """Register a file. `kind` is validated because a video registered as an
     image silently takes the single-frame path and reports one frame's count as
-    the whole sortie."""
+    the whole sortie.
+
+    `content_hash` is the SHA-256 of the bytes, and it is only ever a fact about
+    them - nothing here rejects a repeat. Whether the same footage arriving
+    twice is a mistake or a deliberate re-count is the operator's call, and this
+    layer's job is to make the question answerable, not to answer it.
+
+    `created_at` is stamped here with microseconds rather than left to the
+    column default, for the reason `create_job` spells out: the default has
+    one-second resolution, and the duplicate check orders by (created_at, id) to
+    name the NEWEST copy already held. Three uploads of one file land inside the
+    same second, so the tie would fall to `id` - random hex - and the operator
+    would be shown an arbitrary one of the earlier copies while being told it
+    was the last."""
     if kind not in MEDIA_KINDS:
         raise ValueError(f"media kind must be one of {MEDIA_KINDS}, got {kind!r}")
     mid = media_id or new_id()
     conn.execute(
         """INSERT INTO media
-               (id, survey_id, path, filename, kind, width, height, duration_s, bytes)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               (id, survey_id, path, filename, kind, width, height, duration_s,
+                bytes, content_hash, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (mid, survey_id, str(path), filename or Path(path).name, kind,
-         width, height, duration_s, size_bytes),
+         width, height, duration_s, size_bytes, content_hash, _utcnow()),
     )
     return get_media(conn, mid)
 
@@ -512,7 +661,11 @@ def list_jobs(
     status: str | None = None,
     media_id: str | None = None,
     limit: int = 200,
+    offset: int = 0,
 ) -> list[dict]:
+    """Newest first. `offset` pages past the window `limit` cuts, so a caller
+    watching a busy queue can walk the whole backlog instead of being told the
+    first 200 jobs are all there are."""
     where, args = [], []
     if status is not None:
         where.append("status = ?")
@@ -523,8 +676,9 @@ def list_jobs(
     clause = f"WHERE {' AND '.join(where)}" if where else ""
     return _rows(
         conn.execute(
-            f"SELECT * FROM job {clause} ORDER BY created_at DESC, id DESC LIMIT ?",
-            (*args, limit),
+            f"SELECT * FROM job {clause} ORDER BY created_at DESC, id DESC "
+            "LIMIT ? OFFSET ?",
+            (*args, limit, max(0, int(offset))),
         ),
         "job",
     )
@@ -667,16 +821,23 @@ def requeue_stale_jobs(
 
 def create_run(
     conn: sqlite3.Connection,
-    job_id: str,
-    media_id: str,
+    job_id: str | None,
+    media_id: str | None,
     engine: str,
     engine_params: Any = None,
     band: Any = None,
     quality: Any = None,
     seconds: float | None = None,
     run_id: str | None = None,
+    survey_id: str | None = None,
 ) -> str:
-    """Record one detection pass.
+    """Record one detection pass - or one person's count.
+
+    `job_id` and `media_id` are both optional, and only a ground count leaves
+    them out: nobody queued it and there is no footage. Every engine run fills
+    both. Nothing is asserted about them here because the column constraints
+    say it better - a run pointing at a job that does not exist is refused by
+    the foreign key, and a run pointing at nothing is a manual observation.
 
     `band` is a CountBand, a dict with low/best/high/basis, or None (a run that
     failed before producing a count). It is duck-typed rather than imported so
@@ -700,11 +861,11 @@ def create_run(
         basis = b.get("basis")
     conn.execute(
         """INSERT INTO run
-               (id, job_id, media_id, engine, engine_params,
+               (id, job_id, media_id, survey_id, engine, engine_params,
                 count_low, count_best, count_high, basis, quality, seconds,
                 created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (rid, job_id, media_id, engine, _json_dump(engine_params),
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (rid, job_id, media_id, survey_id, engine, _json_dump(engine_params),
          low, best, high, basis, _json_dump(quality),
          _as_float(seconds, "seconds"), _utcnow()),
     )
@@ -736,6 +897,69 @@ def list_runs(
         ),
         "run",
     )
+
+
+def create_observation(
+    conn: sqlite3.Connection,
+    count: int,
+    captured_at: str,
+    lat: float | None = None,
+    lng: float | None = None,
+    site_id: str | None = None,
+    operator: str | None = None,
+    notes: str | None = None,
+    method: str | None = None,
+) -> dict:
+    """A ground count: one person, one place, one date, one number.
+
+    Returns {"survey", "run"}, both written in a single transaction so the
+    archive can never hold a survey whose count went missing.
+
+    The count is stored as low = best = high, with `basis` = 'manual'. That is
+    not a band pretending to be narrow - it is the honest shape of a human
+    count, which has no cross-frame spread to measure because there were no
+    frames. Every surface that renders a band has to read `basis` and say
+    "counted by hand" rather than draw whiskers of width zero and imply a
+    precision nobody claimed.
+
+    `engine` is 'manual' for the same reason: the field that answers "what
+    produced this number" must never answer "countgd" for a number CountGD
+    never saw. `method` (binoculars, boat transect, ...) rides in `quality`
+    where it can grow without a schema change; it is free text from the
+    operator and nothing branches on it.
+    """
+    # Whole, non-negative, and actually a number. `_as_int` alone would round
+    # 4.5 down to 4 and store a count nobody made; a count is the one value in
+    # this archive that must never be silently adjusted.
+    n = None if isinstance(count, bool) else _as_int(count, "observation.count")
+    if n is None or n < 0 or n != count:
+        raise ValueError(f"observation count must be a whole number >= 0, got {count!r}")
+    with _tx(conn, "IMMEDIATE"):
+        survey = create_survey(
+            conn,
+            site_id=site_id,
+            captured_at=captured_at,
+            operator=operator,
+            notes=notes,
+            lat=lat,
+            lng=lng,
+            location_source="manual",
+        )
+        run_id = create_run(
+            conn,
+            job_id=None,
+            media_id=None,
+            # The direct link. An engine run reaches its survey through its
+            # media; with no media, this is the only thread back to the date,
+            # the position and the site this count belongs to.
+            survey_id=survey["id"],
+            engine="manual",
+            band={"low": n, "best": n, "high": n, "basis": "manual"},
+            quality={"manual": True, "method": method},
+            seconds=None,
+        )
+        run = get_run(conn, run_id)
+    return {"survey": survey, "run": run}
 
 
 def _point_values(run_id: str, point: Any) -> tuple:
@@ -1075,6 +1299,15 @@ if __name__ == "__main__":
         create_site(conn, "Kendirli")
         check("list_sites returns both", len(list_sites(conn)) == 2)
 
+        renamed = update_site(conn, site["id"], name="Tyuleniy (north spit)")
+        check("update_site renames a colony", renamed["name"] == "Tyuleniy (north spit)")
+        check("update_site leaves the rest of the row alone",
+              renamed["region"] == "KZ-North" and abs(renamed["lat"] - 45.29) < 1e-9)
+        raises("update_site rejects unknown columns", ValueError,
+               update_site, conn, site["id"], population=4000)
+        check("update_site on a missing id is None", update_site(conn, "nope") is None)
+        update_site(conn, site["id"], name="Tyulenii Island")  # back, later checks read it
+
         # --- survey ----------------------------------------------------
         # Full-frame width, not the 1698px crop the engine benchmarks used:
         # gsd_from_altitude divides by the sensor's pixel count, so feeding it a
@@ -1117,6 +1350,29 @@ if __name__ == "__main__":
         raises("create_media rejects a bad kind", ValueError,
                create_media, conn, tmp / "x.tif", "raster")
         check("get_media on a missing id is None", get_media(conn, "nope") is None)
+        digest = "a" * 64
+        hashed = create_media(conn, tmp / "again.jpg", "image", width=10, height=10,
+                              content_hash=digest)
+        check("create_media stores the content hash", hashed["content_hash"] == digest)
+        check("content_hash is a fact, not a constraint - a repeat still lands",
+              create_media(conn, tmp / "again2.jpg", "image",
+                           content_hash=digest)["content_hash"] == digest)
+        check("media with no hash records NULL, not a fake one",
+              still["content_hash"] is None)
+        check("create_media stamps created_at to the microsecond",
+              len({m["created_at"] for m in list_media(conn)}) == len(list_media(conn)),
+              # Three uploads of one file land in the same second; without this
+              # "the newest copy already held" ties on random hex and the
+              # duplicate warning names an arbitrary earlier one.
+              )
+        check("the hash lookup is indexed",
+              "SEARCH" in " ".join(
+                  r["detail"] for r in conn.execute(
+                      "EXPLAIN QUERY PLAN SELECT id FROM media WHERE content_hash = ?",
+                      (digest,))),
+              # A full scan of a season's media on every upload is how a
+              # duplicate check gets switched off.
+              )
 
         # --- track -----------------------------------------------------
         n = insert_track_points(conn, video["id"], [
@@ -1257,6 +1513,111 @@ if __name__ == "__main__":
               "attempts" in {r["name"] for r in older.execute("PRAGMA table_info(job)")})
         check("widening is idempotent", init_db(older) is older)
         older.close()
+
+        # --- the run rebuild, against a database in the OLD shape ------------
+        # The only non-additive migration in this schema, and the one that runs
+        # against the boat's archive on the next start. Everything below is what
+        # "it worked" has to mean: the constraint is gone, and NOTHING ELSE
+        # moved - the points and edits hanging off those runs above all, since
+        # a DROP TABLE with foreign keys still on would cascade them away and
+        # the service would come up looking healthy with the evidence deleted.
+        legacy = connect(tmp / "legacy.db")
+        legacy.executescript(
+            """
+            CREATE TABLE media (id TEXT PRIMARY KEY, survey_id TEXT, path TEXT NOT NULL,
+                filename TEXT, kind TEXT NOT NULL, width INTEGER, height INTEGER,
+                duration_s REAL, bytes INTEGER,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')));
+            CREATE TABLE job (id TEXT PRIMARY KEY,
+                media_id TEXT NOT NULL REFERENCES media(id) ON DELETE CASCADE,
+                params TEXT NOT NULL, status TEXT NOT NULL, progress TEXT, error TEXT,
+                claimed_by TEXT, claimed_at TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')), finished_at TEXT);
+            -- the old shape: both columns NOT NULL
+            CREATE TABLE run (id TEXT PRIMARY KEY,
+                job_id TEXT NOT NULL REFERENCES job(id) ON DELETE CASCADE,
+                media_id TEXT NOT NULL REFERENCES media(id) ON DELETE CASCADE,
+                engine TEXT NOT NULL, engine_params TEXT, count_low INTEGER,
+                count_best INTEGER, count_high INTEGER, basis TEXT, quality TEXT,
+                seconds REAL, created_at TEXT NOT NULL DEFAULT (datetime('now')));
+            CREATE INDEX ix_run_media ON run(media_id, created_at);
+            CREATE TABLE point (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL REFERENCES run(id) ON DELETE CASCADE,
+                frame_idx INTEGER, x REAL NOT NULL, y REAL NOT NULL, lat REAL, lng REAL,
+                score REAL, support INTEGER, status TEXT NOT NULL DEFAULT 'auto');
+            CREATE TABLE edit (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL REFERENCES run(id) ON DELETE CASCADE,
+                op TEXT NOT NULL, point_id INTEGER, x REAL, y REAL, operator TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')));
+            INSERT INTO media (id, path, kind) VALUES ('m-old', '/tmp/a.jpg', 'image');
+            INSERT INTO job (id, media_id, params, status)
+                 VALUES ('j-old', 'm-old', '{}', 'done');
+            INSERT INTO run (id, job_id, media_id, engine, count_low, count_best,
+                             count_high, basis, seconds, created_at)
+                 VALUES ('r-old', 'j-old', 'm-old', 'countgd', 401, 576, 656,
+                         'consensus_4_frames', 214.6, '2026-01-02 03:04:05.000001');
+            INSERT INTO point (run_id, x, y, status) VALUES ('r-old', 1.0, 2.0, 'auto');
+            INSERT INTO point (run_id, x, y, status)
+                 VALUES ('r-old', 3.0, 4.0, 'false_positive');
+            INSERT INTO edit (run_id, op, point_id) VALUES ('r-old', 'remove', 2);
+            """
+        )
+        check("the legacy fixture really is the old shape",
+              all(r["notnull"] == 1 for r in legacy.execute("PRAGMA table_info(run)")
+                  if r["name"] in ("job_id", "media_id")))
+        init_db(legacy)
+
+        relaxed = {r["name"]: r["notnull"] for r in legacy.execute("PRAGMA table_info(run)")}
+        check("init_db relaxes run.job_id and run.media_id to NULLable",
+              relaxed.get("job_id") == 0 and relaxed.get("media_id") == 0, relaxed)
+        old_run = get_run(legacy, "r-old")
+        check("the rebuilt run kept every value, in the right column",
+              old_run is not None
+              and (old_run["job_id"], old_run["media_id"], old_run["engine"]) ==
+                  ("j-old", "m-old", "countgd")
+              and (old_run["count_low"], old_run["count_best"], old_run["count_high"]) ==
+                  (401, 576, 656)
+              and old_run["basis"] == "consensus_4_frames"
+              and abs(old_run["seconds"] - 214.6) < 1e-9
+              and old_run["created_at"] == "2026-01-02 03:04:05.000001",
+              old_run)
+        check("the rebuild did not cascade the run's points away",
+              legacy.execute("SELECT COUNT(*) FROM point").fetchone()[0] == 2)
+        check("the rebuild did not cascade the run's edits away",
+              legacy.execute("SELECT COUNT(*) FROM edit").fetchone()[0] == 1)
+        check("the rebuilt run leaves no dangling reference",
+              legacy.execute("PRAGMA foreign_key_check").fetchall() == [])
+        check("foreign keys are back ON after the rebuild",
+              legacy.execute("PRAGMA foreign_keys").fetchone()[0] == 1)
+        check("ix_run_media survived the rebuild",
+              legacy.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='index' "
+                             "AND name='ix_run_media'").fetchone()[0] == 1)
+
+        ddl_after_first = legacy.execute(
+            "SELECT sql FROM sqlite_master WHERE name = 'run'"
+        ).fetchone()[0]
+        init_db(legacy)  # the guard has to make the second pass a no-op
+        check("relaxing twice rebuilds nothing",
+              legacy.execute("SELECT sql FROM sqlite_master WHERE name='run'").fetchone()[0]
+              == ddl_after_first
+              and legacy.execute("SELECT COUNT(*) FROM run").fetchone()[0] == 1
+              and legacy.execute("SELECT COUNT(*) FROM point").fetchone()[0] == 2)
+        check("the rebuilt run carries the survey link _widen added before it",
+              "survey_id" in {r["name"] for r in legacy.execute("PRAGMA table_info(run)")}
+              and get_run(legacy, "r-old")["survey_id"] is None)
+        check("a legacy database also grows the new survey/media columns",
+              {"lat", "lng", "location_source", "retired_at", "retired_reason",
+               "retired_by"} <= {r["name"] for r in legacy.execute("PRAGMA table_info(survey)")}
+              and "content_hash" in
+                  {r["name"] for r in legacy.execute("PRAGMA table_info(media)")})
+        # The point of the whole rebuild.
+        manual = create_run(legacy, job_id=None, media_id=None, engine="manual",
+                            band={"low": 12, "best": 12, "high": 12, "basis": "manual"})
+        check("a run with no job and no media is now storable",
+              get_run(legacy, manual)["count_best"] == 12)
+        raises("a run still cannot point at a job that does not exist",
+               sqlite3.IntegrityError, create_run, legacy, "no-such-job", None, "countgd")
+        legacy.close()
 
         # --- claim_job, two workers racing -----------------------------
         N_JOBS = 60
@@ -1499,6 +1860,48 @@ if __name__ == "__main__":
         check("edit log is append-only and complete", len(log) == 8,
               [e["op"] for e in log])
         check("verified_count on an empty run is 0", verified_count(conn, other_run) == 0)
+
+        # --- a ground count ---------------------------------------------
+        obs = create_observation(
+            conn, count=42, captured_at="2026-08-01T09:00:00Z",
+            lat=44.81, lng=50.33, site_id=site["id"], operator="a.n",
+            notes="counted from the shore, 8x binoculars", method="binoculars",
+        )
+        check("create_observation writes a survey and a run",
+              obs["survey"]["id"] and obs["run"]["id"])
+        check("a ground count has no job and no media",
+              obs["run"]["job_id"] is None and obs["run"]["media_id"] is None)
+        check("a ground count still reaches its survey directly",
+              obs["run"]["survey_id"] == obs["survey"]["id"])
+        check("an engine run reaches its survey through its media, not this column",
+              get_run(conn, run_id)["survey_id"] is None)
+        check("a ground count says a human made it",
+              obs["run"]["engine"] == "manual" and obs["run"]["basis"] == "manual")
+        check("a ground count is one number, not a band",
+              (obs["run"]["count_low"], obs["run"]["count_best"],
+               obs["run"]["count_high"]) == (42, 42, 42))
+        check("a ground count claims no duration", obs["run"]["seconds"] is None)
+        check("the method rides in quality as a dict",
+              obs["run"]["quality"] == {"manual": True, "method": "binoculars"})
+        check("a ground count's survey records where the position came from",
+              obs["survey"]["location_source"] == "manual"
+              and abs(obs["survey"]["lat"] - 44.81) < 1e-9
+              and obs["survey"]["site_id"] == site["id"])
+        check("a ground count derives no scale it did not measure",
+              obs["survey"]["gsd_cm_px"] is None and obs["survey"]["altitude_m"] is None)
+        check("a ground count of zero animals is a result, not a missing one",
+              create_observation(conn, count=0,
+                                 captured_at="2026-08-02T09:00:00Z")["run"]["count_best"] == 0)
+        raises("create_observation refuses a negative count", ValueError,
+               create_observation, conn, -1, "2026-08-01T09:00:00Z")
+        raises("create_observation refuses a fractional count", ValueError,
+               create_observation, conn, 4.5, "2026-08-01T09:00:00Z")
+        before = conn.execute("SELECT COUNT(*) FROM survey").fetchone()[0]
+        raises("a ground count at a site that does not exist is refused",
+               sqlite3.IntegrityError, create_observation, conn, 5,
+               "2026-08-01T09:00:00Z", None, None, "no-such-site")
+        check("a refused ground count leaves no orphan survey behind",
+              conn.execute("SELECT COUNT(*) FROM survey").fetchone()[0] == before)
 
         conn.close()
 

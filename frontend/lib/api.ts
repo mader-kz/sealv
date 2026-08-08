@@ -9,8 +9,16 @@
    dev` on :3000 talking to a backend on :8090 (see next.config rewrites). */
 
 import type { Detection, DetectionPixel } from "./types";
+import { getOperator } from "./identity";
 
 const API = process.env.NEXT_PUBLIC_API_BASE ?? "";
+
+/* The service's own length caps (service/api.py). Mirrored so a note that
+   types fine cannot 400 on save — the textarea stops at the same number the
+   backend refuses past. A disagreement here is a lost note. */
+export const NOTES_MAX = 4000;
+export const OPERATOR_MAX = 120;
+export const REASON_MAX = 500;
 
 export type CountBand = {
   low: number | null;
@@ -30,6 +38,18 @@ export type MediaOut = {
   gsd_source?: string | null;
   track_points?: number | null;
   url?: string;
+  /* SHA-256 of the bytes the service stored. Null on media ingested before the
+     digest was recorded — unknown, NOT "this file is new". */
+  content_hash?: string | null;
+  /* The newest piece of media already in the archive with these exact bytes,
+     or null. Reported, never enforced: uploading the same footage twice is
+     usually a mistake that would add a whole colony to a season's total, and
+     occasionally a deliberate re-count. The service cannot tell those apart,
+     so it says what it holds and the operator decides. */
+  duplicate_of?: DuplicateMatch | null;
+  /* The survey minted for this upload — what a metadata correction, a note or
+     a retirement is addressed to. */
+  survey_id?: string | null;
 };
 
 export type RunResult = {
@@ -96,6 +116,69 @@ export type StatsLatestRun = {
      2019 sortie on today's timeline. Null on a survey that never recorded it,
      and then `created_at` is the only date there is. */
   captured_at?: string | null;
+  /* The survey this run belongs to, and the site that survey sits at. All
+     nullable: an unattached upload has no survey, and a survey at an unnamed
+     place has no site. `site_lat`/`site_lng` are the SITE's own marker, which
+     is not the sortie's position - `survey_lat`/`survey_lng` are that. */
+  survey_id?: string | null;
+  site_id?: string | null;
+  site_name?: string | null;
+  site_lat?: number | null;
+  site_lng?: number | null;
+  survey_lat?: number | null;
+  survey_lng?: number | null;
+  /* telemetry | pinned | manual | null. Which of those it is decides how much
+     the coordinate is worth, so it travels with it. */
+  location_source?: string | null;
+  /* Field notes and who filed them. */
+  notes?: string | null;
+  operator?: string | null;
+  /* Set on a sortie withdrawn from the estimate. Rows only carry a non-null
+     value when the caller asked for `include_retired`, because the default
+     archive does not contain them at all. */
+  retired_at?: string | null;
+  /* Flight metadata. `altitude_m` is what GSD - and therefore the surveyed
+     area - is derived from when no scale was measured. */
+  altitude_m?: number | null;
+  tide_state?: string | null;
+  /* 'manual' for a ground count, otherwise the detector's name. Read this
+     before rendering a band: a human count is one number, not a range. */
+  engine?: string | null;
+  /* How far this run sat from the conditions where false positives were
+     actually measured, and the measurements that produced that label. Show
+     them together or not at all - "low risk" on its own is the sort of bare
+     reassurance this product exists not to give. Null = never recorded. */
+  false_positive_risk?: string | null;
+  false_positive_basis?: string[] | null;
+};
+
+/* The wire types above keep `location_source` as a plain string on purpose: a
+   service that grows a fourth value must not make this client crash or, worse,
+   silently render it as whichever branch happened to be the `else`. This is the
+   one place that narrows it, and anything it does not recognise becomes null -
+   "we do not know how this position was arrived at", which is true, rather than
+   a guess dressed as a provenance label. */
+export type LocationSource = "telemetry" | "pinned" | "manual";
+const LOCATION_SOURCES: readonly string[] = ["telemetry", "pinned", "manual"];
+
+export function locationSourceOf(v: string | null | undefined): LocationSource | null {
+  return v && LOCATION_SOURCES.includes(v) ? (v as LocationSource) : null;
+}
+
+/* Media already in the archive with the same bytes, plus whatever count came
+   out of it last. Enough to render "you already counted this: 300 on 6 Aug"
+   without a second round trip. */
+export type DuplicateMatch = {
+  media_id: string;
+  survey_id: string | null;
+  filename: string | null;
+  kind: string | null;
+  created_at: string;
+  run_id: string | null;
+  low: number | null;
+  best: number | null;
+  high: number | null;
+  basis: string | null;
 };
 
 /* The dashboard reads totals/per_site/over_time off the same payload, so the
@@ -117,28 +200,169 @@ async function jsonOrThrow(r: Response): Promise<any> {
   return d;
 }
 
+export type UploadProgress = { loaded: number; total: number };
+
+export type UploadOptions = {
+  sidecar?: File | null;
+  meta?: Record<string, string | number | null | undefined>;
+  /* Bytes on the wire, not a spinner. A sortie is gigabytes over a boat's
+     hotspot, and "uploading…" for four minutes is indistinguishable from
+     "hung". `total` is 0 when the browser cannot compute the length. */
+  onProgress?: (p: UploadProgress) => void;
+  signal?: AbortSignal;
+};
+
+/* XMLHttpRequest, deliberately, in a file where everything else is `fetch`.
+   `fetch` has no upload-progress event — the request-stream API that would
+   give one is not available for a FormData body in any shipping browser — and
+   XHR has had `upload.onprogress` for fifteen years. The choice here is
+   between an honest byte counter and a prettier call site.
+
+   Back-compat: the old positional form `uploadMedia(file, sidecarFile, meta)`
+   still works, so no existing caller has to change to get the new one. */
 export async function uploadMedia(
   file: File,
-  sidecar?: File | null,
+  opts?: UploadOptions | File | null,
   meta?: Record<string, string | number | null | undefined>,
 ): Promise<MediaOut> {
+  const isFileArg =
+    opts instanceof Blob || (typeof File !== "undefined" && opts instanceof File);
+  const o: UploadOptions = isFileArg
+    ? { sidecar: opts as File, meta }
+    : ((opts as UploadOptions | null | undefined) ?? { meta });
+
   const fd = new FormData();
   fd.append("file", file);
-  if (sidecar) fd.append("sidecar", sidecar);
-  for (const [k, v] of Object.entries(meta ?? {}))
+  if (o.sidecar) fd.append("sidecar", o.sidecar);
+  for (const [k, v] of Object.entries(o.meta ?? {}))
     if (v !== undefined && v !== null && v !== "") fd.append(k, String(v));
-  return jsonOrThrow(await fetch(`${API}/v1/media`, { method: "POST", body: fd }));
+
+  return new Promise<MediaOut>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const onAbort = () => xhr.abort();
+
+    /* One teardown for every exit. An upload that is abandoned must not leave
+       a listener holding the AbortSignal - and therefore this closure, and
+       therefore the file - alive for the life of the tab. */
+    const done = (fn: () => void) => {
+      o.signal?.removeEventListener("abort", onAbort);
+      fn();
+    };
+
+    if (o.signal?.aborted) {
+      return reject(new DOMException("the upload was cancelled", "AbortError"));
+    }
+    o.signal?.addEventListener("abort", onAbort);
+
+    if (o.onProgress) {
+      xhr.upload.onprogress = (e) =>
+        o.onProgress?.({ loaded: e.loaded, total: e.lengthComputable ? e.total : 0 });
+    }
+    xhr.onload = () => {
+      let body: any = {};
+      try {
+        body = JSON.parse(xhr.responseText || "{}");
+      } catch {
+        /* a proxy's HTML error page, most likely - fall through to the status */
+      }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        /* The bytes are up and the row is written. Reporting progress as
+           complete matters when the server took a while to probe the file:
+           without it the bar sits at 99% through the whole probe. */
+        o.onProgress?.({ loaded: file.size, total: file.size });
+        done(() => resolve(body as MediaOut));
+      } else {
+        done(() =>
+          reject(new Error(body.error || body.detail || `${xhr.status} ${xhr.statusText}`)),
+        );
+      }
+    };
+    xhr.onerror = () =>
+      done(() => reject(new Error("the upload could not reach the counting service")));
+    xhr.ontimeout = () => done(() => reject(new Error("the upload timed out")));
+    xhr.onabort = () =>
+      done(() => reject(new DOMException("the upload was cancelled", "AbortError")));
+
+    xhr.open("POST", `${API}/v1/media`);
+    xhr.send(fd);
+  });
 }
 
-export async function createJob(mediaId: string): Promise<string> {
+/* The largest file this will read into memory to hash. `crypto.subtle` has no
+   streaming digest, so hashing is one `arrayBuffer()` - fine for a still,
+   reckless for a 4GB transect on a field laptop. Past this, the pre-check is
+   skipped and the caller falls back to `duplicate_of` on the response, which
+   the service computed from the bytes it streamed to disk anyway. */
+const HASH_MAX_BYTES = 512 * 1024 * 1024;
+
+/** SHA-256 hex, or null where crypto.subtle is unavailable (plain-http LAN).
+ *  Null is not a failure — it means the pre-check cannot run and the caller
+ *  must fall back to MediaOut.duplicate_of after the upload. */
+export async function hashFile(file: File): Promise<string | null> {
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle || file.size > HASH_MAX_BYTES) return null;
+  try {
+    const digest = await subtle.digest("SHA-256", await file.arrayBuffer());
+    return Array.from(new Uint8Array(digest))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+  } catch {
+    /* Out of memory on a big file, or a hardened context. Either way the
+       answer is the same: this browser cannot pre-check, and saying so beats
+       reporting a file as new because the hash threw. */
+    return null;
+  }
+}
+
+/** Everything the archive already holds with these exact bytes, newest first. */
+export async function findByHash(sha256: string): Promise<DuplicateMatch[]> {
+  const d = await jsonOrThrow(await fetch(`${API}/v1/media/by-hash/${sha256}`));
+  return d.matches ?? [];
+}
+
+/* The `survey` block travels with the job because gsd_cm_px picks the tile
+   size and the tile size decides the count: sending it after the fact would
+   be a correction to a number already computed at a different scale. */
+export async function createJob(mediaId: string, survey?: SurveyPatch): Promise<string> {
+  const body: Record<string, unknown> = { media_id: mediaId, params: {} };
+  if (survey && Object.keys(survey).length) body.survey = survey;
   const d = await jsonOrThrow(
     await fetch(`${API}/v1/jobs`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ media_id: mediaId, params: {} }),
+      body: JSON.stringify(body),
     }),
   );
   return d.job_id;
+}
+
+export type JobRow = {
+  job_id: string;
+  media_id: string | null;
+  filename: string | null;
+  status: "queued" | "running" | "done" | "failed" | "cancelled";
+  /* The operator-facing half of a failure. The full traceback stays in the
+     service; a field operator cannot act on a stack. */
+  error: string | null;
+  attempts: number;
+  created_at: string;
+  finished_at: string | null;
+};
+
+export async function fetchJobs(q: { status?: string; limit?: number } = {}): Promise<JobRow[]> {
+  const p = new URLSearchParams();
+  if (q.status) p.set("status", q.status);
+  if (q.limit != null) p.set("limit", String(q.limit));
+  const qs = p.toString();
+  const d = await jsonOrThrow(await fetch(`${API}/v1/jobs${qs ? `?${qs}` : ""}`));
+  return d.jobs ?? [];
+}
+
+/** Drop a job that has not started. Throws on a running one (409): it is
+ *  inside a worker process the service cannot interrupt, and pretending
+ *  otherwise would leave a count running behind a cancelled row. */
+export async function cancelJob(jobId: string): Promise<void> {
+  await jsonOrThrow(await fetch(`${API}/v1/jobs/${jobId}/cancel`, { method: "POST" }));
 }
 
 /* A sortie is minutes, not hours. Past this the job is not slow, it is gone -
@@ -392,6 +616,189 @@ export async function fetchTrack(
 
 export const mediaFileUrl = (mediaId: string) => `${API}/media/${mediaId}/file`;
 
+/* ------------------------------------------------- surveys, sites, counts */
+
+/* One survey row, verbatim. Everything but `id` and `created_at` is nullable,
+   and every null is a real state: no site chosen, no date recorded, no scale
+   measured, not retired. None of them may be rendered as a zero or a guess. */
+export type SurveyOut = {
+  id: string;
+  site_id: string | null;
+  captured_at: string | null;
+  altitude_m: number | null;
+  gsd_cm_px: number | null;
+  gsd_source: string | null;
+  tide_state: string | null;
+  sea_ice_pct: number | null;
+  operator: string | null;
+  notes: string | null;
+  lat: number | null;
+  lng: number | null;
+  location_source: string | null;
+  retired_at: string | null;
+  retired_reason: string | null;
+  retired_by: string | null;
+  created_at: string;
+};
+
+/* What a correction may touch. Retirement is absent on purpose - withdrawing a
+   sortie needs a reason and has its own call. Patching `altitude_m` alone
+   re-derives the scale server-side, so the surveyed AREA moves and the count
+   does not; send `gsd_cm_px` too when the scale was actually measured. */
+export type SurveyPatch = {
+  site_id?: string | null;
+  captured_at?: string | null;
+  altitude_m?: number | null;
+  gsd_cm_px?: number | null;
+  tide_state?: string | null;
+  sea_ice_pct?: number | null;
+  operator?: string | null;
+  notes?: string | null;
+  lat?: number | null;
+  lng?: number | null;
+  location_source?: "telemetry" | "pinned" | "manual" | null;
+};
+
+export async function fetchSurvey(id: string): Promise<SurveyOut> {
+  return jsonOrThrow(await fetch(`${API}/v1/surveys/${id}`));
+}
+
+export async function patchSurvey(id: string, patch: SurveyPatch): Promise<SurveyOut> {
+  return jsonOrThrow(
+    await fetch(`${API}/v1/surveys/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    }),
+  );
+}
+
+/** Withdraw a sortie from the estimate. Nothing is deleted - every point and
+ *  every edit stays - and the reason is required, because a number that
+ *  silently left a season's total is as bad as one that silently joined it. */
+export async function retireSurvey(
+  id: string,
+  reason: string,
+  by?: string | null,
+): Promise<SurveyOut> {
+  /* An explicit null is honoured: the caller is recording that nobody said who
+     they were, and substituting the stored name would put a name on an act
+     they did not claim. Omitting the argument entirely means "whoever is at the
+     keyboard", which is the same rule editPoints follows. */
+  const who = by === undefined ? getOperator() : by;
+  return jsonOrThrow(
+    await fetch(`${API}/v1/surveys/${id}/retire`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason, by: who }),
+    }),
+  );
+}
+
+export async function unretireSurvey(id: string): Promise<SurveyOut> {
+  return jsonOrThrow(await fetch(`${API}/v1/surveys/${id}/unretire`, { method: "POST" }));
+}
+
+export type SiteOut = {
+  id: string;
+  name: string;
+  region: string | null;
+  lat: number | null;
+  lng: number | null;
+  created_at: string;
+};
+
+export async function fetchSites(): Promise<SiteOut[]> {
+  const d = await jsonOrThrow(await fetch(`${API}/v1/sites`));
+  return d.sites ?? [];
+}
+
+export async function createSite(b: {
+  name: string;
+  lat?: number | null;
+  lng?: number | null;
+  region?: string | null;
+}): Promise<SiteOut> {
+  return jsonOrThrow(
+    await fetch(`${API}/v1/sites`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(b),
+    }),
+  );
+}
+
+/** Name a colony once; the name follows it into repeat surveys, the dynamics
+ *  chart, the PDF and every export. */
+export async function renameSite(id: string, name: string): Promise<SiteOut> {
+  return jsonOrThrow(
+    await fetch(`${API}/v1/sites/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    }),
+  );
+}
+
+/* A ground count. `method` is free text (binoculars, boat transect…) and
+   nothing branches on it - it is there so the record says how the number was
+   arrived at. */
+export type ObservationIn = {
+  count: number;
+  captured_at: string;
+  lat?: number | null;
+  lng?: number | null;
+  site_id?: string | null;
+  operator?: string | null;
+  notes?: string | null;
+  method?: string | null;
+};
+
+/* The run comes back with low = best = high and basis 'manual'. That is not a
+   band of width zero: it is a human's count, and every surface that would
+   normally draw whiskers has to read `basis` and label it instead. */
+export type ObservationOut = {
+  survey: SurveyOut;
+  run: {
+    id: string;
+    engine: string;
+    basis: string;
+    count_low: number;
+    count_best: number;
+    count_high: number;
+    created_at: string;
+  };
+};
+
+export async function createObservation(b: ObservationIn): Promise<ObservationOut> {
+  return jsonOrThrow(
+    await fetch(`${API}/v1/observations`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      /* Spread first, then the operator: `{operator: X, ...b}` would let an
+         explicitly-undefined `b.operator` overwrite the default back out. */
+      body: JSON.stringify({ ...b, operator: b.operator ?? getOperator() }),
+    }),
+  );
+}
+
+/* One line of a run's correction log: who ruled on which detection, and when.
+   This is the record that lets a published figure be defended a year later. */
+export type EditRow = {
+  id: number;
+  run_id: string;
+  op: string;
+  point_id: number | null;
+  operator: string | null;
+  created_at: string;
+};
+
+export async function fetchEdits(runId: string, limit?: number): Promise<EditRow[]> {
+  const qs = limit != null ? `?limit=${limit}` : "";
+  const d = await jsonOrThrow(await fetch(`${API}/v1/runs/${runId}/edits${qs}`));
+  return d.edits ?? [];
+}
+
 /* No single-point `editPoint`. The batch call below took over every write
    from this client, and the service's one-point body is kept for the operator
    webapp — leaving an unused second write path here is an invitation to
@@ -403,17 +810,25 @@ export const mediaFileUrl = (mediaId: string) => `${API}/media/${mediaId}/file`;
    round trips, 400 grabs at SQLite's single writer lock, and no way to know
    whether the gesture had landed as a whole. `updated` is what the service
    actually wrote. */
+/* `operator` defaults to whoever said they were at the keyboard (lib/identity)
+   and is NULL when nobody has. The hardcoded "platform" this used to send is
+   gone: every verdict in the archive was signed with a word that identifies no
+   one while looking exactly like a name, which is worse than an unsigned
+   record - "43 detections were rejected by platform" cannot be checked with
+   anybody, and it hid the fact that nothing here knows who is reviewing. */
 export async function editPoints(
   runId: string,
   op: "remove" | "reinstate",
   pointIds: number[],
+  operator?: string | null,
 ): Promise<number> {
   if (!pointIds.length) return 0;
+  const who = operator === undefined ? getOperator() : operator;
   const d = await jsonOrThrow(
     await fetch(`${API}/v1/runs/${runId}/points`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ op, point_ids: pointIds, operator: "platform" }),
+      body: JSON.stringify({ op, point_ids: pointIds, operator: who }),
     }),
   );
   return typeof d.updated === "number" ? d.updated : pointIds.length;

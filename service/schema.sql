@@ -38,7 +38,22 @@ CREATE TABLE IF NOT EXISTS survey (
     tide_state   TEXT,                -- low | falling | high | rising | unknown
     sea_ice_pct  REAL,
     operator     TEXT,
-    notes        TEXT,
+    notes        TEXT,                -- free-text field notes, capped by the API
+    -- Where this sortie was. Telemetry fills it from the track, a pin fills it
+    -- from the operator dropping one on the map, and a ground count fills it
+    -- from whoever typed it in. The SOURCE is stored next to the numbers
+    -- because a GPS fix and a finger on a map are not the same evidence, and a
+    -- map that draws them identically is making a claim it cannot support.
+    lat             REAL,
+    lng             REAL,
+    location_source TEXT,             -- telemetry | pinned | manual | NULL
+    -- Retirement, not deletion. A sortie withdrawn from the estimate (wrong
+    -- site, duplicate upload, footage that turned out to be unusable) keeps
+    -- every row it ever had; it is only filtered out of the default archive.
+    -- Who withdrew it and why is the part that makes it defensible later.
+    retired_at      TEXT,
+    retired_reason  TEXT,
+    retired_by      TEXT,
     created_at   TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -52,8 +67,20 @@ CREATE TABLE IF NOT EXISTS media (
     height      INTEGER,
     duration_s  REAL,
     bytes       INTEGER,
+    -- SHA-256 of the uploaded bytes. The same footage uploaded twice is the
+    -- same sortie counted twice, which inflates a season's total by a whole
+    -- colony - so the ingest path records the digest and tells the caller what
+    -- it already holds. NULL on rows that predate the column: unknown, not
+    -- unique, and the API says so rather than treating them as fresh.
+    content_hash TEXT,
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
+-- ix_media_hash(content_hash) is NOT declared here, and that is deliberate.
+-- This file is applied with executescript() before db._widen() has had a
+-- chance to ALTER the column onto a database that predates it, so the index
+-- statement would abort the whole script against exactly the archive the
+-- widening exists to rescue - the service would fail to start on the boat.
+-- It is created in db._widen(), which runs on every init_db, fresh or not.
 
 -- Flight track from DJI SRT / JSON sidecar / manual pin.
 CREATE TABLE IF NOT EXISTS track_point (
@@ -93,9 +120,21 @@ CREATE INDEX IF NOT EXISTS ix_job_status ON job(status, created_at);
 -- 25% spread across four frames 1.5s apart on animals that barely moved.
 CREATE TABLE IF NOT EXISTS run (
     id             TEXT PRIMARY KEY,
-    job_id         TEXT NOT NULL REFERENCES job(id) ON DELETE CASCADE,
-    media_id       TEXT NOT NULL REFERENCES media(id) ON DELETE CASCADE,
-    engine         TEXT NOT NULL,
+    -- NULLable, both of them, for exactly one reason: a ground count. A human
+    -- standing on the shore counting animals ran no job and uploaded no media,
+    -- and it is still a count of that colony on that date - the one number in
+    -- this archive that needs no engine to defend it. Forcing it to invent a
+    -- job row and a media row would put fiction in two tables to satisfy a
+    -- constraint. Machine runs still fill both; see db.create_observation.
+    job_id         TEXT REFERENCES job(id) ON DELETE CASCADE,
+    media_id       TEXT REFERENCES media(id) ON DELETE CASCADE,
+    -- A run's survey normally comes through its media (run -> media -> survey),
+    -- and for every engine run it still does; this column is NULL there. A
+    -- ground count has no media, so without a direct link it would reach the
+    -- archive with no date, no position and no site - a count floating free of
+    -- the sortie it IS. Readers resolve COALESCE(media.survey_id, run.survey_id).
+    survey_id      TEXT REFERENCES survey(id),
+    engine         TEXT NOT NULL,     -- countgd | manual
     engine_params  TEXT,              -- json
     count_low      INTEGER,           -- confirmed in every frame (conservative)
     count_best     INTEGER,           -- consensus at min_support
@@ -105,7 +144,9 @@ CREATE TABLE IF NOT EXISTS run (
     count_high     INTEGER,           -- seen by any frame at all (permissive)
     -- consensus_N_frames = agreement required (min_support > 1)
     -- union_N_frames     = min_support 1, no agreement required
-    basis          TEXT,              -- e.g. consensus_4_frames | union_4_frames | single_image
+    -- manual             = a person counted it; low = best = high, and the UI
+    --                      must label it as a human's entry, never as a band
+    basis          TEXT,              -- e.g. consensus_4_frames | union_4_frames | single_image | manual
     quality        TEXT,              -- json {tiles_rejected, malformed, registration}
     seconds        REAL,
     created_at     TEXT NOT NULL DEFAULT (datetime('now'))

@@ -21,6 +21,7 @@ belong to a dashboard rather than to the data layer.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import math
 import re
@@ -29,6 +30,7 @@ import sqlite3
 import uuid
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import fields as dc_fields
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, BinaryIO, Iterator, Optional
 
@@ -56,10 +58,47 @@ _CONSENSUS_KEYS = {f.name for f in dc_fields(ConsensusParams)}
 _JOB_BODY_KEYS = {"media_id", "media", "survey", "params"}
 _MEDIA_REF_KEYS = {"id", "media_id", "url", "kind", "width", "height"}
 # §3's survey block plus the §4 columns the upload route already accepts.
+# `lat`/`lng`/`location_source` are additive: a sortie whose position came from
+# a dropped pin rather than a track needs somewhere to say both the coordinate
+# and which of those two it was.
 _SURVEY_KEYS = {
     "site_id", "captured_at", "altitude_m", "gsd_cm_px",
     "tide_state", "sea_ice_pct", "operator", "notes",
+    "lat", "lng", "location_source",
 }
+# Where a survey's coordinate came from. Not a free-text column: the UI renders
+# a pin differently from a GPS fix, and an unknown fourth value would render as
+# whichever branch happened to be the else.
+_LOCATION_SOURCES = ("telemetry", "pinned", "manual")
+
+# Length caps on operator-entered text. These are storage limits, not editorial
+# ones - 4000 characters is several screens of field notes, and the point is
+# that a runaway paste cannot turn one survey row into a megabyte the archive
+# has to carry through every listing. Kept in one place because the client
+# enforces the same numbers (frontend/lib/api.ts) and a disagreement means a
+# note that types fine and then 400s on save.
+NOTES_MAX = 4000
+OPERATOR_MAX = 120
+REASON_MAX = 500
+
+# SHA-256, lowercase hex. Anything else in the path is a caller error, not a
+# lookup that happens to miss - and saying so beats an empty list that reads
+# like "this file is new".
+SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
+
+# What a duplicate-hash lookup answers with: the media, and the newest count
+# anybody got out of it. `latest_runs`-shaped on purpose - the client renders
+# "you already counted this: 300 on 6 Aug" from one row.
+_HASH_MATCH_SQL = """
+SELECT m.id AS media_id, m.survey_id, m.filename, m.kind, m.created_at,
+       r.id AS run_id, r.count_low AS low, r.count_best AS best,
+       r.count_high AS high, r.basis
+  FROM media m
+  LEFT JOIN run r ON r.id = (SELECT id FROM run WHERE media_id = m.id
+                              ORDER BY created_at DESC, id DESC LIMIT 1)
+ WHERE m.content_hash = ?
+"""
+MAX_HASH_MATCHES = 10
 
 # $SEALV_WORKSPACE, absolute, or ~/.sealv/workspace. Resolved in one place -
 # `preflight.workspace_path` - because the worker writes each job's frames and
@@ -319,10 +358,96 @@ def _kind_for(suffix: str) -> str:
     )
 
 
-def _save(src: BinaryIO, dest: Path) -> int:
+def _save(src: BinaryIO, dest: Path) -> tuple[int, str]:
+    """Stream an upload to disk, returning (bytes, sha256-hex).
+
+    The digest is taken from the same buffers on the way past rather than by
+    re-reading the file afterwards. A sortie is gigabytes; reading it twice
+    would double the ingest's disk time for a value that was in memory a moment
+    earlier - and on the field box, disk time is the ingest.
+    """
+    digest = hashlib.sha256()
+    size = 0
     with dest.open("wb") as fh:
-        shutil.copyfileobj(src, fh, length=1 << 20)
-    return dest.stat().st_size
+        while chunk := src.read(1 << 20):
+            digest.update(chunk)
+            fh.write(chunk)
+            size += len(chunk)
+    return size, digest.hexdigest()
+
+
+def _hash_matches(
+    conn: sqlite3.Connection,
+    sha256: str,
+    limit: int = MAX_HASH_MATCHES,
+    exclude_media_id: Optional[str] = None,
+) -> list[dict]:
+    """Media already in the archive with these exact bytes, newest first."""
+    sql, args = _HASH_MATCH_SQL, [sha256]
+    if exclude_media_id:
+        sql += " AND m.id != ?"
+        args.append(exclude_media_id)
+    sql += " ORDER BY m.created_at DESC, m.id DESC LIMIT ?"
+    args.append(limit)
+    return [dict(r) for r in conn.execute(sql, tuple(args))]
+
+
+def _iso_or_400(value: Any, field: str) -> Optional[str]:
+    """An ISO8601 instant, checked - and refused if it has not happened yet.
+
+    A survey date is the axis every trend line in this product is drawn on, so
+    a typo'd year does not produce a wrong-looking row, it produces a chart with
+    a point in 2099 and a season that appears to span 73 years. A trailing `Z`
+    is accepted because that is what telemetry and every JS `toISOString()`
+    emit; `fromisoformat` handles it from 3.11, and the replace keeps this
+    honest on older builds too.
+
+    The stored value is the caller's own string, not a re-formatted one: this
+    validates a date, it does not own its representation.
+    """
+    text = _clean(value, field)
+    if text is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(
+            400, f"{field} must be an ISO8601 date or datetime, got {text!r}"
+        ) from exc
+    # A naive stamp is read as UTC, which is what every writer in this service
+    # produces. Comparing naive against aware would raise instead of judging.
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    if parsed > datetime.now(timezone.utc):
+        raise HTTPException(
+            400,
+            f"{field} is in the future ({text}) - a survey cannot have been "
+            "flown or counted on a date that has not arrived",
+        )
+    return text
+
+
+def _capped(value: Any, field: str, limit: int) -> Optional[str]:
+    """Trimmed text, refused past `limit` characters.
+
+    Truncating instead would be worse than refusing: field notes silently cut
+    off mid-sentence still read as complete, and the operator has no way to know
+    the archive is holding less than they wrote.
+    """
+    text = _clean(value, field)
+    if text is not None and len(text) > limit:
+        raise HTTPException(400, f"{field} may not exceed {limit} characters")
+    return text
+
+
+def _latlng(patch: dict, prefix: str = "") -> None:
+    """Range-check a coordinate pair in place. A lat of 450 is not a place."""
+    for key, span in (("lat", 90.0), ("lng", 180.0)):
+        value = patch.get(key)
+        if value is not None and not -span <= value <= span:
+            raise HTTPException(
+                400, f"{prefix}{key} must be between {-span:g} and {span:g}, got {value}"
+            )
 
 
 def _probe(path: Path, kind: str) -> dict:
@@ -395,6 +520,9 @@ def _media_payload(media: dict, survey: Optional[dict]) -> dict:
         "duration_s": media.get("duration_s"),
         "bytes": media.get("bytes"),
         "created_at": media.get("created_at"),
+        # NULL on media ingested before the digest was recorded. Null is not
+        # "unique" - a caller must not report an unhashed upload as first-seen.
+        "content_hash": media.get("content_hash"),
         "url": f"/media/{media['id']}/file",
         "gsd_cm_px": gsd,
         "gsd_source": (survey or {}).get("gsd_source") or ("unknown" if not gsd else "assumed_native_width"),
@@ -725,7 +853,7 @@ async def upload_media(
     upload_dir = WORKSPACE / uuid.uuid4().hex[:12]
     upload_dir.mkdir(parents=True, exist_ok=True)
     dest = upload_dir / f"source{suffix}"
-    size = await asyncio.to_thread(_save, file.file, dest)
+    size, content_hash = await asyncio.to_thread(_save, file.file, dest)
 
     # The workspace copy is provisional until a media row points at it.
     # Every exit below this line but the last is a rejection - an unreadable
@@ -823,7 +951,7 @@ async def upload_media(
         else:
             gsd, gsd_source = 0.0, "unknown"
 
-        def persist() -> tuple[dict, dict, int]:
+        def persist() -> tuple[dict, dict, int, Optional[dict]]:
             with _conn() as conn:
                 if survey_id:
                     survey = db.get_survey(conn, survey_id)
@@ -852,20 +980,52 @@ async def upload_media(
                     height=probed["height"],
                     duration_s=probed["duration_s"],
                     size_bytes=size,
+                    content_hash=content_hash,
                 )
                 stored = db.insert_track_points(conn, media["id"], track) if track else 0
-                return survey, media, stored
+                # Reported, never enforced. The same footage uploaded twice is
+                # usually a mistake that would add a whole colony to a season's
+                # total - and occasionally a deliberate re-count with different
+                # params. This service cannot tell those apart, so it says what
+                # it already holds and leaves the decision where it belongs.
+                # Rejecting here would mean an operator whose upload was
+                # interrupted could never retry it.
+                prior = _hash_matches(conn, content_hash, 1, exclude_media_id=media["id"])
+                return survey, media, stored, (prior[0] if prior else None)
 
-        survey, media, stored = await asyncio.to_thread(persist)
+        survey, media, stored, duplicate_of = await asyncio.to_thread(persist)
 
         payload = _media_payload(media, survey)
         payload["fps"] = probed.get("fps")
         payload["track_points"] = stored
         payload["survey"] = survey
+        payload["duplicate_of"] = duplicate_of
         return payload
     except BaseException:
         await asyncio.to_thread(shutil.rmtree, upload_dir, ignore_errors=True)
         raise
+
+
+@app.get("/v1/media/by-hash/{sha256}")
+async def media_by_hash(sha256: str):
+    """Has this file been counted before? The pre-upload half of `duplicate_of`.
+
+    A client that can hash locally asks first and never sends the gigabytes at
+    all. One that cannot - `crypto.subtle` is unavailable on plain http, which
+    is exactly the LAN a boat runs on - uploads and reads `duplicate_of` off the
+    response instead. Both answer the same question from the same column.
+
+    Two path segments, so this can never be mistaken for `/v1/media/{media_id}`.
+    """
+    key = (sha256 or "").strip().lower()
+    if not SHA256_HEX.match(key):
+        raise HTTPException(400, "hash must be a 64-character hex SHA-256 digest")
+
+    def load() -> dict:
+        with _conn() as conn:
+            return {"matches": _hash_matches(conn, key)}
+
+    return await asyncio.to_thread(load)
 
 
 @app.get("/v1/media/{media_id}")
@@ -985,10 +1145,11 @@ def _survey_patch(raw: Any) -> dict:
     _reject_unknown(raw, _SURVEY_KEYS, "survey")
 
     patch: dict = {}
-    for key in ("site_id", "captured_at", "tide_state", "operator", "notes"):
+    for key in ("site_id", "captured_at", "tide_state", "operator", "notes",
+                "location_source"):
         if key in raw:
             patch[key] = _clean(raw[key], f"survey.{key}")
-    for key in ("altitude_m", "gsd_cm_px", "sea_ice_pct"):
+    for key in ("altitude_m", "gsd_cm_px", "sea_ice_pct", "lat", "lng"):
         if raw.get(key) is not None:
             patch[key] = _number(raw[key], f"survey.{key}")
 
@@ -1000,6 +1161,79 @@ def _survey_patch(raw: Any) -> dict:
         # width, and `_media_payload` reports which it was.
         patch["gsd_source"] = "explicit"
     return patch
+
+
+def _checked_survey_patch(raw: Any) -> dict:
+    """`_survey_patch` plus the checks a metadata correction has to survive.
+
+    Deliberately NOT folded into `_survey_patch` itself. That function is also
+    the `survey` block of `POST /v1/jobs`, which the operator webapp and every
+    existing integration already post to; adding refusals there would turn
+    bodies that queue a count today into 400s tomorrow. A correction typed into
+    an inspector is a different act with a different risk - it rewrites what a
+    finished survey claims - so it is the one that gets checked hard.
+    """
+    patch = _survey_patch(raw)
+    if not patch:
+        raise HTTPException(
+            400,
+            "nothing to change - send at least one of: "
+            + ", ".join(sorted(_SURVEY_KEYS)),
+        )
+
+    for key, limit in (("notes", NOTES_MAX), ("operator", OPERATOR_MAX)):
+        if patch.get(key) is not None:
+            _capped(patch[key], f"survey.{key}", limit)
+
+    if patch.get("captured_at") is not None:
+        _iso_or_400(patch["captured_at"], "survey.captured_at")
+
+    source = patch.get("location_source")
+    if source is not None and source not in _LOCATION_SOURCES:
+        raise HTTPException(
+            400,
+            f"survey.location_source must be one of {', '.join(_LOCATION_SOURCES)}, "
+            f"got {source!r}",
+        )
+
+    _latlng(patch, "survey.")
+    return patch
+
+
+def _rescale_for_altitude(conn: sqlite3.Connection, survey_id: str, patch: dict) -> None:
+    """A new altitude means a new scale. Derive it, or leave the old one alone.
+
+    The UI's promise when an operator corrects the altitude is that the surveyed
+    AREA recomputes and the COUNT does not - area is width x height x GSD^2, and
+    GSD comes from altitude. Storing the new altitude without redoing that leaves
+    every area on the dashboard computed at the old height while the panel says
+    the flight was flown at the new one: the number moves in the sentence and
+    not in the arithmetic, which is the exact failure this product exists to
+    avoid.
+
+    Two ways out, both honest. If the caller supplied `gsd_cm_px` in the same
+    body, that wins - it is measured and this is a guess. If there is no media
+    or no recorded frame width, nothing is touched: without a pixel count there
+    is no conversion, and inventing one would put a fabricated denominator under
+    every density figure downstream.
+
+    The label is the same one the upload path would have chosen for the same
+    evidence - the PATCH body carries no optics, so the sensor geometry is still
+    a DJI 1-inch assumption and the source has to keep saying so.
+    """
+    altitude = patch.get("altitude_m")
+    if altitude is None or patch.get("gsd_cm_px") is not None:
+        return
+    width = next(
+        (m["width"] for m in db.list_media(conn, survey_id=survey_id) if m.get("width")),
+        None,
+    )
+    if not width:
+        return
+    gsd = geo.gsd_for_media(altitude, int(width))
+    if gsd > 0:
+        patch["gsd_cm_px"] = gsd
+        patch["gsd_source"] = "assumed_native_width_and_optics"
 
 
 @app.post("/v1/jobs", status_code=202)
@@ -1063,6 +1297,96 @@ async def create_job(body: dict):
         "survey": survey,
         "params": params.as_dict(),
     }
+
+
+MAX_JOB_LIST = 500
+
+
+@app.get("/v1/jobs")
+async def list_jobs(status: Optional[str] = None, limit: int = 200, offset: int = 0):
+    """The queue, newest first. What is waiting, what is running, what died.
+
+    `error` goes through `_client_error`, the same as every other job payload:
+    `job.error` is a full traceback on purpose and it stays in the database and
+    the worker log, but a list of jobs is a screen a field operator reads, and
+    a stack trace there is noise that hides the one line they can act on.
+    """
+    if status is not None and status not in db.JOB_STATUSES:
+        raise HTTPException(400, f"status must be one of {', '.join(db.JOB_STATUSES)}")
+    limit = max(1, min(limit, MAX_JOB_LIST))
+    offset = max(0, offset)
+
+    def load() -> dict:
+        with _conn() as conn:
+            jobs = db.list_jobs(conn, status=status, limit=limit, offset=offset)
+            # One lookup for the whole page rather than one per row: a filename
+            # is the only thing an operator recognises a job by, and fetching it
+            # per job would make the queue screen cost N+1 reads.
+            ids = sorted({j["media_id"] for j in jobs if j.get("media_id")})
+            names: dict[str, Optional[str]] = {}
+            if ids:
+                marks = ",".join("?" * len(ids))
+                names = {
+                    row["id"]: row["filename"]
+                    for row in conn.execute(
+                        f"SELECT id, filename FROM media WHERE id IN ({marks})", tuple(ids)
+                    )
+                }
+            total_where, total_args = ("WHERE status = ?", (status,)) if status else ("", ())
+            total = int(
+                _scalar(conn, f"SELECT COUNT(*) FROM job {total_where}", total_args) or 0
+            )
+            return {
+                "jobs": [
+                    {
+                        "job_id": j["id"],
+                        "media_id": j.get("media_id"),
+                        "filename": names.get(j.get("media_id")),
+                        "status": j["status"],
+                        "error": _client_error(j.get("error")),
+                        "attempts": j.get("attempts") or 0,
+                        "created_at": j.get("created_at"),
+                        "finished_at": j.get("finished_at"),
+                    }
+                    for j in jobs
+                ],
+                "total": total,
+                "limit": limit,
+                "offset": offset,
+            }
+
+    return await asyncio.to_thread(load)
+
+
+@app.post("/v1/jobs/{job_id}/cancel")
+async def cancel_job(job_id: str):
+    """Drop a job that has not started yet.
+
+    Only `queued`. A running job is inside a subprocess doing inference, and
+    this service has no way to interrupt it - marking the row cancelled while
+    the worker carried on would produce a run attached to a job that claims it
+    never happened, which is worse than not offering cancellation at all.
+    Per-job cooperative cancellation is a worker change (wave 2); until then
+    the honest answer to "stop it" is that it cannot be stopped yet.
+    """
+    def apply() -> dict:
+        with _conn() as conn:
+            job = _job_or_404(conn, job_id)
+            if job["status"] == "running":
+                raise HTTPException(
+                    409,
+                    "a count that has already started cannot be stopped yet - it "
+                    "is running in a worker process this service cannot interrupt",
+                )
+            if job["status"] != "queued":
+                raise HTTPException(409, f"job {job_id} is already {job['status']}")
+            db.update_job(
+                conn, job_id, status="cancelled", finished_at=db.utcnow(),
+                error="cancelled by the operator before it started",
+            )
+            return _job_payload(conn, _job_or_404(conn, job_id))
+
+    return await asyncio.to_thread(apply)
 
 
 @app.get("/v1/jobs/{job_id}")
@@ -1326,6 +1650,36 @@ async def edit_points(run_id: str, body: dict):
     return await asyncio.to_thread(apply)
 
 
+MAX_EDIT_LOG = 1000
+
+
+@app.get("/v1/runs/{run_id}/edits")
+async def run_edits(run_id: str, limit: int = 200):
+    """The append-only correction log for one run: who ruled on what, and when.
+
+    `point.status` is a view of this log, not a replacement for it. The log is
+    what lets somebody defend a published figure a year later - "these 43
+    detections were rejected by a.n on 6 August" - and it is also the only
+    recall data this project will ever have (§7: there is no ground truth
+    anywhere in this work).
+    """
+    limit = max(1, min(limit, MAX_EDIT_LOG))
+
+    def load() -> dict:
+        with _conn() as conn:
+            if db.get_run(conn, run_id) is None:
+                raise HTTPException(404, "run not found")
+            edits = db.list_edits(conn, run_id, limit=limit)
+            # The true size of what the window above was cut from. A truncated
+            # audit log that does not admit it is truncated is worse than none.
+            total = int(
+                _scalar(conn, "SELECT COUNT(*) FROM edit WHERE run_id = ?", (run_id,)) or 0
+            )
+            return {"run_id": run_id, "edits": edits, "total": total}
+
+    return await asyncio.to_thread(load)
+
+
 @app.get("/v1/sites")
 async def list_sites():
     def load() -> dict:
@@ -1351,6 +1705,118 @@ async def create_site(body: dict):
     return await asyncio.to_thread(create)
 
 
+@app.patch("/v1/sites/{site_id}")
+async def patch_site(site_id: str, body: dict):
+    """Name a colony, or move its marker.
+
+    A 2km cluster of sorties is a place long before anybody names it, and until
+    then the only thing the archive can call it is a coordinate pair. The name
+    is what then follows into repeat surveys, the dynamics chart, the PDF and
+    every export - so it is stored once, here, rather than retyped per report.
+    """
+    body = body or {}
+    _reject_unknown(body, {"name", "region", "lat", "lng"}, "body")
+
+    patch: dict = {}
+    if "name" in body:
+        name = _clean(body["name"], "name")
+        if not name:
+            raise HTTPException(
+                400,
+                "name may not be empty - a site with a blank name is harder to "
+                "read than one still shown by its coordinates",
+            )
+        patch["name"] = name
+    if "region" in body:
+        patch["region"] = _clean(body["region"], "region")
+    for key in ("lat", "lng"):
+        if body.get(key) is not None:
+            patch[key] = _number(body[key], key)
+    _latlng(patch)
+    if not patch:
+        raise HTTPException(400, "nothing to change - send name, region, lat or lng")
+
+    def apply() -> dict:
+        with _conn() as conn:
+            if db.get_site(conn, site_id) is None:
+                raise HTTPException(404, f"site {site_id!r} not found")
+            return db.update_site(conn, site_id, **patch)
+
+    return await asyncio.to_thread(apply)
+
+
+@app.post("/v1/observations", status_code=201)
+async def create_observation(body: dict):
+    """A ground count: somebody stood there and counted.
+
+    This is the one number in the archive no engine produced, and it is stored
+    as such - `engine` and `basis` both say 'manual', low = best = high, and
+    there is no quality ledger to mine for caveats because nothing was measured
+    about it except the count itself. Rendering it as a band of width zero would
+    claim a precision nobody offered; every surface reads `basis` and labels it.
+
+    It is a sortie like any other: its own survey row, its own date, its own
+    position, and it joins its site's estimate on equal terms. A count from a
+    person on the shore is not weaker evidence than a count from a model.
+    """
+    body = body or {}
+    _reject_unknown(
+        body,
+        {"count", "captured_at", "lat", "lng", "site_id", "operator", "notes", "method"},
+        "body",
+    )
+
+    if body.get("count") is None:
+        raise HTTPException(400, "count is required")
+    count = _whole(body["count"], "count")
+    if count < 0:
+        raise HTTPException(400, "count may not be negative")
+
+    if _clean(body.get("captured_at"), "captured_at") is None:
+        raise HTTPException(
+            400,
+            "captured_at is required - a count with no date cannot go on a "
+            "timeline, and a colony's numbers only mean anything in order",
+        )
+    captured_at = _iso_or_400(body["captured_at"], "captured_at")
+
+    coords = {}
+    for key in ("lat", "lng"):
+        if body.get(key) is not None:
+            coords[key] = _number(body[key], key)
+    _latlng(coords)
+
+    site_id = _clean(body.get("site_id"), "site_id")
+    operator = _capped(body.get("operator"), "operator", OPERATOR_MAX)
+    notes = _capped(body.get("notes"), "notes", NOTES_MAX)
+    method = _capped(body.get("method"), "method", OPERATOR_MAX)
+
+    def create() -> dict:
+        with _conn() as conn:
+            if site_id and db.get_site(conn, site_id) is None:
+                raise HTTPException(
+                    404,
+                    f"site {site_id!r} not found - create it with POST /v1/sites "
+                    "and use the id it returns",
+                )
+            try:
+                return db.create_observation(
+                    conn,
+                    count=count,
+                    captured_at=captured_at,
+                    lat=coords.get("lat"),
+                    lng=coords.get("lng"),
+                    site_id=site_id,
+                    operator=operator,
+                    notes=notes,
+                    method=method,
+                )
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+
+    return await asyncio.to_thread(create)
+
+
 @app.get("/v1/surveys/{survey_id}")
 async def get_survey(survey_id: str):
     def load() -> dict:
@@ -1371,6 +1837,103 @@ async def get_survey(survey_id: str):
             }
 
     return await asyncio.to_thread(load)
+
+
+@app.patch("/v1/surveys/{survey_id}")
+async def patch_survey(survey_id: str, body: dict):
+    """Correct a sortie's metadata after the fact.
+
+    Everything here is metadata ABOUT a count, never the count: altitude, tide,
+    the flight date, who flew it, what they wrote down. Correcting the altitude
+    re-derives the scale (see `_rescale_for_altitude`), which moves the surveyed
+    AREA - the number of animals is what the engine found and no edit on this
+    route touches it.
+
+    Retirement is not settable here. Withdrawing a sortie from the estimate is a
+    different act from fixing a typo in it, it needs a reason, and it has its
+    own route - so `retired_at` is not in `_SURVEY_KEYS` and arrives as a 400.
+    """
+    patch = _checked_survey_patch(body or {})
+
+    def apply() -> dict:
+        with _conn() as conn:
+            if db.get_survey(conn, survey_id) is None:
+                raise HTTPException(404, "survey not found")
+            site_id = patch.get("site_id")
+            if site_id and db.get_site(conn, site_id) is None:
+                raise HTTPException(
+                    404,
+                    f"site {site_id!r} not found - create it with POST /v1/sites "
+                    "and use the id it returns",
+                )
+            _rescale_for_altitude(conn, survey_id, patch)
+            return db.update_survey(conn, survey_id, **patch)
+
+    return await asyncio.to_thread(apply)
+
+
+@app.post("/v1/surveys/{survey_id}/retire")
+async def retire_survey(survey_id: str, body: dict):
+    """Withdraw a sortie from the estimate without deleting a thing.
+
+    Wrong site, a duplicate upload, footage that turned out to be of the boat -
+    all real, and none of them a reason to destroy evidence. A retired survey
+    keeps every row it had; it stops being counted by default and comes back
+    with `?include_retired=1`. The reason is mandatory because a number that
+    silently left a season's total is the same problem as one that silently
+    joined it: six months on, nobody can say why the figures moved.
+    """
+    body = body or {}
+    _reject_unknown(body, {"reason", "by"}, "body")
+    reason = _capped(body.get("reason"), "reason", REASON_MAX)
+    if not reason:
+        raise HTTPException(
+            400,
+            "reason is required - a sortie dropped from the estimate with no "
+            "reason recorded cannot be defended or reversed later",
+        )
+    by = _capped(body.get("by"), "by", OPERATOR_MAX)
+
+    def apply() -> dict:
+        with _conn() as conn:
+            survey = db.get_survey(conn, survey_id)
+            if survey is None:
+                raise HTTPException(404, "survey not found")
+            if survey.get("retired_at"):
+                raise HTTPException(
+                    409,
+                    f"survey {survey_id} was already retired at "
+                    f"{survey['retired_at']}: {survey.get('retired_reason') or '-'}",
+                )
+            return db.update_survey(
+                conn, survey_id,
+                retired_at=db.utcnow(), retired_reason=reason, retired_by=by,
+            )
+
+    return await asyncio.to_thread(apply)
+
+
+@app.post("/v1/surveys/{survey_id}/unretire")
+async def unretire_survey(survey_id: str):
+    """Put a withdrawn sortie back in the estimate.
+
+    Clears all three retirement fields. The `edit`-style history of who
+    retired it is lost with them - retirement is a state, not a log - which is
+    why the reason had to be recorded while it was true.
+    """
+    def apply() -> dict:
+        with _conn() as conn:
+            survey = db.get_survey(conn, survey_id)
+            if survey is None:
+                raise HTTPException(404, "survey not found")
+            if not survey.get("retired_at"):
+                raise HTTPException(409, f"survey {survey_id} is not retired")
+            return db.update_survey(
+                conn, survey_id,
+                retired_at=None, retired_reason=None, retired_by=None,
+            )
+
+    return await asyncio.to_thread(apply)
 
 
 # ---------------------------------------------------------------------- stats
@@ -1404,18 +1967,28 @@ _LATEST_RUNS_COLUMNS = """
        m.id AS media_id, m.filename, m.kind, m.width, m.height,
        sv.id AS survey_id, sv.captured_at, sv.tide_state,
        sv.gsd_cm_px, sv.gsd_source,
-       si.id AS site_id, si.name AS site_name
+       sv.notes, sv.operator, sv.altitude_m,
+       sv.lat AS survey_lat, sv.lng AS survey_lng, sv.location_source,
+       sv.retired_at,
+       si.id AS site_id, si.name AS site_name,
+       si.lat AS site_lat, si.lng AS site_lng
 """
+# LEFT JOIN on media, not JOIN. Every run in the archive today has media and
+# this is byte-identical for all of them - but a ground count has none, and an
+# inner join would silently drop a human's count out of the archive it belongs
+# in. The bucket below falls through to the run's own id for the same reason.
 _LATEST_RUNS_FROM = """
 FROM run r
-JOIN media m ON m.id = r.media_id
-LEFT JOIN survey sv ON sv.id = m.survey_id
+LEFT JOIN media m ON m.id = r.media_id
+LEFT JOIN survey sv ON sv.id = COALESCE(m.survey_id, r.survey_id)
 LEFT JOIN site si ON si.id = sv.site_id
 """
 # One bucket per survey, and per media for the media a survey never claimed -
 # an unattached upload is still its own sortie, and the inner joins of
-# `_LATEST_RUN_CTE` would drop it out of the archive entirely.
-_RUN_BUCKET = "COALESCE(sv.id, 'media:' || m.id)"
+# `_LATEST_RUN_CTE` would drop it out of the archive entirely. A run with
+# neither (a ground count) is its own bucket: it is one observation and must
+# never be collapsed with another.
+_RUN_BUCKET = "COALESCE(sv.id, 'media:' || m.id, 'run:' || r.id)"
 
 
 @app.get("/v1/stats")
@@ -1423,6 +1996,7 @@ async def stats(
     latest_per_survey: bool = False,
     runs_limit: int = MAX_LATEST_RUNS,
     runs_offset: int = 0,
+    include_retired: bool = False,
 ):
     """Dashboard aggregates, straight from the tables.
 
@@ -1448,6 +2022,13 @@ async def stats(
                          second sortie, and counting both double-counts a colony.
       runs_limit         page size, default 20, clamped to MAX_LATEST_RUNS_CEILING
       runs_offset        page offset
+      include_retired    show sorties withdrawn from the estimate. Off by
+                         default; a LEFT-JOIN miss yields NULL, which passes
+                         the filter, so a run with no survey at all is never
+                         hidden by it. No survey can be retired on a database
+                         that predates the column, so today the two answers are
+                         identical - which is the point: the filter is inert
+                         until somebody actually retires something.
     """
     # Clamped rather than rejected: a caller asking for 10_000 runs wants "all
     # of them", and the honest answer to that is a page plus the real total.
@@ -1546,24 +2127,29 @@ async def stats(
             # only to derive the caveats: a caller rebuilding the archive must
             # see the same reasons-to-doubt a fresh run carries, or reloading
             # the page quietly launders a floor into a measurement.
+            # Inside the CTE, not outside it: filtering after the window
+            # function would rank a retired run into a bucket's first place and
+            # then drop it, hiding the newest run that is still counted.
+            live = "" if include_retired else " WHERE sv.retired_at IS NULL"
             if latest_per_survey:
                 runs_sql = (
                     "WITH ranked AS (SELECT " + _LATEST_RUNS_COLUMNS
                     + f", ROW_NUMBER() OVER (PARTITION BY {_RUN_BUCKET}"
                     "   ORDER BY r.created_at DESC, r.id DESC) AS rn "
-                    + _LATEST_RUNS_FROM
+                    + _LATEST_RUNS_FROM + live
                     + ") SELECT * FROM ranked WHERE rn = 1"
                     " ORDER BY created_at DESC, run_id DESC LIMIT ? OFFSET ?"
                 )
                 total_sql = (
-                    f"SELECT COUNT(DISTINCT {_RUN_BUCKET}) AS n " + _LATEST_RUNS_FROM
+                    f"SELECT COUNT(DISTINCT {_RUN_BUCKET}) AS n "
+                    + _LATEST_RUNS_FROM + live
                 )
             else:
                 runs_sql = (
-                    "SELECT " + _LATEST_RUNS_COLUMNS + _LATEST_RUNS_FROM
+                    "SELECT " + _LATEST_RUNS_COLUMNS + _LATEST_RUNS_FROM + live
                     + " ORDER BY r.created_at DESC, r.id DESC LIMIT ? OFFSET ?"
                 )
-                total_sql = "SELECT COUNT(*) AS n " + _LATEST_RUNS_FROM
+                total_sql = "SELECT COUNT(*) AS n " + _LATEST_RUNS_FROM + live
 
             latest_runs_total = int(_scalar(conn, total_sql) or 0)
 
@@ -1599,6 +2185,18 @@ async def stats(
                 # surveyed area - off by the length of the flight.
                 run["frames_used"] = _frames_counted(quality, run.get("kind"))
                 run["caveats"] = caveats
+                # How far this run's conditions sat from the ones where false
+                # positives were actually measured, and the measurements that
+                # back the label. Lifted out of the ledger and onto the row so a
+                # client can quote the BASIS rather than render the adjective
+                # alone: "low risk" with nothing behind it is the kind of
+                # reassurance this product refuses to hand out. Both null on a
+                # run whose ledger never recorded them - unknown, not clean.
+                run["false_positive_risk"] = (quality or {}).get("false_positive_risk")
+                basis = (quality or {}).get("false_positive_basis")
+                run["false_positive_basis"] = (
+                    [str(b) for b in basis] if isinstance(basis, list) else None
+                )
                 latest_runs.append(run)
 
             return {

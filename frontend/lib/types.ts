@@ -66,7 +66,10 @@ export type Footage = {
      thing is the centre coordinate, and that is what the UI shows. A real
      region needs the service's `site` table, not an if-else. */
   status: "processing" | "ready" | "error";
-  source: "srt" | "json" | "manual" | "injected" | "test" | "archive";
+  /* Where this sortie's positions came from. `frame` is a quick count: a single
+     still cut out of a video and ingested as an image, which trades the
+     cross-frame band for speed and must say so wherever the count appears. */
+  source: "srt" | "json" | "manual" | "injected" | "test" | "archive" | "frame";
   videoUrl?: string; // object URL
   /* The honest answer of a real count: a low/best/high range with the method
      that produced it. Absent on test data - the mock never had one, and
@@ -99,6 +102,56 @@ export type Footage = {
      guess that silently shifts every derived area. */
   gsdCmPx?: number | null;
   gsdSource?: string | null;
+  /* The service-side survey this sortie is. Everything below hangs off it, and
+     it is what a metadata correction, a note or a retirement is addressed to.
+     Absent on test data and on anything this client made up. */
+  surveyId?: string;
+  /* The colony, once somebody has named one. `siteName` is null for a site
+     still known only by its coordinates - which is a real state, not a missing
+     one, and the UI shows the coordinates rather than inventing a name. */
+  siteId?: string | null;
+  siteName?: string | null;
+  /* Free-text field notes an operator wrote against this sortie, and who they
+     were. Both null until somebody types something; neither is ever inferred. */
+  notes?: string | null;
+  operator?: string | null;
+  /* When the footage was FLOWN or the animals COUNTED, off the survey row.
+     Null means the date was never recorded - and then the UI must say so
+     rather than print `uploadedAt`, which is when the count job ran. For a
+     re-processed archive those two are months apart, and quietly substituting
+     one for the other puts a 2019 sortie on this season's timeline. */
+  capturedAt?: string | null;
+  /* How the position was arrived at: telemetry (a flight track), pinned (an
+     operator dropped it on the map), manual (typed in with a ground count).
+     A GPS fix and a finger on a map are not the same evidence and the map may
+     not draw them identically. Null = never recorded. */
+  locationSource?: "telemetry" | "pinned" | "manual" | null;
+  /* Withdrawn from the estimate, with the reason and the person who did it.
+     Nothing is deleted: a retired sortie keeps every point and every edit, it
+     just stops being counted. Null across all three = live. */
+  retiredAt?: string | null;
+  retiredReason?: string | null;
+  retiredBy?: string | null;
+  /* Flight metadata the inspector can correct. Altitude drives GSD, which
+     drives `areaM2` - correcting it moves the AREA and never the count. */
+  altitudeM?: number | null;
+  tideState?: string | null;
+  /* What produced the number. 'manual' is a person who stood there and
+     counted; every other value is an engine. This is the field a UI reads
+     before it draws a band, because a human count has no band to draw. */
+  engine?: string | null;
+  /* How far this run's conditions sat from the ones where false positives were
+     actually measured, plus the measurements behind that label. The label alone
+     is a bare adjective; `falsePositiveBasis` is what makes it a claim anyone
+     can check, so a UI that shows one shows the other. Null = the run never
+     recorded it, which is unknown rather than reassuring. */
+  falsePositiveRisk?: string | null;
+  falsePositiveBasis?: string[] | null;
+  /* Set when this sortie is one frame cut out of a video rather than the whole
+     clip: which video it came from, and the second it was taken at. Its band is
+     a single frame's, so everything that renders the count has to label it -
+     the cross-frame agreement that makes a band trustworthy was never run. */
+  quickCount?: { fromVideo: string; atSeconds: number } | null;
   /* No `counts` / `verifiedCount`. They mirrored the service's own per-status
      tally onto the Footage and nothing ever read them: the hydrate fetches
      every point of a run, so the inspector, the dashboard and the report
