@@ -172,7 +172,9 @@
     "dash.aggregateOnly": "{n} ұшу тек жиынтық белгі берді — ол жануарлардың жеке координаталары жоқ.",
     "rep.totalNote": "Ұшулар бойынша қосынды: екі ұшуда кездескен итбалық екі рет есептеледі.",
     "dash.nothingToVerify": "Тексеретін нүкте әзірге жоқ — расталған да, қабылданбаған да ештеңе жоқ.",
-    "wb.score": "Балл"
+    "wb.score": "Балл",
+    "rail.expand": "Мәзірді жаю",
+    "rail.collapse": "Мәзірді жию"
   },
   "ru": {
     "brand.sub": "Учёт каспийского тюленя",
@@ -347,7 +349,9 @@
     "dash.aggregateOnly": "{n} вылет(ов) дали только сводный маркер — у этих животных нет отдельных координат.",
     "rep.totalNote": "Сумма по вылетам: тюлень, снятый в двух вылетах, учтён дважды.",
     "dash.nothingToVerify": "Проверять пока нечего — ни одна точка не подтверждена и не отклонена.",
-    "wb.score": "Балл"
+    "wb.score": "Балл",
+    "rail.expand": "Развернуть меню",
+    "rail.collapse": "Свернуть меню"
   },
   "en": {
     "brand.sub": "Caspian seal survey",
@@ -522,6 +526,8 @@
     "dash.aggregateOnly": "{n} sortie(s) contributed only an aggregate marker — those animals have no individual coordinates.",
     "rep.totalNote": "Sum over sorties: an animal seen on two sorties is counted twice.",
     "dash.nothingToVerify": "Nothing to review yet — no point has been verified or rejected.",
-    "wb.score": "Score"
+    "wb.score": "Score",
+    "rail.expand": "Expand menu",
+    "rail.collapse": "Collapse menu"
   }
 }

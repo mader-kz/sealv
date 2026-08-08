@@ -50,6 +50,16 @@ jobs:
           tag="${{ inputs.tag || github.ref_name }}"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "releasing $tag from $(git rev-parse --short HEAD)"
+
+      # The rail badge renders frontend/package.json's version. A tag that
+      # doesn't match it would ship a UI that lies about what is deployed —
+      # bumping package.json is part of cutting a release.
+      - name: Badge version matches the tag
+        run: |
+          pkg="v$(python3 -c "import json; print(json.load(open('frontend/package.json'))['version'])")"
+          tag="${{ steps.tag.outputs.tag }}"
+          [ "$pkg" = "$tag" ] || { echo "::error file=frontend/package.json::version is $pkg but releasing $tag - bump it, the UI badge shows this number"; exit 1; }
+          echo "badge $pkg matches $tag"
       - name: Validate structure
         run: python3 tools/release_notes.py "${{ steps.tag.outputs.tag }}" --check
 
