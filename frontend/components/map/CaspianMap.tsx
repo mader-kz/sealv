@@ -137,10 +137,12 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
       // way the pinPoints line below already had to.
       map.on("click", (e: any)=>{
         if (useFootageStore.getState().pinMode) {
-          const prev = useFootageStore.getState().pinPoints;
-          const t = prev.length;
-          const next = [...prev, { t, lat: e.lngLat.lat, lng: e.lngLat.lng }];
-          setPinPoints(next);
+          // One anchor, not a drawn path: every click MOVES the point. The
+          // old append built a ring, the ingest fabricated a flight track out
+          // of it, and the animals scattered around the ring. The anchor is
+          // the centre of the shot; the engine lays the animals out around it
+          // by their true pixel positions.
+          setPinPoints([{ t: 0, lat: e.lngLat.lat, lng: e.lngLat.lng }]);
         }
       });
       map.on("click","detections-circle",(e: any)=>{
@@ -208,9 +210,10 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
         properties:{ id:f.id, selected: f.id===selectedId }
       }))
     };
-    // add pin track as extra line if in pin mode
-    if (pinMode && pinPoints.length>1) {
-      (fc.features as any).push({ type:"Feature", geometry:{ type:"LineString", coordinates: pinPoints.map(p=>[p.lng,p.lat]) }, properties:{ id:"pin-track", selected:false } });
+    // the pinned anchor, drawn as a point - never a path
+    if (pinMode && pinPoints.length>0) {
+      const p0 = pinPoints[0];
+      (fc.features as any).push({ type:"Feature", geometry:{ type:"Point", coordinates:[p0.lng,p0.lat] }, properties:{ id:"pin-anchor", selected:true, count: 0, status: "auto" } });
     }
     src.setData(fc);
 
@@ -306,10 +309,7 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
           }).filter(Boolean);
           if(pts.length>1) tTracks.push({ pts, id:f.id });
         }
-        if (pinMode && pinPoints.length>1) {
-          const pts = pinPoints.map(p=>{ try{ const pr=m.project([p.lng,p.lat]); return {x:pr.x,y:pr.y}; }catch{ return null as any; } }).filter(Boolean);
-          if(pts.length>1) tTracks.push({ pts, id:"pin" });
-        }
+        // a single pinned anchor has no path to overlay
       }
       setOverlayTracks(prev=> sameTracks(prev, tTracks) ? prev : tTracks);
       // dots / clusters — reuse same clustering logic as layers for consistency
@@ -451,7 +451,7 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
         </div>
         {pinMode && (
           <div className="bg-accent text-accent-ink text-xs px-2.5 h-7 rounded flex items-center">
-            Click the map to draw a path · {pinPoints.length} pts
+            {pinPoints.length ? "Anchor set — click again to move it, then Confirm" : "Click the map at the centre of the shot"}
           </div>
         )}
       </div>

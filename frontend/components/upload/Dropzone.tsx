@@ -146,14 +146,19 @@ export default function Dropzone(){
         // above accepts it off the pinned point.
         setPendingVideo({ file: image, url: URL.createObjectURL(image), name: image.name });
         setPinMode(true); setPinPoints([]);
-        setLog(`${image.name}: a photo carries no location — click the map where it was taken, then press Confirm.`);
+        setLog(`${image.name}: no location — click the map once at the centre of the shot, then press Confirm.`);
         continue;
-      } else if (pinMode && pinPoints.length >=2) {
-        // use pin track: distribute proportionally across duration
-        const duration = 90;
-        track = pinPoints.map((p,i)=> ({ t: (i/(pinPoints.length-1))*duration, lat:p.lat, lng:p.lng, alt: 75 }));
-        source="manual";
-        parseInfo=`${track.length} pinned points`;
+      } else if (pinMode && pinPoints.length >= 1) {
+        // One point, not a drawn path. A hand-drawn ring pretending to be a
+        // flight track gave every frame a different fabricated anchor, and the
+        // animals scattered around the ring - "random inside the circle".
+        // Consensus already registers all frames into one pixel space, so a
+        // single anchor at the shot's centre plus real pixel offsets is the
+        // honest picture; track_at clamps a 1-point track to it for every t.
+        const p0 = pinPoints[0];
+        track = [{ t: 0, lat: p0.lat, lng: p0.lng, alt: 75 }];
+        source = "manual";
+        parseInfo = "location pinned · centre of the shot";
         setPinPoints([]); setPinMode(false);
       } else if (video) {
         // try MP4 internal metadata first (location from video)
@@ -308,17 +313,17 @@ export default function Dropzone(){
           variant={pinMode ? "primary" : "default"}
           icon="pin"
           full={!pinMode}
-          onClick={()=> { const v=!pinMode; setPinMode(v); setLog(v ? "Click the map to draw a flight path (2 points or more), then confirm." : ""); }}
+          onClick={()=> { const v=!pinMode; setPinMode(v); setLog(v ? "Click the map once — where the centre of the shot was — then confirm." : ""); }}
         >
           {pinMode ? "Pinning" : "Pin path manually"}
         </Button>
         {pinMode && (
           <>
-            <span className="text-xs text-ink3 tnum px-1">{pinPoints.length} pts</span>
+            <span className="text-xs text-ink3 tnum px-1">{pinPoints.length ? "anchor set" : "no anchor"}</span>
             <Button variant="ghost" onClick={()=> setPinPoints([])}>Clear</Button>
             <Button
               variant="primary"
-              disabled={!pendingVideo || pinPoints.length < (/\.(jpe?g|png|tiff?|webp)$/i.test(pendingVideo.name) ? 1 : 2)}
+              disabled={!pendingVideo || pinPoints.length < 1}
               onClick={()=> { if(pendingVideo) processFiles([pendingVideo.file]); }}
             >
               Confirm
@@ -333,9 +338,8 @@ export default function Dropzone(){
           <div className="flex-1 min-w-0">
             <div className="text-xs text-ink truncate">{pendingVideo.name}</div>
             <div className="text-2xs text-ink3 mt-0.5">
-              {/\.(jpe?g|png|tiff?|webp)$/i.test(pendingVideo.name)
-                ? "No location — click the map where this photo was taken, then confirm."
-                : "No GPS found — pin the flight path on the map (2+ points), then confirm."}
+              No location — click the map once, at the centre of the shot; the animals
+              are then laid out around that point by their true positions in the frame.
             </div>
           </div>
           <button onClick={()=> setPendingVideo(null)} className="text-ink3 hover:text-ink" aria-label="Dismiss">
