@@ -4,6 +4,99 @@
 @tailwind utilities;
 
 /* ---------------------------------------------------------------
+   Type, self-hosted. This ships as a static export served by the
+   same container as the API, and it has to come up on a field
+   hotspot that is associated but has no route out — a render-
+   blocking <link> to fonts.googleapis.com meant first paint waited
+   for that connection to time out before anything appeared.
+
+   Inter is Google's VARIABLE file: one download per subset covers
+   400/500/600 (hence `font-weight: 100 900` — the three static
+   instances were byte-identical files).
+
+   The Cyrillic subsets are NOT optional here. The UI is Kazakh by
+   default and Russian across the sector; Kazakh's ә ғ қ ң ө ү һ
+   live in cyrillic-ext and ұ/і in cyrillic. Ship latin only and
+   every non-Latin string silently falls to a different typeface.
+
+   font-display: swap — text is readable from the first frame and
+   reflows into Inter when the file lands, which on a second visit
+   is out of cache anyway.
+   --------------------------------------------------------------- */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/inter-var-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/inter-var-cyrillic.woff2') format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/inter-var-cyrillic-ext.woff2') format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/plexmono-400-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/plexmono-400-cyrillic.woff2') format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/plexmono-400-cyrillic-ext.woff2') format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/plexmono-500-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/plexmono-500-cyrillic.woff2') format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/plexmono-500-cyrillic-ext.woff2') format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+
+/* ---------------------------------------------------------------
    SEALv design tokens — one neutral ramp, one accent. Nothing else.
    Chrome stays quiet so the data on the map is the only loud thing.
 
@@ -137,10 +230,76 @@ a:focus-visible {
   background-clip: padding-box;
 }
 
-/* MapLibre */
+/* MapLibre chrome. Both bottom corners used to be `display: none`, which
+   created the zoom control and the attribution and then threw them away: a
+   trackpad user had no discoverable zoom affordance, and the Carto /
+   OpenStreetMap / Esri credits declared on the tile sources appeared nowhere
+   on screen — a licence problem, not only a UX one. They render now, restyled
+   onto the app tokens so they read as part of the chart, not as a library.
+   z-index lifts them over the track/chip overlays (z-5 / z-6) so a chip can
+   never swallow a click meant for the zoom buttons. */
 .maplibregl-ctrl-bottom-right,
 .maplibregl-ctrl-bottom-left {
-  display: none;
+  z-index: 7;
+}
+.maplibregl-ctrl-group,
+.maplibregl-ctrl-group:not(:empty) {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 2px 6px rgb(0 0 0 / 0.4);
+  overflow: hidden;
+}
+.maplibregl-ctrl-group button {
+  width: 26px;
+  height: 26px;
+}
+.maplibregl-ctrl-group button + button {
+  border-top: 1px solid var(--line-soft);
+}
+.maplibregl-ctrl-group button:hover {
+  background: var(--surface-2);
+}
+/* MapLibre bakes its glyphs in as dark SVG data-URIs. Inverting them is one
+   line; shipping recoloured copies of someone else's icons is not. */
+.maplibregl-ctrl-group button .maplibregl-ctrl-icon {
+  filter: invert(1);
+  opacity: 0.7;
+}
+.maplibregl-ctrl-group button:hover .maplibregl-ctrl-icon {
+  opacity: 1;
+}
+/* Replace the library's blue glow with this app's one focus ring. */
+.maplibregl-ctrl-group button:focus,
+.maplibregl-ctrl-attrib-button:focus {
+  box-shadow: none;
+}
+.maplibregl-ctrl-group button:focus-visible,
+.maplibregl-ctrl-attrib-button:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.maplibregl-ctrl.maplibregl-ctrl-attrib {
+  background: rgb(26 30 36 / 0.82); /* --surface, translucent over tiles */
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  color: var(--ink-3);
+  font-size: 10px;
+  line-height: 16px;
+}
+.maplibregl-ctrl-attrib a {
+  color: var(--ink-2);
+}
+.maplibregl-ctrl-attrib a:hover {
+  color: var(--ink);
+}
+.maplibregl-ctrl-attrib-button {
+  background-color: transparent;
+  filter: invert(1);
+  opacity: 0.55;
+}
+.maplibregl-ctrl-attrib-button:hover {
+  opacity: 0.9;
 }
 .maplibregl-popup-content {
   background: var(--surface) !important;

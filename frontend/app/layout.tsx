@@ -12,13 +12,17 @@ export default function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
+  /* No <head> font links. Inter and IBM Plex Mono are self-hosted under
+     /fonts and declared in globals.css: this app is a static export that has
+     to start on a field hotspot which is associated but has no route out,
+     where a render-blocking stylesheet from fonts.googleapis.com held first
+     paint until that connection timed out.
+
+     lang="kk", not "en": Kazakh is the default UI language, so the exported
+     HTML was announcing the wrong language to every screen reader. initLang()
+     rewrites it on the client when a different language is remembered. */
   return (
-    <html lang="en" className="dark">
-      <head>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
-      </head>
+    <html lang="kk" className="dark">
       <body className="bg-bg text-ink antialiased overflow-hidden">{children}<Toaster position="bottom-right" /></body>
     </html>
   );

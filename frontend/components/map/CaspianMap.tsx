@@ -66,6 +66,40 @@ type ColonyChip = {
   high: number | null;
 };
 
+/* Where a chip wants to sit, in world coordinates. Computed from the data
+   once; the move handler only projects it. */
+type ChipAnchor = {
+  fid: string;
+  lng: number; lat: number;
+  count: number;
+  low: number | null;
+  high: number | null;
+};
+
+/* A colony outline, ready for GeoJSON: [lng,lat] pairs with the ring closed.
+   Cached per sortie — see hullCacheRef. */
+type ColonyRing = { fid: string; ring: number[][] };
+
+/* Cheap identity of one sortie's placed point set: length, then a fold over
+   every id AND every coordinate rounded to ~1 m. Membership changes (a
+   verdict flipping a point in or out of `placed`) and any re-placement of the
+   points both move the fold, so a cached hull can never outlive its input.
+
+   Hulls are by far the most expensive thing this component computes —
+   colony.ts carve() is O(carves x interior) with a nested triangle guard and
+   an O(hull) crossing test per candidate — so they are computed once per
+   point set and reused across every selection click, pin move and pan. */
+function pointsSignature(pts: Detection[]): string {
+  let h = 0;
+  for (const d of pts) {
+    const s = d.id;
+    for (let i = 0; i < s.length; i++) h = (Math.imul(h, 31) + s.charCodeAt(i)) | 0;
+    h = (Math.imul(h, 31) + ((d.lat * 1e5) | 0)) | 0;
+    h = (Math.imul(h, 31) + ((d.lng * 1e5) | 0)) | 0;
+  }
+  return pts.length + ":" + h;
+}
+
 export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void }) {
   const { t, tp } = useT();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -78,9 +112,12 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
   // Filter by the timeline brush. These MUST be memoised — the overlay effect
   // depends on them, so rebuilding the arrays every render made the effect
   // re-run, setState, and re-render forever.
+  // (The same brush arithmetic lives in several views; the shared selector is
+  // lib/analytics/brush.ts. The .sort() this copy used to do was dead — the
+  // window comes from Math.min/max, which do not care about order.)
   const footages = useMemo(()=> {
     if(footagesRaw.length===0) return footagesRaw;
-    const dates=footagesRaw.map(f=> new Date(f.uploadedAt).getTime()).sort((a,b)=>a-b);
+    const dates=footagesRaw.map(f=> new Date(f.uploadedAt).getTime());
     const min=Math.min(...dates), max=Math.max(...dates), span=max-min||1;
     const lo=min+span*(timeRange[0]/100), hi=min+span*(timeRange[1]/100);
     return footagesRaw.filter(f=>{ const t=new Date(f.uploadedAt).getTime(); return t>=lo && t<=hi; });
@@ -96,6 +133,26 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
   const pinMode = useFootageStore(s=>s.pinMode);
   const pinPoints = useFootageStore(s=>s.pinPoints);
   const setPinPoints = useFootageStore(s=>s.setPinPoints);
+  /* Depend on the two booleans, not on the layerState object: setLayer hands
+     back a fresh object every toggle, so an effect keyed on the object re-ran
+     for a flag it does not read. */
+  const showTracks = layerState.footprints;
+  const showColonies = layerState.detections;
+
+  /* One pass over the brushed detections, shared by everything downstream.
+     A false positive is a reviewed "not an animal" — it is out of the
+     outline, out of the dots and out of the chip's geometry. */
+  const placed = useMemo(()=>{
+    const flat: Detection[] = [];
+    const byFootage = new Map<string, Detection[]>();
+    for(const d of detections){
+      if(d.status==="false_positive") continue;
+      flat.push(d);
+      const arr = byFootage.get(d.footageId);
+      if(arr) arr.push(d); else byFootage.set(d.footageId, [d]);
+    }
+    return { flat, byFootage };
+  },[detections]);
 
   /* onMapReady arrives as an inline lambda from the page - a NEW identity on
      every parent render. Holding it in a ref keeps the map-creation effect on
@@ -217,6 +274,13 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
       try { roRef.current?.disconnect(); } catch {}
       try { anchorMarkerRef.current?.remove(); } catch {}
       anchorMarkerRef.current = null;
+      // Drop the window handle with the map it points at. LeftPanel still
+      // easeTo()s __sealvMap, so leaving it aimed at a removed instance threw
+      // on the first list click after any remount. (P2 replaces the global
+      // with the onMapReady handle; until then it must be nulled, not deleted.)
+      try {
+        if ((window as any).__sealvMap === mapRef.current) (window as any).__sealvMap = null;
+      } catch {}
       try { mapRef.current?.remove(); } catch {}
       roRef.current = null;
       mapRef.current = null;   // the guard must reopen for the next mount
@@ -241,6 +305,24 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
     }
   }, [pinMode, mapLoaded]);
 
+  /* MapLibre labels its own controls in English. This UI is Kazakh by default,
+     so the zoom buttons and the attribution toggle are re-labelled from the
+     dictionary — and again whenever the language switches (`t` is a new
+     identity per language). Until `load` fires the whole map is behind the
+     loading overlay, so the library's English never reaches the screen. */
+  useEffect(()=>{
+    const root = containerRef.current; if(!root || !mapLoaded) return;
+    const label = (selector: string, text: string)=>{
+      const el = root.querySelector(selector);
+      if(!el) return;
+      el.setAttribute("title", text);
+      el.setAttribute("aria-label", text);
+    };
+    label(".maplibregl-ctrl-zoom-in", t("map.zoomIn"));
+    label(".maplibregl-ctrl-zoom-out", t("map.zoomOut"));
+    label(".maplibregl-ctrl-attrib-button", t("map.attribution"));
+  }, [mapLoaded, t]);
+
   // satellite toggle: swap raster layer
   useEffect(()=>{
     const map = mapRef.current; if(!map||!mapLoaded) return;
@@ -258,20 +340,28 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
     }
   }, [satellite, mapLoaded]);
 
-  // push data to map
+  /* Flight tracks. No `selected` property: no layer reads it (footprints-line
+     paints one colour), and selection styling lives in the SVG overlay — so
+     carrying it here only tied this push to every list click. */
   useEffect(()=>{
     const map = mapRef.current; if(!map||!mapLoaded) return;
     const src = map.getSource("footprints") as any;
     if(!src) return;
-    const fc: any = {
+    src.setData({
       type:"FeatureCollection",
-      features: footages.filter(f=>layerState.footprints).map(f=>({
+      features: showTracks ? footages.map(f=>({
         type:"Feature",
         geometry:{ type:"LineString", coordinates: f.track.map(p=>[p.lng, p.lat]) },
-        properties:{ id:f.id, selected: f.id===selectedId }
-      }))
-    };
-    // the pinned anchor: one DOM marker, moved or removed per state
+        properties:{ id:f.id }
+      })) : []
+    });
+  }, [footages, showTracks, mapLoaded]);
+
+  /* The pinned anchor: one DOM marker, moved or removed per state. Its own
+     effect — it used to ride along with the whole data push, so placing a pin
+     re-hulled and re-uploaded the entire season. */
+  useEffect(()=>{
+    const map = mapRef.current; if(!map||!mapLoaded) return;
     if (pinMode && pinPoints.length > 0 && MarkerCtorRef.current) {
       const p0 = pinPoints[0];
       if (!anchorMarkerRef.current) {
@@ -284,55 +374,97 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
     } else if (anchorMarkerRef.current) {
       anchorMarkerRef.current.remove();
     }
-    src.setData(fc);
+  }, [pinMode, pinPoints, mapLoaded]);
 
+  /* Colony outlines: concave hull buffered ~25 m so the line breathes around
+     the animals instead of hugging them. <3 usable points = no polygon
+     exists, and we do not invent one — the chip alone stands.
+
+     Cached per sortie by point-set signature: a hull is recomputed only when
+     that sortie's placed points actually change. Eviction is keyed on the
+     UNBRUSHED season so dragging the timeline does not throw hulls away and
+     pay for them again on the way back. */
+  const hullCacheRef = useRef<Map<string, { sig: string; ring: number[][] | null }>>(new Map());
+  const colonyRingsRef = useRef<ColonyRing[]>([]);
+  /* Selection is a property, not geometry: colony-line already switches width
+     and opacity on `selected`, so re-pushing the CACHED rings with a new flag
+     is the whole cost of selecting a sortie. */
+  const pushColonies = useCallback((selId: string | null)=>{
+    const csrc = mapRef.current?.getSource?.("colonies") as any;
+    if(!csrc) return;
+    csrc.setData({
+      type:"FeatureCollection",
+      features: colonyRingsRef.current.map(c=>({
+        type:"Feature",
+        geometry:{ type:"Polygon", coordinates:[c.ring] },
+        properties:{ fid:c.fid, selected: c.fid===selId }
+      }))
+    });
+  },[]);
+
+  useEffect(()=>{
+    const map = mapRef.current; if(!map||!mapLoaded) return;
     const csrc = map.getSource("colonies") as any;
     const asrc = map.getSource("animals") as any;
     if(!csrc || !asrc) return;
-    if(!layerState.detections){
+    if(!showColonies){
+      colonyRingsRef.current = [];
       csrc.setData(EMPTY_FC); asrc.setData(EMPTY_FC);
       return;
     }
-    // A false positive is a reviewed "not an animal" — it is out of the
-    // outline and out of the dots. Everything else placed is in.
-    const placed = detections.filter(d=> d.status!=="false_positive");
-    const byFootage = new Map<string, Detection[]>();
-    for(const d of placed){
-      const arr = byFootage.get(d.footageId);
-      if(arr) arr.push(d); else byFootage.set(d.footageId, [d]);
-    }
-    // Colony outlines: concave hull buffered ~25 m so the line breathes
-    // around the animals instead of hugging them. <3 usable points = no
-    // polygon exists, and we do not invent one — the chip alone stands.
-    const colonyFeatures: any[] = [];
+    const cache = hullCacheRef.current;
+    const rings: ColonyRing[] = [];
     for(const f of footages){
-      const pts = byFootage.get(f.id);
+      const pts = placed.byFootage.get(f.id);
       if(!pts || pts.length < 3) continue;
-      const hull = expandHull(colonyHull(pts), 25);
-      if(hull.length < 3) continue;
-      const ring = hull.map(p=>[p.lng, p.lat]);
-      ring.push(ring[0]); // GeoJSON rings close explicitly
-      colonyFeatures.push({
-        type:"Feature",
-        geometry:{ type:"Polygon", coordinates:[ring] },
-        properties:{ fid: f.id, selected: f.id===selectedId }
-      });
+      const sig = pointsSignature(pts);
+      let hit = cache.get(f.id);
+      if(!hit || hit.sig !== sig){
+        const hull = expandHull(colonyHull(pts), 25);
+        let ring: number[][] | null = null;
+        if(hull.length >= 3){
+          ring = hull.map(p=>[p.lng, p.lat]);
+          ring.push(ring[0]); // GeoJSON rings close explicitly
+        }
+        hit = { sig, ring };
+        cache.set(f.id, hit);
+      }
+      if(hit.ring) rings.push({ fid: f.id, ring: hit.ring });
     }
-    csrc.setData({ type:"FeatureCollection", features: colonyFeatures });
-    const animalFeatures = placed.map(d=>({
-      type:"Feature",
-      geometry:{ type:"Point", coordinates:[d.lng, d.lat] },
-      properties:{ detId:d.id, fid:d.footageId, status:d.status, count:d.count }
-    }));
-    asrc.setData({ type:"FeatureCollection", features: animalFeatures });
-  }, [footages, detections, selectedId, layerState, mapLoaded, pinMode, pinPoints]);
+    const live = new Set(footagesRaw.map(f=>f.id));
+    for(const key of Array.from(cache.keys())) if(!live.has(key)) cache.delete(key);
+    colonyRingsRef.current = rings;
+    pushColonies(useFootageStore.getState().selectedId);
+
+    asrc.setData({
+      type:"FeatureCollection",
+      // No `count` property: no layer reads it, and it rode along on every
+      // one of up to ~2000 points per sortie.
+      features: placed.flat.map(d=>({
+        type:"Feature",
+        geometry:{ type:"Point", coordinates:[d.lng, d.lat] },
+        properties:{ detId:d.id, fid:d.footageId, status:d.status }
+      }))
+    });
+  }, [footages, footagesRaw, placed, showColonies, mapLoaded, pushColonies]);
+
+  // Selection alone never touches the animal points or the hull maths.
+  useEffect(()=>{
+    if(!mapLoaded) return;
+    pushColonies(selectedId);
+  }, [selectedId, mapLoaded, pushColonies]);
 
   // fly to selected now handled by click handlers (chip → fitBounds, list → center) to avoid double-ease fighting drag
 
-  // auto-fit when footages first appear (so colonies are on screen at z~7, not z9.2 off-screen)
+  /* Auto-fit when the set of visible sorties changes (so colonies land on
+     screen at z~7 instead of off-screen at z9.2). Keyed on the sortie IDS,
+     not on the array lengths: brushing the timeline onto a DIFFERENT set of
+     the same size used to leave the camera parked over sorties that were no
+     longer drawn. */
+  const fitKey = useMemo(()=> footages.map(f=>f.id).join(","), [footages]);
   useEffect(()=>{
     const map=mapRef.current; if(!map||!mapLoaded) return;
-    if (footages.length>0 && !selectedId) {
+    if (fitKey && !selectedId) {
       // compute bounds of all tracks + detections
       let minLng=180, minLat=90, maxLng=-180, maxLat=-90;
       for(const f of footages){ for(const p of f.track){ minLng=Math.min(minLng,p.lng); maxLng=Math.max(maxLng,p.lng); minLat=Math.min(minLat,p.lat); maxLat=Math.max(maxLat,p.lat); } }
@@ -340,85 +472,104 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
       if (isFinite(minLng)) {
         const pad = 0.15;
         try { map.stop(); map.fitBounds([[minLng-pad, minLat-pad],[maxLng+pad, maxLat+pad]], { padding: 40, duration: 520, maxZoom: ZOOM_COLONY }); } catch{}
-        console.log(`[SEALv] fitBounds ${footages.length}F ${detections.length}G -> [[${minLng.toFixed(2)},${minLat.toFixed(2)}],[${maxLng.toFixed(2)},${maxLat.toFixed(2)}]] zoom=${map.getZoom().toFixed(2)}`);
       }
     }
-  },[footages.length, detections.length, mapLoaded, selectedId]);
+    /* `footages` and `detections` are read latest ON PURPOSE and kept out of
+       the deps: the camera must move when the SET of sorties changes (that is
+       fitKey), never because a verdict click handed us a new `detections`
+       array identity — that would yank the map out from under the review. */
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[fitKey, mapLoaded, selectedId]);
 
-  // debug: log every push
-  useEffect(()=>{
-    if(!mapLoaded) return;
-    console.log(`[SEALv] push ${footages.length} footages, ${detections.length} detections, layers`, layerState, "zoom", mapRef.current?.getZoom?.()?.toFixed(2));
-  },[footages.length, detections.length, layerState, mapLoaded]);
-
-  /* DOM overlay — tracks and colony chips. Projected on move/zoom/resize (and
-     a slow safety timer), guaranteed visible even if GL layers/glyphs fail. */
+  /* DOM overlay — tracks and colony chips, guaranteed visible even if GL
+     layers/glyphs fail. Everything that depends only on the DATA is computed
+     here, once; the move handler below is left with nothing but projection. */
   const [overlayChips, setOverlayChips] = useState<ColonyChip[]>([]);
   const [overlayTracks, setOverlayTracks] = useState<Array<{pts:Array<{x:number,y:number}>, id:string}>>([]);
+
+  // A pinned anchor is a single point — no path to overlay.
+  const trackLines = useMemo(()=>{
+    if(!showTracks) return [] as Array<{ id:string; coords:[number,number][] }>;
+    const out: Array<{ id:string; coords:[number,number][] }> = [];
+    for(const f of footages){
+      const coords: [number,number][] = [];
+      for(const p of f.track){
+        if(Number.isFinite(p.lat) && Number.isFinite(p.lng)) coords.push([p.lng, p.lat]);
+      }
+      if(coords.length>1) out.push({ id:f.id, coords });
+    }
+    return out;
+  },[footages, showTracks]);
+
+  /* One chip per sortie, anchored at the centre of the colony's bounding box
+     (fallback: the sortie centre). The number comes from countOf() — the one
+     shared definition: the engine's best estimate, else the surviving
+     detections plus the animals it counted but could not place. The point
+     cloud supplies the GEOMETRY only, so the chip over a colony and the
+     inspector's headline for that same sortie can never disagree. */
+  const chipAnchors = useMemo(()=>{
+    if(!showColonies) return [] as ChipAnchor[];
+    const out: ChipAnchor[] = [];
+    for(const f of footages){
+      const pts = placed.byFootage.get(f.id);
+      const b = pts ? colonyBounds(pts) : null;
+      const lat = b ? (b.minLat+b.maxLat)/2 : f.center?.lat;
+      const lng = b ? (b.minLng+b.maxLng)/2 : f.center?.lng;
+      if(!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+      const hasBand = f.band != null && f.band.low != null && f.band.high != null && f.band.low !== f.band.high;
+      out.push({
+        fid: f.id,
+        lng: lng as number, lat: lat as number,
+        count: countOf(f),
+        low: hasBand ? f.band!.low : null,
+        high: hasBand ? f.band!.high : null,
+      });
+    }
+    return out;
+  },[footages, placed, showColonies]);
+
   useEffect(()=>{
     const map=mapRef.current; if(!map||!mapLoaded) return;
+    /* Coalesce through one animation frame. MapLibre fires `move` once per
+       frame while dragging, and the old handler re-grouped every detection
+       and re-ran colonyBounds on each of them; now a frame costs a few dozen
+       project() calls. rAF also parks the work entirely while the tab is in
+       the background — which the old setInterval(600) never did. */
+    let frame = 0;
     const update = ()=>{
-      if(!mapRef.current) return;
-      const m = mapRef.current;
-      // tracks — project each point
-      const tTracks: Array<{pts:Array<{x:number,y:number}>, id:string}> = [];
-      if (layerState.footprints) {
-        // use filtered footages (timeRange) for overlay — read from current closure footages
-        for(const f of footages){
-          const pts = f.track.map(p=>{
-            try{ const pr=m.project([p.lng,p.lat]); return {x:pr.x, y:pr.y}; }catch{ return null as any; }
-          }).filter(Boolean);
-          if(pts.length>1) tTracks.push({ pts, id:f.id });
+      frame = 0;
+      const m = mapRef.current; if(!m) return;
+      try {
+        const tTracks = trackLines.map(l=>({
+          id: l.id,
+          pts: l.coords.map(c=>{ const pr=m.project(c); return { x:pr.x, y:pr.y }; }),
+        }));
+        setOverlayTracks(prev=> sameTracks(prev, tTracks) ? prev : tTracks);
+        let rect: { width: number; height: number } | null = null;
+        try{ rect = m.getCanvas().getBoundingClientRect(); }catch{}
+        const chips: ColonyChip[] = [];
+        for(const a of chipAnchors){
+          const pr = m.project([a.lng, a.lat]);
+          if(rect && (pr.x < -120 || pr.x > rect.width+120 || pr.y < -120 || pr.y > rect.height+120)) continue;
+          chips.push({ x:pr.x, y:pr.y, fid:a.fid, count:a.count, low:a.low, high:a.high });
         }
-        // a single pinned anchor has no path to overlay
-      }
-      setOverlayTracks(prev=> sameTracks(prev, tTracks) ? prev : tTracks);
-      // chips — one per sortie: the count with its band, anchored at the
-      // centre of the colony's bounding box (fallback: the sortie centre)
-      if (!layerState.detections) { setOverlayChips([]); return; }
-      const byFootage = new Map<string, {pts: Detection[]; sum: number}>();
-      for(const d of detections){
-        if(d.status==="false_positive") continue;
-        let e = byFootage.get(d.footageId);
-        if(!e){ e = { pts: [], sum: 0 }; byFootage.set(d.footageId, e); }
-        e.pts.push(d); e.sum += d.count;
-      }
-      let rect: { width: number; height: number } | null = null;
-      try{ rect = m.getCanvas().getBoundingClientRect(); }catch{}
-      const chips: ColonyChip[] = [];
-      for(const f of footages){
-        const entry = byFootage.get(f.id);
-        // The count the platform stands behind, from the one shared definition:
-        // the engine's best estimate, else the surviving detections plus the
-        // animals it counted but could not place. `entry` still supplies the
-        // GEOMETRY below - where to anchor the chip - but not the number, so
-        // the chip over a colony and the inspector's headline for that same
-        // sortie can never be two different figures.
-        const count = countOf(f);
-        const b = entry ? colonyBounds(entry.pts) : null;
-        const lat = b ? (b.minLat+b.maxLat)/2 : f.center?.lat;
-        const lng = b ? (b.minLng+b.maxLng)/2 : f.center?.lng;
-        if(!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
-        let x=0, y=0;
-        try{ const pr=m.project([lng as number, lat as number]); x=pr.x; y=pr.y; }catch{ continue; }
-        if(rect && (x < -120 || x > rect.width+120 || y < -120 || y > rect.height+120)) continue;
-        const hasBand = f.band != null && f.band.low != null && f.band.high != null && f.band.low !== f.band.high;
-        chips.push({
-          x, y, fid: f.id,
-          count,
-          low: hasBand ? f.band!.low : null,
-          high: hasBand ? f.band!.high : null,
-        });
-      }
-      setOverlayChips(prev=> sameChips(prev, chips) ? prev : chips);
+        setOverlayChips(prev=> sameChips(prev, chips) ? prev : chips);
+      } catch { /* map torn down or unprojectable mid-frame — next event retries */ }
     };
+    const schedule = ()=>{ if(frame) return; frame = requestAnimationFrame(update); };
     update();
-    map.on("move", update);
-    map.on("zoom", update);
-    map.on("resize", update);
-    const id = setInterval(update, 600);
-    return ()=>{ try{ map.off("move",update); map.off("zoom",update); map.off("resize",update);}catch{} clearInterval(id); };
-  },[mapLoaded, footages, detections, layerState, pinMode, pinPoints, selectedId]);
+    map.on("move", schedule);
+    map.on("zoom", schedule);
+    map.on("resize", schedule);
+    // `idle` replaces the old 600 ms interval: it fires once after the map
+    // settles (tiles in, animation over) instead of ticking forever while
+    // nothing moves and nobody is looking.
+    map.on("idle", schedule);
+    return ()=>{
+      if(frame) cancelAnimationFrame(frame);
+      try{ map.off("move",schedule); map.off("zoom",schedule); map.off("resize",schedule); map.off("idle",schedule); }catch{}
+    };
+  },[mapLoaded, trackLines, chipAnchors]);
 
   /* Chip click = select the sortie and frame its colony. Store read at event
      time — closures over store state go stale (the map outlives renders). */
@@ -522,9 +673,15 @@ function sameChips(a: ColonyChip[], b: ColonyChip[]){
 function sameTracks(a:any[], b:any[]){
   if(a.length!==b.length) return false;
   for(let i=0;i<a.length;i++){
-    if(a[i].id!==b[i].id || a[i].pts.length!==b[i].pts.length) return false;
-    const p=a[i].pts[0], q=b[i].pts[0];
-    if(Math.abs(p.x-q.x)>0.5 || Math.abs(p.y-q.y)>0.5) return false;
+    const x=a[i], y=b[i];
+    if(x.id!==y.id || x.pts.length!==y.pts.length) return false;
+    /* Sample first, middle and last. Comparing only the FIRST vertex meant a
+       polyline that had genuinely moved — a rotation or a pan pivoting near
+       its start point — compared equal and was never repainted. */
+    const n=x.pts.length;
+    for(const k of [0, n>>1, n-1]){
+      if(Math.abs(x.pts[k].x-y.pts[k].x)>0.5 || Math.abs(x.pts[k].y-y.pts[k].y)>0.5) return false;
+    }
   }
   return true;
 }
