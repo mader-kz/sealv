@@ -2,10 +2,9 @@
 import { useMemo, useState } from "react";
 import { useFootageStore } from "@/store/useFootageStore";
 import { Button, IconButton, Field, Pill } from "@/components/ui/primitives";
-import Icon from "@/components/ui/Icon";
 import { useT } from "@/lib/i18n";
 
-type SortKey = "date" | "count" | "conf";
+type SortKey = "date" | "conf";
 type StatusFilter = "all" | "auto" | "validated" | "false_positive";
 
 export default function Workbench({ open, onClose }: { open: boolean; onClose: ()=>void }){
@@ -19,31 +18,26 @@ export default function Workbench({ open, onClose }: { open: boolean; onClose: (
   const [q, setQ] = useState("");
   const [status, setStatus] = useState<StatusFilter>("all");
   const [sort, setSort] = useState<SortKey>("date");
-  const [minCount, setMinCount] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [editId, setEditId] = useState<string|null>(null);
-  const [editCount, setEditCount] = useState<string>("");
 
   const footageById = useMemo(()=> new Map(footages.map(f=>[f.id,f])),[footages]);
 
   const filtered = useMemo(()=>{
     let rows = detections.filter(d=>{
       if (status!=="all" && d.status!==status) return false;
-      if (d.count < minCount) return false;
       if (!q) return true;
       const needle=q.toLowerCase();
       const f=footageById.get(d.footageId);
-      return d.id.toLowerCase().includes(needle) || d.footageId.toLowerCase().includes(needle) || String(d.count).includes(needle) || (f ? f.filename.toLowerCase().includes(needle) : false);
+      return d.id.toLowerCase().includes(needle) || d.footageId.toLowerCase().includes(needle) || (f ? f.filename.toLowerCase().includes(needle) : false);
     });
     rows.sort((a,b)=>{
-      if(sort==="count") return b.count - a.count;
       if(sort==="conf") return b.confidence - a.confidence;
       // date: by footage uploadedAt
       const fa=footageById.get(a.footageId)?.uploadedAt||""; const fb=footageById.get(b.footageId)?.uploadedAt||"";
       return fb.localeCompare(fa);
     });
     return rows;
-  },[detections, footageById, q, status, sort, minCount]);
+  },[detections, footageById, q, status, sort]);
 
   const toggle = (id:string)=>{
     const s=new Set(selected);
@@ -56,10 +50,10 @@ export default function Workbench({ open, onClose }: { open: boolean; onClose: (
   if(!open) return null;
 
   const exportCSV = ()=>{
-    const rows=["id,footageId,filename,t,lat,lng,count,confidence,status"];
+    const rows=["id,footageId,filename,t,lat,lng,score,status"];
     for(const d of filtered){
       const f=footageById.get(d.footageId);
-      rows.push(`${d.id},${d.footageId},${f?.filename||""},${d.t},${d.lat},${d.lng},${d.count},${d.confidence},${d.status}`);
+      rows.push(`${d.id},${d.footageId},${f?.filename||""},${d.t},${d.lat},${d.lng},${d.confidence},${d.status}`);
     }
     const blob=new Blob([rows.join("\n")],{type:"text/csv"}); const url=URL.createObjectURL(blob);
     const a=document.createElement("a"); a.href=url; a.download=`sealv-detections-${new Date().toISOString().slice(0,10)}.csv`; a.click(); URL.revokeObjectURL(url);
@@ -91,14 +85,8 @@ export default function Workbench({ open, onClose }: { open: boolean; onClose: (
           </select>
           <select value={sort} onChange={e=>setSort(e.target.value as any)} className="h-7 bg-surface2 border border-line rounded px-2 text-xs text-ink2">
             <option value="date">{t("wb.sortDate")}</option>
-            <option value="count">{t("wb.sortCount")}</option>
             <option value="conf">{t("wb.sortConf")}</option>
           </select>
-          <div className="flex items-center gap-2 pl-1">
-            <span className="text-xs text-ink3">{t("wb.minCount")}</span>
-            <input type="range" min={0} max={12} value={minCount} onChange={e=>setMinCount(parseInt(e.target.value))} className="w-20 accent-[color:var(--accent)]" />
-            <span className="text-xs text-ink tnum w-3">{minCount}</span>
-          </div>
           <div className="flex-1" />
           {selected.size>0 && (
             <div className="flex items-center gap-1.5">
@@ -117,8 +105,7 @@ export default function Workbench({ open, onClose }: { open: boolean; onClose: (
                   <input type="checkbox" className="accent-[color:var(--accent)]" checked={allSelected} onChange={e=>{ setSelected(e.target.checked ? new Set(allIds) : new Set()); }} />
                 </th>
                 <th className={th}>{t("nav.footage")}</th>
-                <th className={`${th} text-right`}>{t("th.count")}</th>
-                <th className={`${th} text-right`}>{t("wb.conf")}</th>
+                <th className={`${th} text-right`}>{t("wb.score")}</th>
                 <th className={th}>{t("wb.status")}</th>
                 <th className={th}>{t("wb.coords")}</th>
                 <th className={th}></th>
@@ -128,7 +115,6 @@ export default function Workbench({ open, onClose }: { open: boolean; onClose: (
               {filtered.map(d=>{
                 const f=footageById.get(d.footageId);
                 const isSel = selected.has(d.id);
-                const isEditing = editId===d.id;
                 return (
                   <tr
                     key={d.id}
@@ -138,35 +124,8 @@ export default function Workbench({ open, onClose }: { open: boolean; onClose: (
                       <input type="checkbox" className="accent-[color:var(--accent)]" checked={isSel} onChange={()=> toggle(d.id)} />
                     </td>
                     <td className="px-3 py-2 font-mono text-ink truncate max-w-[180px]">{f?.filename || d.footageId}</td>
-                    <td className="px-3 py-2 text-right">
-                      {isEditing ? (
-                        <span className="inline-flex items-center gap-1">
-                          <input
-                            value={editCount}
-                            onChange={e=> setEditCount(e.target.value)}
-                            className="w-12 h-6 bg-bg border border-line rounded px-1 text-center tnum"
-                            autoFocus
-                            onKeyDown={e=>{ if(e.key==="Enter"){ const n=parseInt(editCount); if(!isNaN(n)&&n>=0&&n<=50) updateDetection(d.id,{count:n}); setEditId(null);} if(e.key==="Escape") setEditId(null); }}
-                          />
-                          <button
-                            onClick={()=>{ const n=parseInt(editCount); if(!isNaN(n)&&n>=0&&n<=50) updateDetection(d.id,{count:n}); setEditId(null); }}
-                            className="text-ink3 hover:text-ink"
-                            aria-label={t("a11y.save")}
-                          >
-                            <Icon name="check" size={13} />
-                          </button>
-                        </span>
-                      ) : (
-                        <button
-                          onClick={()=> { setEditId(d.id); setEditCount(String(d.count)); }}
-                          className="tnum text-ink px-1.5 py-0.5 rounded hover:bg-surface2 border border-transparent hover:border-line transition-colors"
-                          title={t("wb.editTitle")}
-                        >
-                          {d.count}
-                        </button>
-                      )}
-                    </td>
-                    <td className="px-3 py-2 text-right text-ink2 tnum">{(d.confidence*100).toFixed(0)}%</td>
+                    {/* raw model score, not a percentage: it is not a calibrated probability */}
+                    <td className="px-3 py-2 text-right text-ink2 tnum">{d.confidence.toFixed(2)}</td>
                     <td className="px-3 py-2">
                       <Pill tone={d.status==="validated" ? "good" : d.status==="false_positive" ? "neutral" : "neutral"}>
                         {d.status==="false_positive" ? t("status.falseShort") : d.status==="validated" ? t("status.validatedL") : t("status.autoL")}
@@ -188,7 +147,7 @@ export default function Workbench({ open, onClose }: { open: boolean; onClose: (
                 );
               })}
               {filtered.length===0 && (
-                <tr><td colSpan={7} className="px-4 py-16 text-center text-sm text-ink3">{t("wb.noMatch")}</td></tr>
+                <tr><td colSpan={6} className="px-4 py-16 text-center text-sm text-ink3">{t("wb.noMatch")}</td></tr>
               )}
             </tbody>
           </table>
