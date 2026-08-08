@@ -1,12 +1,15 @@
 "use client";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import { toast } from "sonner";
 import { useFootageStore } from "@/store/useFootageStore";
 import { Button, IconButton, SectionHead, Stat } from "@/components/ui/primitives";
 import { totalAreaM2, formatArea } from "@/lib/analytics/area";
 import { countOf } from "@/lib/analytics/count";
+import { detectionsFor, footagesInRange, formatDate } from "@/lib/analytics/brush";
+import { seasonEstimate } from "@/lib/analytics/estimate";
 import { groupSizes, histogram } from "@/lib/analytics/groups";
 import { groupIntoSites, siteSeries, SITE_RADIUS_M } from "@/lib/analytics/surveys";
-import { localeFor, useT } from "@/lib/i18n";
+import { useT } from "@/lib/i18n";
 import type { Footage } from "@/lib/types";
 
 /* Every figure on this panel traces back to something measured: a band the
@@ -20,29 +23,26 @@ const H = 64;             // chart height, px
 
 export default function Dashboard({ onClose }: { onClose?: ()=>void }){
   const { t, tp, lang } = useT();
-  const locale = localeFor(lang);
   const footages = useFootageStore(s=>s.footages);
   const detections = useFootageStore(s=>s.detections);
   const timeRange = useFootageStore(s=>s.timeRange);
   const selectedId = useFootageStore(s=>s.selectedId);
   const select = useFootageStore(s=>s.select);
+  const [exporting, setExporting] = useState(false);
 
+  /* The shared brush — the same window the footage list and the map read, from
+     one implementation instead of four near-copies. */
   const filtered = useMemo(()=>{
-    if (footages.length===0) return { f: [] as Footage[], d: [] as typeof detections };
-    const dates = footages.map(f=> new Date(f.uploadedAt).getTime()).sort((a,b)=>a-b);
-    const min = Math.min(...dates), max = Math.max(...dates);
-    const span = max - min || 1;
-    const lo = min + span * (timeRange[0]/100);
-    const hi = min + span * (timeRange[1]/100);
-    const f = footages.filter(ff=>{ const t = new Date(ff.uploadedAt).getTime(); return t>=lo && t<=hi; });
-    const ids = new Set(f.map(x=>x.id));
-    return { f, d: detections.filter(dd=> ids.has(dd.footageId)) };
+    const f = footagesInRange(footages, timeRange);
+    return { f, d: detectionsFor(f, detections) };
   },[footages,detections,timeRange]);
 
   /* A rejected detection is not an animal: false_positive is out of every
      total, every share and every histogram below. */
   const shown = useMemo(()=> filtered.d.filter(d=>d.status!=="false_positive"), [filtered.d]);
-  const totalSeals = useMemo(()=> filtered.f.reduce((s,f)=> s+countOf(f), 0), [filtered.f]);
+  /* The standing estimate leads; the sum over sorties is a statement about
+     effort and is demoted to the line under it. See lib/analytics/estimate.ts. */
+  const est = useMemo(()=> seasonEstimate(filtered.f), [filtered.f]);
 
   /* Surveyed ground. Sorties without a GSD have an unknown area, not a zero
      one: they are counted aside and the total is printed as "—" when none of
@@ -68,7 +68,7 @@ export default function Dashboard({ onClose }: { onClose?: ()=>void }){
     }));
   },[filtered.f]);
   const maxBar = Math.max(...bars.map(b=> Math.max(b.high ?? 0, b.best)), 1);
-  const day = (iso: string) => new Date(iso).toLocaleDateString(locale, { day:"numeric", month:"short" });
+  const day = (iso: string) => formatDate(iso, lang, { day:"numeric", month:"short" });
 
   /* The honest replacement for a forecast: the same place flown twice tells
      you something, one flight tells you nothing. */
@@ -109,9 +109,23 @@ export default function Dashboard({ onClose }: { onClose?: ()=>void }){
     return top;
   },[filtered.f]);
 
+  /* The report pulls jsPDF plus an embedded font — hundreds of kilobytes over
+     the network before a single page is drawn. Silence for that long reads as
+     a dead button, and the promise's rejection used to go nowhere at all: an
+     offline export failed invisibly. Pending, then said out loud either way. */
   const onExportPDF = async ()=>{
-    const { exportReport } = await import("@/lib/export/pdf");
-    await exportReport(filtered.f, lang);
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const { exportReport } = await import("@/lib/export/pdf");
+      await exportReport(filtered.f, lang);
+      toast.success(t("dash.exportOk"));
+    } catch (e) {
+      console.error("report export failed:", e);
+      toast.error(t("dash.exportFail"));
+    } finally {
+      setExporting(false);
+    }
   };
 
   return (
@@ -119,23 +133,50 @@ export default function Dashboard({ onClose }: { onClose?: ()=>void }){
       <div className="h-9 shrink-0 pl-4 pr-1.5 flex items-center justify-between border-b border-line">
         <span className="label">{t("nav.analytics")}</span>
         <div className="flex items-center gap-1">
-          <Button onClick={onExportPDF} icon="download" className="h-6 text-2xs">PDF</Button>
+          <Button
+            onClick={onExportPDF}
+            icon="download"
+            disabled={exporting}
+            className="h-6 text-2xs"
+          >
+            {exporting ? `${t("dash.exporting")}…` : "PDF"}
+          </Button>
           {onClose && <IconButton name="close" onClick={onClose} title={t("dash.closeAnalytics")} />}
         </div>
       </div>
 
       <div className="flex-1 overflow-auto">
-        {/* Headline figures — counted, flown, covered */}
-        <div className="px-4 py-4 grid grid-cols-3 gap-4 border-b border-line">
-          <Stat label={t("stat.seals")} value={totalSeals} />
-          <Stat label={t("stat.sorties")} value={filtered.f.length} />
-          {/* A measured scale and a guessed one must not print identically:
-              the sub-line names whichever caveat applies to this total. */}
-          <Stat
-            label={t("stat.area")}
-            value={areaText ? t("dash.areaHa", { v: areaText }) : "—"}
-            sub={areaCaveat}
-          />
+        {/* Headline figures — standing estimate, flown, covered.
+            The lead number is no longer the sum over sorties: that sum counts
+            the same haul-out once per visit. It is still printed, one line
+            down, as what it honestly is. */}
+        <div className="px-4 py-4 border-b border-line">
+          {/* The two counts keep their intrinsic width; only the area column
+              absorbs the squeeze. Three even thirds of 380px clipped a
+              five-figure hectare total mid-number. */}
+          <div className="flex gap-4">
+            <div className="shrink-0"><Stat label={t("est.current")} value={est.current} /></div>
+            <div className="shrink-0"><Stat label={t("stat.sorties")} value={filtered.f.length} /></div>
+            {/* A measured scale and a guessed one must not print identically:
+                the sub-line names whichever caveat applies to this total. */}
+            <div className="min-w-0 flex-1">
+              <Stat
+                label={t("stat.area")}
+                value={areaText ? t("dash.areaHa", { v: areaText }) : "—"}
+                sub={areaCaveat}
+              />
+            </div>
+          </div>
+          {filtered.f.length>0 && (
+            <div className="mt-3 space-y-1">
+              <p className="text-2xs text-ink3">
+                {t("est.observedSub", { n: est.observed, m: filtered.f.length })}
+              </p>
+              <p className="text-2xs text-ink3 leading-relaxed">
+                {t("est.basis", { km: SITE_RADIUS_M/1000 })}
+              </p>
+            </div>
+          )}
         </div>
 
         {/* One bar per sortie, with the band's low–high as a whisker */}
@@ -156,7 +197,15 @@ export default function Dashboard({ onClose }: { onClose?: ()=>void }){
                     return (
                       <button
                         key={b.f.id}
-                        onClick={()=>select(b.f.id)}
+                        onClick={()=>{
+                          select(b.f.id);
+                          /* The one camera channel: a bar that selects a sortie
+                             but leaves the map where it was makes the reader
+                             hunt for what they just clicked. */
+                          const { lat, lng } = b.f.center ?? ({} as { lat?: number; lng?: number });
+                          if (Number.isFinite(lat) && Number.isFinite(lng))
+                            document.dispatchEvent(new CustomEvent("flyto", { detail: { lat, lng, zoom: 10 } }));
+                        }}
                         title={`${b.f.filename} · ${b.best}${hasRange ? ` (${b.low}–${b.high})` : ""}`}
                         className="flex-1 relative h-full flex items-end min-w-[3px]"
                       >

@@ -9,7 +9,10 @@
    lib/i18n, so it stays loadable in a bare node smoke test. */
 import type { Footage } from "../types";
 import { formatArea, totalAreaM2 } from "../analytics/area";
+import { formatDate, localeForLang } from "../analytics/brush";
 import { countOf } from "../analytics/count";
+import { seasonEstimate } from "../analytics/estimate";
+import { SITE_RADIUS_M } from "../analytics/surveys";
 import dict from "../i18n.dict.json";
 
 export type ReportLang = "kk" | "ru" | "en";
@@ -35,7 +38,9 @@ function basisLabel(lang: ReportLang, basis: string): string {
   return basis.replace(/_/g, " ");
 }
 
-const localeFor = (lang: ReportLang) => (lang === "kk" ? "kk-KZ" : lang === "ru" ? "ru-RU" : "en");
+/** Shared with the UI (lib/analytics/brush.ts) so the report and the screen it
+ *  was exported from render one date the same way. */
+const localeFor = localeForLang;
 
 /* Intl groups thousands with U+00A0/U+202F; jsPDF draws whatever glyph the
    font has for them, and a missing one is a visible box. Normalise to a plain
@@ -44,19 +49,13 @@ const clean = (s: string) => s.replace(/[\u00A0\u202F\u2009]/g, " ");
 
 const fmtInt = (lang: ReportLang, n: number) => clean(new Intl.NumberFormat(localeFor(lang)).format(n));
 
-const fmtDate = (lang: ReportLang, iso: string) => {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? iso : clean(d.toLocaleDateString(localeFor(lang)));
-};
+/** The shared formatter, plus this module's NBSP scrub. */
+const fmtDate = (lang: ReportLang, iso: string) => clean(formatDate(iso, lang));
 
 /** Hectares. The shared analytics formatter, not a third private copy of the
  *  same arithmetic: 150 ha must not print as "150 ha" in the report and
  *  "150.0 ha" on the panel that produced it. */
 const fmtArea = (lang: ReportLang, m2: number) => `${formatArea(m2, lang)} ${tr(lang, "unit.ha")}`;
-
-/** The count behind one sortie — countOf(), shared with every panel, so the
- *  report and the screen it was exported from agree by construction. */
-const bestOf = countOf;
 
 /** low–best–high, or the single number when the engine offered no range. */
 function countText(lang: ReportLang, f: Footage): string {
@@ -123,11 +122,16 @@ export async function buildReportDoc(footages: Footage[], lang: ReportLang) {
   put(tr(lang, "rep.generated", { date: clean(new Date().toLocaleString(localeFor(lang))) }), L, 26);
   rule(30);
 
-  // Totals — only figures that were measured
-  const totalSeals = footages.reduce((s, f) => s + bestOf(f), 0);
+  /* Totals — only figures that were measured. The headline is the standing
+     estimate (the latest sortie at each site), not the sum over sorties: an
+     акт учёта that adds up repeat visits reports more seals than exist. The
+     sum is still in the document, under the table of figures, named for what
+     it is. Same helper as every screen, so the printed report and the panel it
+     was exported from cannot disagree. */
+  const est = seasonEstimate(footages);
   const area = totalAreaM2(footages);
   const cells: Array<[string, string]> = [
-    [fmtInt(lang, totalSeals), tr(lang, "rep.totalSeals")],
+    [fmtInt(lang, est.current), tr(lang, "rep.currentEstimate")],
     [fmtInt(lang, footages.length), tr(lang, "stat.sorties")],
   ];
   // Omitted entirely when no sortie knows its ground resolution: an area of 0
@@ -146,14 +150,21 @@ export async function buildReportDoc(footages: Footage[], lang: ReportLang) {
   });
   y += 10;
 
-  /* What the two totals leave out. A seal total is a sum over sorties, not a
-     population: the same haul-out flown twice contributes twice, and this is
-     the one line that stops a reader from reading it as distinct animals. The
-     area sum carries the same qualification plus what it rests on — a hectare
-     figure summed over the sorties that HAVE a scale, some of it derived from
-     a sensor width the service only guessed. */
+  /* What the figures above rest on, and the one they were promoted over. The
+     estimate states its own rule (latest sortie per site) so a reader can
+     check it; the raw sum follows, labelled as observations — the same
+     haul-out flown twice contributes twice, and that line is what stops it
+     being read as distinct animals. The area sum carries the same
+     qualification plus what it rests on — a hectare figure summed over the
+     sorties that HAVE a scale, some of it derived from a sensor width the
+     service only guessed. */
   const notes: string[] = [];
-  if (footages.length > 0) notes.push(tr(lang, "rep.totalNote"));
+  if (footages.length > 0) {
+    notes.push(tr(lang, "est.basis", { km: SITE_RADIUS_M / 1000 }));
+    notes.push(
+      `${tr(lang, "est.observedSub", { n: fmtInt(lang, est.observed), m: fmtInt(lang, est.sorties) })} — ${tr(lang, "rep.totalNote")}`,
+    );
+  }
   if (area.known > 0) {
     notes.push([
       tr(lang, "rep.areaNote"),

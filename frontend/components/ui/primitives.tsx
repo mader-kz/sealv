@@ -104,10 +104,15 @@ export function Stat({
 }) {
   return (
     <div className="min-w-0">
+      {/* The VALUE truncates too, and it is the one thing on the panel that
+          must never be guessable: "1…" where the season counted 1175. It still
+          clips when the column is too narrow, but the full figure is one hover
+          away instead of gone. */}
       <div
         className={`tnum font-medium text-ink leading-none truncate ${
           size === "lg" ? "text-hero" : "text-fig"
         }`}
+        title={String(value)}
       >
         {value}
       </div>
@@ -199,7 +204,14 @@ export function Row({
       {/* 96px, not 76: ru/kk labels (Длительность, Координаттар) need the
           extra column width — a fixed 76px clipped them mid-word. */}
       <span className="text-xs text-ink3 w-[96px] shrink-0">{label}</span>
-      <span className={`text-sm text-ink truncate ${mono ? "font-mono tnum" : ""}`}>{value}</span>
+      {/* Same rule as Stat: a truncated coordinate or filename with no way to
+          read the rest is a value the panel is not actually reporting. */}
+      <span
+        className={`text-sm text-ink truncate ${mono ? "font-mono tnum" : ""}`}
+        title={typeof value === "string" || typeof value === "number" ? String(value) : undefined}
+      >
+        {value}
+      </span>
     </div>
   );
 }
