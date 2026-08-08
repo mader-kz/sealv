@@ -84,6 +84,20 @@ EVENT_POLL_S = 0.5
 EVENT_HEARTBEAT_S = 15.0
 
 MAX_LATEST_RUNS = 20
+# The ceiling a caller may page up to in one /v1/stats request. The default
+# stays 20 so every existing caller sees exactly what it saw before; a client
+# that wants the rest asks for it, page by page, and is told the true total.
+MAX_LATEST_RUNS_CEILING = 200
+
+# Columns a caller may ask /v1/runs/{id}/points to project. Column names cannot
+# be parameterised in SQL, so nothing outside this tuple ever reaches a query.
+# Kept in the order of the table so a projected row reads like a row.
+POINT_FIELDS = ("id", "run_id", "frame_idx", "x", "y", "lat", "lng", "score", "support", "status")
+
+# How many points one PATCH may carry. A whole run is ~2000 detections, so this
+# is "the largest honest bulk verdict", not a throttle: past it the caller is
+# almost certainly looping over the archive rather than reviewing a sortie.
+MAX_BATCH_POINT_EDITS = 5000
 
 
 @asynccontextmanager
@@ -1129,10 +1143,32 @@ async def job_events(job_id: str, request: Request):
     )
 
 
+def _point_projection(fields: Optional[str]) -> Optional[tuple[str, ...]]:
+    """Parse `?fields=` into a validated column tuple. None = the whole row.
+
+    Opt-in, because the full row is what every existing caller already gets. A
+    sortie is up to ~2000 points and three of the ten columns (`run_id`,
+    `frame_idx`, `support`) have no consumer in the platform client, so a client
+    that names what it needs stops paying for them on every hydrate.
+    """
+    if fields is None:
+        return None
+    wanted = tuple(dict.fromkeys(f.strip() for f in fields.split(",") if f.strip()))
+    if not wanted:
+        raise HTTPException(400, "fields must name at least one column")
+    unknown = [f for f in wanted if f not in POINT_FIELDS]
+    if unknown:
+        raise HTTPException(
+            400, f"unknown point field(s) {', '.join(unknown)}; allowed: {', '.join(POINT_FIELDS)}"
+        )
+    return wanted
+
+
 @app.get("/v1/runs/{run_id}/points")
-async def run_points(run_id: str, status: Optional[str] = None):
+async def run_points(run_id: str, status: Optional[str] = None, fields: Optional[str] = None):
     if status is not None and status not in db.POINT_STATUSES:
         raise HTTPException(400, f"status must be one of {', '.join(db.POINT_STATUSES)}")
+    projection = _point_projection(fields)
 
     def load() -> dict:
         with _conn() as conn:
@@ -1146,16 +1182,101 @@ async def run_points(run_id: str, status: Optional[str] = None):
                     (run_id,),
                 )
             }
+            if projection is None:
+                points = db.get_points(conn, run_id, status)
+            else:
+                # `point` carries no JSON columns, so a projected row needs no
+                # decoding pass - plain dicts are the same shape db.get_points
+                # would have returned, minus the columns nobody asked for.
+                sql = f"SELECT {', '.join(projection)} FROM point WHERE run_id = ?"
+                params: tuple = (run_id,)
+                if status is not None:
+                    sql += " AND status = ?"
+                    params = (run_id, status)
+                points = [dict(r) for r in conn.execute(sql + " ORDER BY id", params)]
             return {
                 "run_id": run_id,
                 "media_id": run.get("media_id"),
                 "status": status,
-                "points": db.get_points(conn, run_id, status),
+                "points": points,
                 "counts": {s: breakdown.get(s, 0) for s in db.POINT_STATUSES},
                 "verified_count": db.verified_count(conn, run_id),
             }
 
     return await asyncio.to_thread(load)
+
+
+def _batch_ids(raw: Any) -> list[int]:
+    """Validate `point_ids` before a single row is touched.
+
+    Every id is checked up front so the transaction below is opened knowing it
+    can finish: a caller error must never leave half a reviewer's verdict
+    written and the other half rejected.
+    """
+    if not isinstance(raw, (list, tuple)):
+        raise HTTPException(400, "point_ids must be a list of integers")
+    if not raw:
+        raise HTTPException(400, "point_ids must not be empty")
+    if len(raw) > MAX_BATCH_POINT_EDITS:
+        raise HTTPException(400, f"point_ids may not exceed {MAX_BATCH_POINT_EDITS} entries")
+    ids: list[int] = []
+    for value in raw:
+        if isinstance(value, bool) or not isinstance(value, (int, str)):
+            raise HTTPException(400, "point_ids must be a list of integers")
+        try:
+            ids.append(int(value))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, "point_ids must be a list of integers") from exc
+    # A duplicated id is one verdict, not two log entries.
+    return list(dict.fromkeys(ids))
+
+
+def _apply_batch(run_id: str, op: str, raw_ids: Any, operator: Optional[str]) -> dict:
+    """One reviewer gesture over many detections: ONE write transaction.
+
+    'Mark 400 selected rows as false positives' used to be 400 PATCHes, each
+    opening its own IMMEDIATE transaction on its own connection - 400 chances to
+    lose the SQLite writer lock to the worker, and 400 chances for the browser
+    to give up halfway and leave the run half-edited. Here the whole gesture
+    commits or none of it does.
+
+    `db.apply_edit` cannot be looped inside the transaction (it opens its own,
+    and SQLite has no nested transactions), so its remove/reinstate branch is
+    reproduced here against the same `db.add_edit` helper - the `edit` log still
+    gets one append-only row per point, which is the part that is evidence.
+    """
+    ids = _batch_ids(raw_ids)
+    if op == "add":
+        # 'add' invents a point from x/y; there is nothing for a list of
+        # existing ids to mean. Say so rather than silently ignoring them.
+        raise HTTPException(400, "point_ids applies to 'remove' and 'reinstate', not 'add'")
+    status = "false_positive" if op == "remove" else "validated"
+
+    with _conn() as conn:
+        if db.get_run(conn, run_id) is None:
+            raise HTTPException(404, "run not found")
+        try:
+            with db._tx(conn, "IMMEDIATE"):
+                for pid in ids:
+                    existing = conn.execute(
+                        "SELECT x, y FROM point WHERE id = ? AND run_id = ?", (pid, run_id)
+                    ).fetchone()
+                    if existing is None:
+                        raise ValueError(f"point {pid} does not belong to run {run_id}")
+                    conn.execute("UPDATE point SET status = ? WHERE id = ?", (status, pid))
+                    db.add_edit(
+                        conn, run_id, op, point_id=pid,
+                        x=float(existing["x"]), y=float(existing["y"]), operator=operator,
+                    )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {
+            "run_id": run_id,
+            "op": op,
+            "updated": len(ids),
+            "point_ids": ids,
+            "verified_count": db.verified_count(conn, run_id),
+        }
 
 
 @app.patch("/v1/runs/{run_id}/points")
@@ -1166,6 +1287,10 @@ async def edit_points(run_id: str, body: dict):
     recall data this system will ever have (§7: there is no ground truth
     anywhere in this work), so `point.status` is a view of the log, not a
     replacement for it.
+
+    `point_id` edits one detection and answers with it. `point_ids` (additive -
+    old bodies are untouched) applies one op to many in a single transaction and
+    answers `{updated, point_ids, verified_count}`.
     """
     body = body or {}
     op = body.get("op")
@@ -1178,6 +1303,12 @@ async def edit_points(run_id: str, body: dict):
             point_id = int(point_id)
         except (TypeError, ValueError) as exc:
             raise HTTPException(400, "point_id must be an integer") from exc
+
+    point_ids = body.get("point_ids")
+    if point_ids is not None:
+        return await asyncio.to_thread(
+            _apply_batch, run_id, op, point_ids, _clean(body.get("operator"), "operator")
+        )
 
     def apply() -> dict:
         with _conn() as conn:
@@ -1279,9 +1410,36 @@ WITH ranked AS (
 latest AS (SELECT * FROM ranked WHERE rn = 1)
 """
 
+# The archive listing `latest_runs` is built from. Kept as one string so the
+# paged listing and the total it is measured against can never disagree about
+# which runs exist.
+_LATEST_RUNS_COLUMNS = """
+       r.id AS run_id, r.created_at, r.engine, r.basis, r.seconds,
+       r.count_low AS low, r.count_best AS best, r.count_high AS high,
+       r.quality,
+       m.id AS media_id, m.filename, m.kind, m.width, m.height,
+       sv.id AS survey_id, sv.captured_at, sv.tide_state,
+       sv.gsd_cm_px, sv.gsd_source,
+       si.id AS site_id, si.name AS site_name
+"""
+_LATEST_RUNS_FROM = """
+FROM run r
+JOIN media m ON m.id = r.media_id
+LEFT JOIN survey sv ON sv.id = m.survey_id
+LEFT JOIN site si ON si.id = sv.site_id
+"""
+# One bucket per survey, and per media for the media a survey never claimed -
+# an unattached upload is still its own sortie, and the inner joins of
+# `_LATEST_RUN_CTE` would drop it out of the archive entirely.
+_RUN_BUCKET = "COALESCE(sv.id, 'media:' || m.id)"
+
 
 @app.get("/v1/stats")
-async def stats():
+async def stats(
+    latest_per_survey: bool = False,
+    runs_limit: int = MAX_LATEST_RUNS,
+    runs_offset: int = 0,
+):
     """Dashboard aggregates, straight from the tables.
 
     Empty database, empty arrays. Nothing here is synthesised, sampled or
@@ -1294,7 +1452,26 @@ async def stats():
     Sites carry their latest band; the time series carries the rest. Tide state
     rides along with every point on it, because a haul-out count without the
     tide is a number without a unit.
+
+    `latest_runs` is a window, and `latest_runs_total` is always the size of the
+    thing it is a window onto. A truncated archive that does not admit it is
+    truncated is how a season's total gets published short.
+
+    Query params, all additive - the defaults reproduce the previous response
+    byte for byte:
+      latest_per_survey  one run per survey (the newest), instead of every run.
+                         A re-run of the same footage is a correction, not a
+                         second sortie, and counting both double-counts a colony.
+      runs_limit         page size, default 20, clamped to MAX_LATEST_RUNS_CEILING
+      runs_offset        page offset
     """
+    # Clamped rather than rejected: a caller asking for 10_000 runs wants "all
+    # of them", and the honest answer to that is a page plus the real total.
+    try:
+        runs_limit = max(1, min(int(runs_limit), MAX_LATEST_RUNS_CEILING))
+        runs_offset = max(0, int(runs_offset))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, "runs_limit and runs_offset must be integers") from exc
 
     def load() -> dict:
         with _conn() as conn:
@@ -1385,23 +1562,32 @@ async def stats():
             # only to derive the caveats: a caller rebuilding the archive must
             # see the same reasons-to-doubt a fresh run carries, or reloading
             # the page quietly launders a floor into a measurement.
+            if latest_per_survey:
+                runs_sql = (
+                    "WITH ranked AS (SELECT " + _LATEST_RUNS_COLUMNS
+                    + f", ROW_NUMBER() OVER (PARTITION BY {_RUN_BUCKET}"
+                    "   ORDER BY r.created_at DESC, r.id DESC) AS rn "
+                    + _LATEST_RUNS_FROM
+                    + ") SELECT * FROM ranked WHERE rn = 1"
+                    " ORDER BY created_at DESC, run_id DESC LIMIT ? OFFSET ?"
+                )
+                total_sql = (
+                    f"SELECT COUNT(DISTINCT {_RUN_BUCKET}) AS n " + _LATEST_RUNS_FROM
+                )
+            else:
+                runs_sql = (
+                    "SELECT " + _LATEST_RUNS_COLUMNS + _LATEST_RUNS_FROM
+                    + " ORDER BY r.created_at DESC, r.id DESC LIMIT ? OFFSET ?"
+                )
+                total_sql = "SELECT COUNT(*) AS n " + _LATEST_RUNS_FROM
+
+            latest_runs_total = int(_scalar(conn, total_sql) or 0)
+
             latest_runs = []
-            for row in conn.execute(
-                "SELECT r.id AS run_id, r.created_at, r.engine, r.basis, r.seconds,"
-                "       r.count_low AS low, r.count_best AS best, r.count_high AS high,"
-                "       r.quality,"
-                "       m.id AS media_id, m.filename, m.kind, m.width, m.height,"
-                "       sv.id AS survey_id, sv.captured_at, sv.tide_state,"
-                "       sv.gsd_cm_px, sv.gsd_source,"
-                "       si.id AS site_id, si.name AS site_name "
-                "FROM run r "
-                "JOIN media m ON m.id = r.media_id "
-                "LEFT JOIN survey sv ON sv.id = m.survey_id "
-                "LEFT JOIN site si ON si.id = sv.site_id "
-                "ORDER BY r.created_at DESC, r.id DESC LIMIT ?",
-                (MAX_LATEST_RUNS,),
-            ):
+            for row in conn.execute(runs_sql, (runs_limit, runs_offset)):
                 run = dict(row)
+                # `rn` is the dedupe machinery, not part of the run.
+                run.pop("rn", None)
                 # Raw SQL bypasses db.py's JSON column handling, so the ledger
                 # arrives as text and is parsed here. A malformed one costs this
                 # row its caveats, never the whole dashboard. The same helper
@@ -1436,6 +1622,13 @@ async def stats():
                 "per_site": per_site,
                 "over_time": over_time,
                 "latest_runs": latest_runs,
+                # How many rows the window above was cut from, plus where the
+                # window sits. Without these a client cannot tell "20 sorties
+                # this season" from "the first 20 of 340".
+                "latest_runs_total": latest_runs_total,
+                "latest_runs_limit": runs_limit,
+                "latest_runs_offset": runs_offset,
+                "latest_per_survey": bool(latest_per_survey),
             }
 
     return await asyncio.to_thread(load)

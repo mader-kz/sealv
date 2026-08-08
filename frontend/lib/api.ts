@@ -91,12 +91,25 @@ export type StatsLatestRun = {
      transect would be reported as the ground under one instant of it. Null =
      the run never said, which makes the area unknown rather than one frame. */
   frames_used?: number | null;
+  /* When the footage was FLOWN, off the survey. `created_at` is when the count
+     job ran, which for a re-processed archive can be months later - putting a
+     2019 sortie on today's timeline. Null on a survey that never recorded it,
+     and then `created_at` is the only date there is. */
+  captured_at?: string | null;
 };
 
 /* The dashboard reads totals/per_site/over_time off the same payload, so the
    index signature stays: this type sharpens the one branch that is mapped into
    Footage without pretending to describe the whole endpoint. */
-export type Stats = { latest_runs?: StatsLatestRun[]; [k: string]: any };
+export type Stats = {
+  latest_runs?: StatsLatestRun[];
+  /* How many runs exist behind the window `latest_runs` is. The endpoint caps
+     the list; without the total, twenty of three hundred sorties render as the
+     whole season. Absent on a service too old to report it - then the caller
+     knows only that it does not know. */
+  latest_runs_total?: number | null;
+  [k: string]: any;
+};
 
 async function jsonOrThrow(r: Response): Promise<any> {
   const d = await r.json().catch(() => ({}));
@@ -128,59 +141,105 @@ export async function createJob(mediaId: string): Promise<string> {
   return d.job_id;
 }
 
+/* A sortie is minutes, not hours. Past this the job is not slow, it is gone -
+   a worker that died mid-run leaves the row 'running' forever and the old
+   watcher would have polled it until the tab was closed. */
+const WATCH_CEILING_MS = 45 * 60 * 1000;
+
+export type WatchOptions = {
+  onProgress?: (p: JobProgress) => void;
+  /* Abort the watch. The stream closes, the poll timer clears, and the promise
+     rejects with an AbortError - nothing keeps calling back into a component
+     that has already unmounted. */
+  signal?: AbortSignal;
+  /* Wall-clock ceiling in ms. Exposed for tests; the default is the real one. */
+  timeoutMs?: number;
+};
+
 /* Follow a job to its end. SSE first; if the stream drops, fall back to
    polling every 2s rather than spinning forever - the exact failure ladder
    the operator webapp already field-tested: a dead EventSource with no poll
-   fallback once meant a spinner that never admitted anything was wrong. */
+   fallback once meant a spinner that never admitted anything was wrong.
+
+   Second argument accepts the old `onProgress` callback OR an options object,
+   so existing callers are untouched while new ones can pass an AbortSignal. */
 export function watchJob(
   jobId: string,
-  onProgress?: (p: JobProgress) => void,
+  opts?: ((p: JobProgress) => void) | WatchOptions,
 ): Promise<RunResult> {
+  const o: WatchOptions = typeof opts === "function" ? { onProgress: opts } : (opts ?? {});
+  const onProgress = o.onProgress;
+  const signal = o.signal;
+  const ceiling = o.timeoutMs ?? WATCH_CEILING_MS;
+
   return new Promise((resolve, reject) => {
     let settled = false;
-    const done = (fn: () => void) => {
-      if (!settled) {
-        settled = true;
-        fn();
-      }
+    let es: EventSource | null = null;
+    let iv: ReturnType<typeof setInterval> | null = null;
+    let ceilingTimer: ReturnType<typeof setTimeout> | null = null;
+
+    /* One teardown for every exit path. The old version closed the stream on
+       some branches and the interval on others, and nothing at all when the
+       caller walked away - an unmounted Dropzone left an open EventSource and
+       a 2s timer running for the life of the tab. */
+    const stop = () => {
+      try { es?.close(); } catch { /* already closed */ }
+      es = null;
+      if (iv !== null) { clearInterval(iv); iv = null; }
+      if (ceilingTimer !== null) { clearTimeout(ceilingTimer); ceilingTimer = null; }
+      signal?.removeEventListener("abort", onAbort);
     };
+    const done = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      stop();
+      fn();
+    };
+    function onAbort() {
+      done(() => reject(new DOMException("the count watch was cancelled", "AbortError")));
+    }
+    if (signal?.aborted) return onAbort();
+    signal?.addEventListener("abort", onAbort);
+    ceilingTimer = setTimeout(
+      () => done(() => reject(new Error("the count stopped reporting"))),
+      ceiling,
+    );
+
+    const asResult = (result: any): RunResult | null =>
+      result && result.count ? (result as RunResult) : null;
 
     const finish = async () => {
       try {
         const d = await jsonOrThrow(await fetch(`${API}/v1/jobs/${jobId}`));
         if (d.status !== "done") throw new Error(d.error || d.detail || `job ${d.status}`);
-        if (!d.result?.count) throw new Error("the count finished but returned no number");
-        done(() => resolve(d.result as RunResult));
+        const result = asResult(d.result);
+        if (!result) throw new Error("the count finished but returned no number");
+        done(() => resolve(result));
       } catch (e) {
         done(() => reject(e));
       }
     };
 
     const poll = () => {
+      if (settled || iv !== null) return;
       let fails = 0;
-      const iv = setInterval(async () => {
+      iv = setInterval(async () => {
         try {
           const r = await fetch(`${API}/v1/jobs/${jobId}`);
           const d = await r.json();
           if (!r.ok) throw new Error(d.error || d.detail || `job lookup failed (${r.status})`);
           fails = 0;
           if (d.status === "done") {
-            clearInterval(iv);
             finish();
           } else if (d.status === "failed" || d.status === "cancelled") {
-            clearInterval(iv);
             done(() => reject(new Error(d.error || `job ${d.status}`)));
           } else if (d.progress && onProgress) onProgress(d.progress);
         } catch (e) {
-          if (++fails >= 5) {
-            clearInterval(iv);
-            done(() => reject(e));
-          }
+          if (++fails >= 5) done(() => reject(e));
         }
       }, 2000);
     };
 
-    let es: EventSource | null = null;
     try {
       es = new EventSource(`${API}/v1/jobs/${jobId}/events`);
     } catch {
@@ -195,12 +254,22 @@ export function watchJob(
         /* a malformed progress frame is not worth failing the job over */
       }
     });
-    es.addEventListener("done", () => {
-      es?.close();
-      finish();
+    /* The `done` frame already carries the finished run. Refetching it was one
+       more round trip for a payload the browser was holding - and one more
+       chance to fail after the count had actually succeeded. The GET stays as
+       the fallback for a frame that arrives without one. */
+    es.addEventListener("done", (e: MessageEvent) => {
+      let result: RunResult | null = null;
+      try {
+        const d = JSON.parse(e.data) || {};
+        result = asResult(d.result ?? d);
+      } catch {
+        /* unreadable frame - ask the service directly */
+      }
+      if (result) done(() => resolve(result as RunResult));
+      else finish();
     });
     es.addEventListener("failed", (e: MessageEvent) => {
-      es?.close();
       let m = "the count failed";
       try {
         m = (JSON.parse(e.data) || {}).error || m;
@@ -208,7 +277,8 @@ export function watchJob(
       done(() => reject(new Error(m)));
     });
     es.onerror = () => {
-      es?.close();
+      try { es?.close(); } catch { /* already closed */ }
+      es = null;
       poll();
     };
   });
@@ -218,9 +288,19 @@ export function watchJob(
    video with a made-up count; the real engine returns every animal it found,
    georeferenced when the footage carried a track. Points without coordinates
    are the caller's problem to aggregate - it knows the sortie's centre.
-   `pixels` carries EVERY non-false-positive point in reference-frame pixel
-   space, placed or not: an animal the map cannot show is still in the photo,
-   and the Evidence view needs it there. */
+
+   Rejected points are KEPT, in both lists. Dropping them here is what made the
+   Workbench's "Rejected" filter structurally empty after a reload and left the
+   restore button pointing at rows that no longer existed: a reviewer could
+   reject an animal, refresh, and never be able to take it back. A rejection is
+   evidence, and undo is not optional.
+
+   Nothing downstream counts them - CaspianMap, Dashboard, countOf, the CSV
+   export and the Evidence overlay all filter `status !== "false_positive"` -
+   so the map, the totals and the marks are unchanged. What changes is that
+   `placed.length` is now ROWS, not animals. `unplaced` deliberately stays
+   animals: it is added straight into the count, and a rejected point with no
+   coordinates is not an animal anyone counted. */
 export function pointsToDetections(
   footageId: string,
   points: RunResult["points"],
@@ -229,7 +309,6 @@ export function pointsToDetections(
   const pixels: DetectionPixel[] = [];
   let unplaced = 0;
   for (const p of points) {
-    if (p.status === "false_positive") continue;
     pixels.push({ px: p.x, py: p.y, status: p.status, score: p.score ?? null, id: p.id });
     if (Number.isFinite(p.lat) && Number.isFinite(p.lng)) {
       placed.push({
@@ -239,12 +318,12 @@ export function pointsToDetections(
         lat: p.lat as number,
         lng: p.lng as number,
         count: 1,
-        confidence: p.score ?? 0,
+        /* null, not 0. "No score recorded" and "the model scored this 0.00"
+           are different claims, and only one of them is true here. */
+        confidence: p.score ?? null,
         status: p.status,
-        px: p.x,
-        py: p.y,
       });
-    } else {
+    } else if (p.status !== "false_positive") {
       unplaced += 1;
     }
   }
@@ -256,13 +335,53 @@ export function pointsToDetections(
    These three feed hydrate(): the platform reloads yesterday's surveys the
    same way it shows today's, so an F5 no longer wipes the map. */
 
-export async function fetchStats(): Promise<Stats> {
-  return jsonOrThrow(await fetch(`${API}/v1/stats`));
+export type StatsQuery = {
+  /* One run per survey. A re-count of the same footage is a correction, not a
+     second sortie; asking for both is how one colony gets counted twice. */
+  latestPerSurvey?: boolean;
+  limit?: number;
+  offset?: number;
+  signal?: AbortSignal;
+};
+
+export async function fetchStats(q: StatsQuery = {}): Promise<Stats> {
+  const p = new URLSearchParams();
+  if (q.latestPerSurvey) p.set("latest_per_survey", "1");
+  if (q.limit != null) p.set("runs_limit", String(q.limit));
+  if (q.offset != null) p.set("runs_offset", String(q.offset));
+  const qs = p.toString();
+  return jsonOrThrow(await fetch(`${API}/v1/stats${qs ? `?${qs}` : ""}`, { signal: q.signal }));
 }
 
-export async function fetchRunPoints(runId: string): Promise<RunResult["points"]> {
-  const d = await jsonOrThrow(await fetch(`${API}/v1/runs/${runId}/points`));
-  return Array.isArray(d) ? d : (d.points ?? []);
+/* The columns the platform actually has fields for. `run_id` is the argument,
+   `frame_idx` and `support` have no reader here, and a sortie is ~2000 points -
+   naming what is needed keeps three unused numbers per animal off the wire on
+   every hydrate. An older service ignores the param and sends the full row,
+   which parses identically. */
+const POINT_FIELDS = "id,x,y,lat,lng,score,status";
+
+export type RunPoints = {
+  points: RunResult["points"];
+  /* The service's own per-status tally and export figure. Derived from the
+     database rather than from the rows this call happened to fetch, so the
+     inspector can say "N rejected" without the number depending on a filter. */
+  counts: { auto: number; validated: number; false_positive: number } | null;
+  verified_count: number | null;
+};
+
+export async function fetchRunPoints(
+  runId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<RunPoints> {
+  const d = await jsonOrThrow(
+    await fetch(`${API}/v1/runs/${runId}/points?fields=${POINT_FIELDS}`, { signal: opts.signal }),
+  );
+  if (Array.isArray(d)) return { points: d, counts: null, verified_count: null };
+  return {
+    points: d.points ?? [],
+    counts: d.counts ?? null,
+    verified_count: typeof d.verified_count === "number" ? d.verified_count : null,
+  };
 }
 
 export async function fetchTrack(
@@ -292,4 +411,25 @@ export async function editPoint(
       body: JSON.stringify({ op, point_id: pointId, operator: "platform" }),
     }),
   );
+}
+
+/* One reviewer gesture over many animals, one request, one transaction. Select
+   400 rows and mark them rejected and the old path fired 400 PATCHes: 400
+   round trips, 400 grabs at SQLite's single writer lock, and no way to know
+   whether the gesture had landed as a whole. `updated` is what the service
+   actually wrote. */
+export async function editPoints(
+  runId: string,
+  op: "remove" | "reinstate",
+  pointIds: number[],
+): Promise<number> {
+  if (!pointIds.length) return 0;
+  const d = await jsonOrThrow(
+    await fetch(`${API}/v1/runs/${runId}/points`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ op, point_ids: pointIds, operator: "platform" }),
+    }),
+  );
+  return typeof d.updated === "number" ? d.updated : pointIds.length;
 }

@@ -13,15 +13,19 @@ export type Detection = {
   lat: number;
   lng: number;
   count: number;
-  confidence: number;
+  /* The detector's raw score, or null when the run recorded none - an operator
+     placed the point by hand, or the engine predates scoring. It used to be
+     coerced to 0, which is not "unknown": 0 is the lowest possible confidence,
+     and a sort by score put every unscored animal at the bottom as if the model
+     had actively disbelieved it. */
+  confidence: number | null;
   bbox?: [number, number, number, number]; // x,y,w,h normalized 0-1 (mock)
   status: "auto" | "validated" | "false_positive";
-  /* Pixel position of this animal in the source/reference frame's coordinate
-     system. The Evidence view draws verdicts on the actual photo, where
-     geography is irrelevant but pixels are everything. Absent on mock/test
-     detections - the engine is the only honest source of them. */
-  px?: number;
-  py?: number;
+  /* A verdict this browser applied that the service did not accept. The local
+     state is what the reviewer decided, so it stands - but it is not persisted,
+     and a UI that shows it identically to a saved one is lying about the
+     archive. Absent = nothing to say (never written, or written and accepted). */
+  unsaved?: boolean;
 };
 
 /* One engine detection in the pixel space of the source/reference frame.
@@ -43,8 +47,19 @@ export type Footage = {
   duration: number; // seconds
   uploadedAt: string;
   track: TrackPoint[];
+  /* EVERY detection the run produced, including the ones a reviewer rejected.
+     Rejections are survey evidence and the only recall data this system will
+     ever have, so they are carried, not dropped - which means `detections.length`
+     is "rows", not "animals". Anything counting animals filters
+     `status !== "false_positive"` (see lib/analytics/count.ts). */
   detections: Detection[];
   center: { lat: number; lng: number };
+  /* False for a sortie the service counted but that carries no usable position
+     at all - no flight track, no georeferenced animal. Its `center` is NaN and
+     must never be rendered as a coordinate; its COUNT is a real measured number
+     and stays in the totals. Dropping such a run (which hydrate used to do) is
+     how a season's total silently loses a colony. Absent = placed. */
+  placed?: boolean;
   /* No `region`. It was `center.lat > 44.5 ? "KZ-East" : …` — a latitude
      threshold wearing a toponym's clothes, invented at ingest and then shown,
      charted, exported and put in sentences as if it were a place. The measured
@@ -84,6 +99,13 @@ export type Footage = {
      guess that silently shifts every derived area. */
   gsdCmPx?: number | null;
   gsdSource?: string | null;
+  /* The service's own tally of this run's points by status, and the number it
+     would export (everything not rejected). The client can derive both from
+     `detections`, but only for the points it actually loaded - these come from
+     the database, so the inspector can say "N rejected" without that claim
+     quietly depending on what a page happened to fetch. */
+  counts?: { auto: number; validated: number; false_positive: number };
+  verifiedCount?: number | null;
   error?: string;
 };
 
@@ -95,10 +117,6 @@ export type MapLayerState = {
   detections: boolean;
 };
 
-export type SiteMeta = {
-  id: string;
-  name: string;
-  region: "KZ-North" | "KZ-East" | "KZ-South" | "AZ" | "RU" | "TM" | "IR";
-  lat: number;
-  lng: number;
-};
+/* No `SiteMeta`. It described a site registry this client never had - the
+   service owns `site`, and nothing in the app ever read the type. A shared type
+   with no reader is a promise the codebase does not keep. */
