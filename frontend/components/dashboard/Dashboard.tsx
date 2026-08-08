@@ -3,12 +3,16 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useFootageStore } from "@/store/useFootageStore";
 import { Button, IconButton, SectionHead, Stat } from "@/components/ui/primitives";
+import SiteDynamics from "@/components/dashboard/SiteDynamics";
+import TrustPanel from "@/components/dashboard/TrustPanel";
 import { totalAreaM2, formatArea } from "@/lib/analytics/area";
 import { countOf } from "@/lib/analytics/count";
-import { detectionsFor, footagesInRange, formatDate } from "@/lib/analytics/brush";
+import { detectionsFor, footagesInRange, formatDate, timeExtent } from "@/lib/analytics/brush";
 import { seasonEstimate } from "@/lib/analytics/estimate";
 import { groupSizes, histogram } from "@/lib/analytics/groups";
-import { groupIntoSites, siteSeries, SITE_RADIUS_M } from "@/lib/analytics/surveys";
+import { seasonReviewStats } from "@/lib/analytics/review";
+import { groupIntoSites, hasResult, siteSeries, SITE_RADIUS_M } from "@/lib/analytics/surveys";
+import { useOperator } from "@/lib/identity";
 import { useT } from "@/lib/i18n";
 import type { Footage } from "@/lib/types";
 
@@ -21,6 +25,11 @@ const GROUP_RADIUS_M = 5; // animals closer together than this are one group
 const BARS = 20;          // a 380px column cannot draw more bars honestly
 const H = 64;             // chart height, px
 
+/* Withdrawn from the estimate: still evidence, never a figure. Nothing is
+   deleted — the sortie keeps its points and its edits, it just stops being
+   counted, and the trust panel reports how many were withdrawn and why. */
+const isRetired = (f: Footage): boolean => (f.retiredAt ?? "").trim() !== "";
+
 export default function Dashboard({ onClose }: { onClose?: ()=>void }){
   const { t, tp, lang } = useT();
   const footages = useFootageStore(s=>s.footages);
@@ -28,13 +37,40 @@ export default function Dashboard({ onClose }: { onClose?: ()=>void }){
   const timeRange = useFootageStore(s=>s.timeRange);
   const selectedId = useFootageStore(s=>s.selectedId);
   const select = useFootageStore(s=>s.select);
+  const loadedRuns = useFootageStore(s=>s.loadedRuns);
+  const totalRuns = useFootageStore(s=>s.totalRuns);
+  /* Who is at the keyboard, when anyone has said. Nobody having said is the
+     default and a truthful record: the report prints "not recorded" rather
+     than putting a name on a document that nobody signed. */
+  const [operator] = useOperator();
   const [exporting, setExporting] = useState(false);
+  /* Which site's history is open. Keyed on the site's own identity, not on
+     `site.id` — that is the group's index in the current grouping, so moving
+     the timeline brush would have left the panel open on whatever site had
+     slid into that slot. */
+  const [openSite, setOpenSite] = useState<string | null>(null);
 
   /* The shared brush — the same window the footage list and the map read, from
-     one implementation instead of four near-copies. */
+     one implementation instead of four near-copies.
+
+     Three sets come out of it, and keeping them apart is the point. A FAILED
+     ingest is a Footage with a filename and nothing else: counted as a sortie
+     it inflated "N animals observed across M sorties" and then appeared in the
+     "without GSD" tally as a survey that had neglected to record its scale.
+     A WITHDRAWN sortie is real evidence that has been retracted, and belongs
+     in no figure either — but it is not the same claim as a failure, so it is
+     counted separately and reported as its own line. */
   const filtered = useMemo(()=>{
-    const f = footagesInRange(footages, timeRange);
-    return { f, d: detectionsFor(f, detections) };
+    const inWindow = footagesInRange(footages, timeRange);
+    const retired = inWindow.filter(isRetired);
+    const live = inWindow.filter(f=> !isRetired(f));
+    const f = live.filter(hasResult);
+    return {
+      f,
+      retired,
+      withoutResult: live.length - f.length,
+      d: detectionsFor(f, detections),
+    };
   },[footages,detections,timeRange]);
 
   /* A rejected detection is not an animal: false_positive is out of every
@@ -100,14 +136,27 @@ export default function Dashboard({ onClose }: { onClose?: ()=>void }){
   const bins = useMemo(()=> histogram(groupSizes(placed, GROUP_RADIUS_M)), [placed]);
   const maxBin = Math.max(...bins.map(b=> b.count), 1);
 
-  const validated = shown.filter(d=>d.status==="validated").length;
-  const verifiedPct = shown.length ? Math.round(validated/shown.length*100) : 0;
+  /* Review, from the one helper that knows the difference between work not
+     done and work this build cannot offer. The old arithmetic here was
+     `validated / shown` over the detection rows in the window, which put a
+     single aggregate marker standing for 562 animals in the denominator as
+     one point — and left those 562 animals out of the panel entirely. */
+  const review = useMemo(()=> seasonReviewStats(filtered.f), [filtered.f]);
+  const reviewPct = Math.round(review.pct ?? 0);
 
   const largest = useMemo(()=>{
     let top: Footage | null = null;
     for(const f of filtered.f) if(!top || countOf(f)>countOf(top)) top = f;
     return top;
   },[filtered.f]);
+
+  /** Select a sortie and take the camera to it — the one camera channel. */
+  const goTo = (f: Footage) => {
+    select(f.id);
+    const { lat, lng } = f.center ?? ({} as { lat?: number; lng?: number });
+    if (Number.isFinite(lat) && Number.isFinite(lng))
+      document.dispatchEvent(new CustomEvent("flyto", { detail: { lat, lng, zoom: 10 } }));
+  };
 
   /* The report pulls jsPDF plus an embedded font — hundreds of kilobytes over
      the network before a single page is drawn. Silence for that long reads as
@@ -118,7 +167,17 @@ export default function Dashboard({ onClose }: { onClose?: ()=>void }){
     setExporting(true);
     try {
       const { exportReport } = await import("@/lib/export/pdf");
-      await exportReport(filtered.f, lang);
+      /* What the sorties cannot say about themselves: which slice of the
+         archive this document is. The timeline brush and the hydrate's own
+         "N of M" are the two ways a report can silently be a fragment. */
+      const ext = timeExtent(footages);
+      const brushWindow = ext && timeRange
+        ? {
+            from: new Date(ext.min + ext.span * (timeRange[0] / 100)).toISOString(),
+            to: new Date(ext.min + ext.span * (timeRange[1] / 100)).toISOString(),
+          }
+        : null;
+      await exportReport(filtered.f, lang, { operator, window: brushWindow, loadedRuns, totalRuns });
       toast.success(t("dash.exportOk"));
     } catch (e) {
       console.error("report export failed:", e);
@@ -197,15 +256,7 @@ export default function Dashboard({ onClose }: { onClose?: ()=>void }){
                     return (
                       <button
                         key={b.f.id}
-                        onClick={()=>{
-                          select(b.f.id);
-                          /* The one camera channel: a bar that selects a sortie
-                             but leaves the map where it was makes the reader
-                             hunt for what they just clicked. */
-                          const { lat, lng } = b.f.center ?? ({} as { lat?: number; lng?: number });
-                          if (Number.isFinite(lat) && Number.isFinite(lng))
-                            document.dispatchEvent(new CustomEvent("flyto", { detail: { lat, lng, zoom: 10 } }));
-                        }}
+                        onClick={()=> goTo(b.f)}
                         title={`${b.f.filename} · ${b.best}${hasRange ? ` (${b.low}–${b.high})` : ""}`}
                         className="flex-1 relative h-full flex items-end min-w-[3px]"
                       >
@@ -234,7 +285,8 @@ export default function Dashboard({ onClose }: { onClose?: ()=>void }){
             )}
         </div>
 
-        {/* Repeat surveys — the only comparison this data can support */}
+        {/* Repeat surveys — the only comparison this data can support, and now
+            a way in to the whole series rather than only its last step. */}
         <div className="px-4 py-4 border-b border-line">
           <SectionHead title={t("dash.repeatSurveys")} />
           {/* Both halves of "the same site, again": the time comparison AND the
@@ -253,24 +305,39 @@ export default function Dashboard({ onClose }: { onClose?: ()=>void }){
             )}
             {repeats.map(({ site, series })=>{
               const d = series[series.length-1].delta;
+              const key = site.siteId
+                ?? `${site.centroid.lat.toFixed(4)},${site.centroid.lng.toFixed(4)}`;
+              const open = openSite===key;
               return (
-                <div key={site.id} className="flex items-baseline justify-between gap-3 text-xs">
-                  {/* The site's measured centroid, not a made-up region name:
-                      these sorties are grouped BY that centroid, so it is the
-                      one label that is actually true of all of them. */}
-                  <span className="text-ink2 truncate font-mono tnum">
-                    {site.centroid.lat.toFixed(2)}, {site.centroid.lng.toFixed(2)}
-                  </span>
-                  <span className="tnum text-ink3 shrink-0">
-                    {series.length} {tp(series.length, "unit.sorties")}
-                    {/* No delta when either sortie has no count — a gap is not a zero. */}
-                    {d
-                      ? <span className="text-ink ml-2">
-                          Δ {d.abs>=0 ? "+" : ""}{d.abs}
-                          {d.pct!=null && ` (${d.pct>=0 ? "+" : ""}${Math.round(d.pct)}%)`}
-                        </span>
-                      : <span className="ml-2">—</span>}
-                  </span>
+                <div key={key}>
+                  {/* A real button, not a div with a click handler: the row
+                      opens the site's whole history, and something that opens
+                      a panel has to be reachable from the keyboard. */}
+                  <button
+                    type="button"
+                    onClick={()=> setOpenSite(open ? null : key)}
+                    aria-expanded={open}
+                    title={open ? t("dash.collapseSite") : t("dash.expandSite")}
+                    className="w-full flex items-baseline justify-between gap-3 text-xs text-left rounded px-1 -mx-1 py-0.5 hover:bg-surface2"
+                  >
+                    {/* A person's name for the place when there is one, the
+                        measured centroid when there is not — never a region
+                        invented from a latitude. */}
+                    <span className={`text-ink2 truncate ${site.name ? "" : "font-mono tnum"}`}>
+                      {site.name ?? `${site.centroid.lat.toFixed(2)}, ${site.centroid.lng.toFixed(2)}`}
+                    </span>
+                    <span className="tnum text-ink3 shrink-0">
+                      {series.length} {tp(series.length, "unit.sorties")}
+                      {/* No delta when either sortie has no count — a gap is not a zero. */}
+                      {d
+                        ? <span className="text-ink ml-2">
+                            Δ {d.abs>=0 ? "+" : ""}{d.abs}
+                            {d.pct!=null && ` (${d.pct>=0 ? "+" : ""}${Math.round(d.pct)}%)`}
+                          </span>
+                        : <span className="ml-2">—</span>}
+                    </span>
+                  </button>
+                  {open && <SiteDynamics site={site} series={series} onPick={goTo} />}
                 </div>
               );
             })}
@@ -279,9 +346,8 @@ export default function Dashboard({ onClose }: { onClose?: ()=>void }){
 
         {/* No "By region" section. It charted `center.lat > 44.5 ? "KZ-East" …`
             — a latitude bucket with a toponym printed on it — as if the survey
-            had been broken down by place. Sorties are identified by their
-            measured centroid; a real regional breakdown needs the service's
-            site table, and until it is wired through, nothing goes here. */}
+            had been broken down by place. A real place now has a NAME because
+            someone typed one; where nobody has, the centroid still stands. */}
 
         {/* Group size — measured off the coordinates, not off a count field */}
         <div className="px-4 py-4 border-b border-line">
@@ -317,31 +383,50 @@ export default function Dashboard({ onClose }: { onClose?: ()=>void }){
         {/* Verification. 0% over points that exist is a fact worth printing, not
             a gap to hide. 0% over NO points is a different claim — it reads as
             "someone reviewed these and signed off on none" when the truth is
-            that there is nothing to review — so the empty set says so instead,
-            the same absent-vs-empty distinction the caveats section makes. */}
+            that there is nothing to review — and animals with no reviewable row
+            at all are a third claim again, so all three are said separately. */}
         <div className="px-4 py-4 border-b border-line">
           <SectionHead title={t("dash.verification")} />
-          {shown.length===0
+          {review.total===0
             ? <p className="text-sm text-ink3 mt-2.5">{t("dash.nothingToVerify")}</p>
-            : <>
-                <p className="text-sm text-ink2 mt-2.5">
-                  {t("dash.verifiedShare", { n: validated, pct: verifiedPct })}
-                </p>
-                <div className="h-1 bg-line-soft rounded-full overflow-hidden mt-2">
-                  <div className="h-full bg-ink2 rounded-full" style={{ width:`${verifiedPct}%` }} />
-                </div>
-              </>}
+            : review.reviewable===0
+              ? <p className="text-sm text-ink3 mt-2.5">{t("dash.onlyUnreviewable", { n: review.unreviewable })}</p>
+              : <>
+                  <p className="text-sm text-ink2 mt-2.5">
+                    {t("dash.verifiedOf", { n: review.verified, r: review.reviewable, pct: reviewPct })}
+                  </p>
+                  <div className="h-1 bg-line-soft rounded-full overflow-hidden mt-2">
+                    <div className="h-full bg-ink2 rounded-full" style={{ width:`${reviewPct}%` }} />
+                  </div>
+                  {review.unreviewable>0 && (
+                    <p className="text-2xs text-ink3 mt-1.5 leading-relaxed">
+                      {t("dash.plusUnreviewable", { n: review.unreviewable })}
+                    </p>
+                  )}
+                </>}
         </div>
 
-        {/* Notes — measured facts in sentences, no interpretation */}
+        {/* How far any of the above can be trusted, in measured terms only. */}
+        <TrustPanel
+          footages={filtered.f}
+          retired={filtered.retired}
+          withoutResult={filtered.withoutResult}
+        />
+
+        {/* Derived summary — sentences the app assembled out of the figures
+            above. It is NOT "Notes": a field note is a person's observation,
+            it lives on the sortie that person flew, and putting a generated
+            sentence under the same heading is exactly the machine/human
+            confusion this product exists to prevent. */}
         <div className="px-4 py-4">
-          <SectionHead title={t("dash.notesTitle")} />
+          <SectionHead title={t("dash.derivedTitle")} />
           <p className="text-sm text-ink2 mt-2.5 leading-relaxed">
             {filtered.f.length===0
               ? t("dash.notesEmpty")
               : <>
                   {areaText ? t("dash.notesArea", { a: areaText }) : t("dash.notesNoArea")}
-                  {shown.length>0 && <> {t("dash.notesVerifiedPct", { n: validated, total: shown.length, pct: verifiedPct })}</>}
+                  {review.reviewable>0 && <> {t("dash.notesVerifiedPct", { n: review.verified, total: review.reviewable, pct: reviewPct })}</>}
+                  {review.unreviewable>0 && <> {t("dash.notesUnreviewable", { n: review.unreviewable })}</>}
                   {/* Named by its file, not by an invented region. */}
                   {largest && <> {t("dash.notesLargestSortie", { x: countOf(largest), sortie: largest.filename })}</>}
                 </>}

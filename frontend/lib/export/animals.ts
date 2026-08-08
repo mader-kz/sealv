@@ -10,12 +10,40 @@
    Evidence view is where they are visible. */
 import type { Footage, Detection } from "../types";
 
+const text = (v: unknown): string | null => {
+  if (typeof v !== "string") return null;
+  const s = v.trim();
+  return s === "" ? null : s;
+};
+
+const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+
+/* One animal, and everything about the sortie behind it that a GIS reader
+   needs to filter, join or defend the point without the app open: which run
+   and which survey produced it, the named place, the method and the band the
+   count came with, whether the scale and the position were measured or
+   guessed, who recorded it, and when the footage was actually flown.
+
+   `date` stays the sortie's timeline date (the flight date when the survey
+   recorded one, the count's clock when it did not) so existing consumers are
+   untouched; `captured_at` is the raw flight date, empty when never recorded —
+   the two together are what let a reader tell one from the other. */
 export type AnimalProps = {
   sortie: string;
   date: string;
   status: Detection["status"];
   score: number | null;
   run_id: string | null;
+  survey_id: string | null;
+  site: string | null;
+  basis: string | null;
+  low: number | null;
+  best: number | null;
+  high: number | null;
+  gsd_source: string | null;
+  location_source: string | null;
+  operator: string | null;
+  captured_at: string | null;
 };
 
 export type AnimalFeature = {
@@ -42,6 +70,43 @@ function exportable(footages: Footage[]): Array<{ f: Footage; d: Detection }> {
 
 const scoreOf = (d: Detection): number | null => (Number.isFinite(d.confidence) ? d.confidence : null);
 
+/** The sortie half of a row. One builder, so the GeoJSON properties and the
+ *  CSV columns cannot drift apart the way the count once drifted across four
+ *  panels. */
+function sortieProps(f: Footage): Omit<AnimalProps, "status" | "score"> {
+  return {
+    sortie: f.filename,
+    date: f.uploadedAt,
+    run_id: f.runId ?? null,
+    survey_id: text(f.surveyId),
+    site: text(f.siteName),
+    basis: text(f.band?.basis),
+    low: num(f.band?.low),
+    best: num(f.band?.best),
+    high: num(f.band?.high),
+    gsd_source: text(f.gsdSource),
+    location_source: text(f.locationSource),
+    operator: text(f.operator),
+    captured_at: text(f.capturedAt),
+  };
+}
+
+/** Column order, written once. The header and every row read from this list,
+ *  so a column can never end up under the wrong heading. */
+const CSV_COLUMNS = [
+  "run_id",
+  "survey_id",
+  "site",
+  "basis",
+  "low",
+  "best",
+  "high",
+  "gsd_source",
+  "location_source",
+  "operator",
+  "captured_at",
+] as const;
+
 export function buildAnimalsGeoJSON(footages: Footage[]): AnimalCollection {
   return {
     type: "FeatureCollection",
@@ -50,13 +115,7 @@ export function buildAnimalsGeoJSON(footages: Footage[]): AnimalCollection {
       // GeoJSON is [lng, lat] — the order every GIS expects and the one this
       // codebase gets wrong the moment it stops being written down.
       geometry: { type: "Point", coordinates: [d.lng, d.lat] },
-      properties: {
-        sortie: f.filename,
-        date: f.uploadedAt,
-        status: d.status,
-        score: scoreOf(d),
-        run_id: f.runId ?? null,
-      },
+      properties: { ...sortieProps(f), status: d.status, score: scoreOf(d) },
     })),
   };
 }
@@ -69,11 +128,25 @@ export function csvCell(v: string | number | null | undefined): string {
 }
 
 export function buildAnimalsCSV(footages: Footage[]): string {
-  const rows = ["lat,lng,status,score,sortie,date"];
+  /* The first six columns are unchanged and stay first: a saved QGIS style or
+     an R script that reads them by position keeps working, and everything the
+     wave added is appended. */
+  const rows = [["lat", "lng", "status", "score", "sortie", "date", ...CSV_COLUMNS].join(",")];
   for (const { f, d } of exportable(footages)) {
     const score = scoreOf(d);
+    const p = sortieProps(f);
     rows.push(
-      [d.lat, d.lng, d.status, score === null ? "" : score, csvCell(f.filename), f.uploadedAt].join(","),
+      [
+        d.lat,
+        d.lng,
+        d.status,
+        score === null ? "" : score,
+        csvCell(p.sortie),
+        p.date,
+        // Free text out of the database — a site name or a note-writer's name
+        // with a comma in it must not be able to shift every later column.
+        ...CSV_COLUMNS.map((k) => csvCell(p[k])),
+      ].join(","),
     );
   }
   return rows.join("\n");
