@@ -141,6 +141,55 @@ a:focus-visible {
   border-top-color: var(--surface) !important;
 }
 
+/* Colony chip: one per sortie — the count, and under it the honest low–high
+   band. A DOM element, deliberately not a GL symbol layer: DOM renders under
+   every GL backend (headless/software included) and never loses its glyphs.
+   The translate(-50%,-50%) centring lives IN the transform so the hover
+   scale can compose with it instead of knocking the chip off its anchor. */
+.colony-chip {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 5px 11px 6px;
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  box-shadow:
+    0 0 0 1px rgb(0 0 0 / 0.3),
+    0 3px 12px rgb(0 0 0 / 0.5);
+  cursor: pointer;
+  pointer-events: auto;
+  line-height: 1;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+.colony-chip:hover {
+  transform: translate(-50%, -50%) scale(1.06);
+}
+.colony-chip.selected {
+  box-shadow:
+    0 0 0 2px #fff,
+    0 3px 14px rgb(0 0 0 / 0.55);
+}
+.colony-chip .chip-best {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.colony-chip .chip-range {
+  font-size: 9px;
+  font-weight: 500;
+  margin-top: 2px;
+  opacity: 0.75;
+}
+/* Pin mode: the anchor is the loudest thing on the chart — chips step back
+   and must not swallow the click that places it. */
+.colony-chips-dimmed .colony-chip {
+  opacity: 0.25;
+  pointer-events: none;
+}
+
 /* Pin-mode anchor: a DOM marker, deliberately not a WebGL layer. DOM survives
    every GL quirk (software renderers included), can pulse via CSS, and is
    always exactly where MapLibre projects it. */

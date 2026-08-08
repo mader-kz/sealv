@@ -1,10 +1,21 @@
 "use client";
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useFootageStore } from "@/store/useFootageStore";
+import { colonyHull, expandHull, colonyBounds } from "@/lib/colony";
+import type { Detection } from "@/lib/types";
 
 // Caspian bounds
 const CASPIAN_BOUNDS: [[number, number],[number,number]] = [[46,36],[55,48]];
 const AKTAU: [number, number] = [51.18, 43.65];
+
+/* The three reading distances of the chart. Far: one chip per sortie — a
+   count with its honesty band, nothing else. Mid: the chip grows a colony
+   outline under it. Close: the outline fills with the individual animals.
+   The chip never leaves — it is the sortie's handle at every zoom. */
+const ZOOM_COLONY = 8.2;   // hull outlines appear
+const ZOOM_ANIMALS = 11.5; // per-animal dots appear
+
+const EMPTY_FC = { type: "FeatureCollection", features: [] as any[] };
 
 const DARK_STYLE: any = {
   version: 8,
@@ -35,6 +46,18 @@ const DARK_STYLE: any = {
     } },
   ],
   glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
+};
+
+/* One DOM chip per sortie: the count, and under it the low–high band when the
+   engine produced one. Projected via map.project like the track overlay —
+   DOM renders under any GL backend (headless/software included), which is why
+   the chip is NOT a symbol layer. */
+type ColonyChip = {
+  x: number; y: number;
+  fid: string;
+  count: number;
+  low: number | null;
+  high: number | null;
 };
 
 export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void }) {
@@ -102,12 +125,15 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
     // ensure interactions enabled — overlay was blocking
     try{ map.dragPan.enable(); map.scrollZoom.enable(); map.doubleClickZoom.enable(); map.boxZoom.enable(); map.keyboard.enable(); }catch{}
     map.on("load", ()=> {
-      // Add sources for our data — high-visibility Palantir style
       map.addSource("footprints", { type: "geojson", data: { type:"FeatureCollection", features: [] } });
-      map.addSource("detections", { type: "geojson", data: { type:"FeatureCollection", features: [] } });
+      // Colonies as areas, animals as bare points. No per-dot count labels
+      // anywhere — a dot is one animal, and drawing "1" on each was noise
+      // left over from the mock era.
+      map.addSource("colonies", { type: "geojson", data: { type:"FeatureCollection", features: [] } });
+      map.addSource("animals", { type: "geojson", data: { type:"FeatureCollection", features: [] } });
       map.addLayer({ id: "footprints-line", type:"line", source:"footprints", paint:{ "line-color":"#ffffff", "line-width":1, "line-opacity":0.3 } });
       map.addLayer({ id:"footprints-fill", type:"fill", source:"footprints", paint:{ "fill-color":"#ffffff", "fill-opacity":0.04 } });
-      // heatmap — density of seals (count-weighted points duplicated)
+      // heatmap — density of placed animals, weighted by each detection's count
       map.addSource("heatmap-src", { type:"geojson", data: { type:"FeatureCollection", features: [] } });
       map.addLayer({ id:"seal-heat", type:"heatmap", source:"heatmap-src", paint:{
         "heatmap-weight": ["interpolate",["linear"],["get","count"],1,0.3,12,1],
@@ -117,24 +143,26 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
         "heatmap-color": ["interpolate",["linear"],["heatmap-density"],0,"rgba(224,161,60,0)",0.3,"rgba(224,161,60,0.28)",0.6,"rgba(224,161,60,0.55)",1,"rgba(240,196,120,0.85)"]
       }});
       map.setLayoutProperty("seal-heat","visibility","none");
-      // outer glow
-      map.addLayer({ id:"detections-glow", type:"circle", source:"detections", paint:{
-        "circle-radius": ["interpolate",["linear"],["get","count"],1,12,4,15,12,20],
-        "circle-color": "#e0a13c",
-        "circle-opacity": 0.16,
-        "circle-blur": 0.6
+      // Colony outline: the haul-out drawn as an area, not a soup of dots.
+      // Appears from mid zoom; far out the chip alone carries the story.
+      map.addLayer({ id:"colony-fill", type:"fill", source:"colonies", minzoom: ZOOM_COLONY, paint:{
+        "fill-color":"#e0a13c",
+        "fill-opacity":0.14,
       }});
-      map.addLayer({ id:"detections-circle", type:"circle", source:"detections", paint:{
-        "circle-radius": ["interpolate",["linear"],["get","count"],1,7,4,10,12,16],
-        "circle-color": ["case",["==",["get","selected"],true],"#e0a13c", ["==",["get","status"],"false_positive"],"#4a4a52","#ffffff"],
+      map.addLayer({ id:"colony-line", type:"line", source:"colonies", minzoom: ZOOM_COLONY, paint:{
+        "line-color":"#e0a13c",
+        "line-width": ["case",["==",["get","selected"],true], 2, 1.5],
+        "line-opacity": ["case",["==",["get","selected"],true], 1, 0.8],
+      }});
+      // Individual animals only at close zoom, bare dots, no labels.
+      // GL cannot read CSS vars, so var(--good) is baked in as #6aa88a.
+      map.addLayer({ id:"animal-dots", type:"circle", source:"animals", minzoom: ZOOM_ANIMALS, paint:{
+        "circle-radius": 3.5,
+        "circle-color": ["case",["==",["get","status"],"validated"],"#6aa88a","#ffffff"],
         "circle-stroke-color": "rgba(0,0,0,0.6)",
         "circle-stroke-width": 1,
         "circle-opacity": 1
       }});
-      // cluster-like count label — robust glyphs with fallback, no crash if font missing
-      try {
-        map.addLayer({ id:"detections-count", type:"symbol", source:"detections", layout:{ "text-field":["to-string",["get","count"]], "text-size":11, "text-font":["Noto Sans Bold","Open Sans Bold"], "text-allow-overlap": true, "text-ignore-placement": true }, paint:{ "text-color":"#0a0a0b", "text-halo-color":"rgba(255,255,255,0.9)","text-halo-width":0.9, "text-halo-blur":0 } });
-      } catch(e){ console.warn("symbol layer failed", e); }
 
       (window as any).__sealvMap = map;
       setMapLoaded(true);
@@ -159,17 +187,13 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
           try { map.easeTo({ center: e.lngLat, duration: 250 }); } catch {}
         }
       });
-      map.on("click","detections-circle",(e: any)=>{
+      map.on("click","animal-dots",(e: any)=>{
         if(useFootageStore.getState().pinMode) return;
-        const f = e.features?.[0];
-        const detId = (f?.properties as any)?.detId as string;
-        if(detId){
-          const det = useFootageStore.getState().detections.find(d=>d.id===detId);
-          if(det) select(det.footageId);
-        }
+        const fid = (e.features?.[0]?.properties as any)?.fid as string;
+        if(fid) select(fid);
       });
-      map.on("mouseenter","detections-circle",()=> map.getCanvas().style.cursor="pointer");
-      map.on("mouseleave","detections-circle",()=> map.getCanvas().style.cursor= useFootageStore.getState().pinMode?"crosshair":"");
+      map.on("mouseenter","animal-dots",()=> map.getCanvas().style.cursor="pointer");
+      map.on("mouseleave","animal-dots",()=> map.getCanvas().style.cursor= useFootageStore.getState().pinMode?"crosshair":"");
     });
     mapRef.current = map;
     // The container's width changes with every panel toggle, but the map was
@@ -210,13 +234,12 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
     const m = mapRef.current; if (!m) return;
     m.getCanvas().style.cursor = pinMode ? "crosshair" : "";
     for (const [id, prop, on, off] of [
-      ["detections-circle","circle-opacity",1,0.25],
-      ["detections-glow","circle-opacity",0.16,0.05],
-      ["detections-count","text-opacity",1,0.25],
+      ["colony-fill","fill-opacity",0.14,0.04],
+      ["colony-line","line-opacity",0.8,0.25],
+      ["animal-dots","circle-opacity",1,0.25],
     ] as const) {
       try {
-        if (id === "detections-count") m.setPaintProperty(id, prop, pinMode ? off : on);
-        else m.setPaintProperty(id, prop, pinMode ? off : on);
+        m.setPaintProperty(id, prop, pinMode ? off : on);
       } catch { /* layer not created yet - the load handler sets defaults */ }
     }
   }, [pinMode, mapLoaded]);
@@ -244,9 +267,9 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
     const vis = layerState.heatmap ? "visible" : "none";
     try{
       if(map.getLayer("seal-heat")) map.setLayoutProperty("seal-heat","visibility",vis);
-      // dim dots when heatmap on
-      if(map.getLayer("detections-circle")) map.setPaintProperty("detections-circle","circle-opacity", layerState.heatmap ? 0.35 : 1);
-      if(map.getLayer("detections-glow")) map.setPaintProperty("detections-glow","circle-opacity", layerState.heatmap ? 0.05 : 0.18);
+      // step the colony drawing back while the density field is on
+      if(map.getLayer("animal-dots")) map.setPaintProperty("animal-dots","circle-opacity", layerState.heatmap ? 0.35 : 1);
+      if(map.getLayer("colony-fill")) map.setPaintProperty("colony-fill","fill-opacity", layerState.heatmap ? 0.05 : 0.14);
     }catch{}
   },[layerState.heatmap, mapLoaded]);
 
@@ -278,59 +301,53 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
     }
     src.setData(fc);
 
-    // detections: naive clustering by grid (0.05 deg ~ 5km). For MVP we cluster manually: group detections within 0.04 deg
-    const dsrc = map.getSource("detections") as any;
-    if(!dsrc) return;
-    if(!layerState.detections && !layerState.clusters) {
-      dsrc.setData({type:"FeatureCollection", features:[]});
+    const csrc = map.getSource("colonies") as any;
+    const asrc = map.getSource("animals") as any;
+    const hsrc = map.getSource("heatmap-src") as any;
+    if(!csrc || !asrc) return;
+    if(!layerState.detections){
+      csrc.setData(EMPTY_FC); asrc.setData(EMPTY_FC); hsrc?.setData(EMPTY_FC);
       return;
     }
-    // Build clusters if enabled and zoom < 9.5
-    const zoom = map.getZoom();
-    const doCluster = layerState.clusters && zoom < 9.5 && detections.length>0;
-    let features: any[] = [];
-    if (doCluster) {
-      // simple grid clustering
-      const grid = new Map<string, DetectionCluster>();
-      const cell = 0.06; // deg
-      for(const d of detections){
-        const key = `${Math.floor(d.lat/cell)}_${Math.floor(d.lng/cell)}`;
-        if(!grid.has(key)) grid.set(key,{ lat:0,lng:0,count:0, ids:[], members:[] });
-        const g=grid.get(key)!;
-        g.lat+=d.lat; g.lng+=d.lng; g.count+=d.count; g.ids.push(d.id); g.members.push(d);
-      }
-      for(const [k,g] of grid){
-        const n=g.members.length;
-        const avgLat=g.lat/n, avgLng=g.lng/n;
-        const isSingle = n===1;
-        if(isSingle && layerState.detections){
-          const d=g.members[0];
-          features.push({ type:"Feature", geometry:{type:"Point", coordinates:[d.lng,d.lat]}, properties:{ detId:d.id, count:d.count, status:d.status, selected: d.footageId===selectedId } });
-        } else {
-          features.push({ type:"Feature", geometry:{type:"Point", coordinates:[avgLng,avgLat]}, properties:{ detId:g.ids[0], count:g.count, status:"cluster", selected: false, cluster: true, clusterCount: n } });
-        }
-      }
-      // hide cluster count label tweak: clusters use count = sum seals
-    } else {
-      features = detections.filter(()=>layerState.detections).map(d=>({
+    // A false positive is a reviewed "not an animal" — it is out of the
+    // outline, out of the dots, out of the heat. Everything placed else is in.
+    const placed = detections.filter(d=> d.status!=="false_positive");
+    const byFootage = new Map<string, Detection[]>();
+    for(const d of placed){
+      const arr = byFootage.get(d.footageId);
+      if(arr) arr.push(d); else byFootage.set(d.footageId, [d]);
+    }
+    // Colony outlines: concave hull buffered ~25 m so the line breathes
+    // around the animals instead of hugging them. <3 usable points = no
+    // polygon exists, and we do not invent one — the chip alone stands.
+    const colonyFeatures: any[] = [];
+    for(const f of footages){
+      const pts = byFootage.get(f.id);
+      if(!pts || pts.length < 3) continue;
+      const hull = expandHull(colonyHull(pts), 25);
+      if(hull.length < 3) continue;
+      const ring = hull.map(p=>[p.lng, p.lat]);
+      ring.push(ring[0]); // GeoJSON rings close explicitly
+      colonyFeatures.push({
         type:"Feature",
-        geometry:{type:"Point", coordinates:[d.lng,d.lat]},
-        properties:{ detId:d.id, count:d.count, status:d.status, selected: d.footageId===selectedId }
-      }));
+        geometry:{ type:"Polygon", coordinates:[ring] },
+        properties:{ fid: f.id, selected: f.id===selectedId }
+      });
     }
-    dsrc.setData({type:"FeatureCollection", features});
-    // heatmap source — same points, weight by count
-    const hsrc = map.getSource("heatmap-src") as any;
-    if(hsrc){
-      hsrc.setData({type:"FeatureCollection", features: features.map((f:any)=> ({...f, properties:{...f.properties, count:f.properties.count}}))});
-    }
+    csrc.setData({ type:"FeatureCollection", features: colonyFeatures });
+    const animalFeatures = placed.map(d=>({
+      type:"Feature",
+      geometry:{ type:"Point", coordinates:[d.lng, d.lat] },
+      properties:{ detId:d.id, fid:d.footageId, status:d.status, count:d.count }
+    }));
+    asrc.setData({ type:"FeatureCollection", features: animalFeatures });
+    // heatmap: the same placed animals, no cluster sums — density is honest
+    hsrc?.setData({ type:"FeatureCollection", features: animalFeatures });
   }, [footages, detections, selectedId, layerState, mapLoaded, pinMode, pinPoints]);
 
-  // fly to selected now handled by click handlers (dot → dot, list → center) to avoid double-ease fighting drag
-  // kept for programmatic select without map click — but only when not already animating to a dot
-  // (removed auto easeTo to fix "can't drag after select" — overlay handleClick does the zoom)
+  // fly to selected now handled by click handlers (chip → fitBounds, list → center) to avoid double-ease fighting drag
 
-  // auto-fit when footages first appear (so dots are on screen at z~7, not z9.2 off-screen)
+  // auto-fit when footages first appear (so colonies are on screen at z~7, not z9.2 off-screen)
   useEffect(()=>{
     const map=mapRef.current; if(!map||!mapLoaded) return;
     if (footages.length>0 && !selectedId) {
@@ -340,7 +357,7 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
       for(const d of detections){ minLng=Math.min(minLng,d.lng); maxLng=Math.max(maxLng,d.lng); minLat=Math.min(minLat,d.lat); maxLat=Math.max(maxLat,d.lat); }
       if (isFinite(minLng)) {
         const pad = 0.15;
-        try { map.stop(); map.fitBounds([[minLng-pad, minLat-pad],[maxLng+pad, maxLat+pad]], { padding: 40, duration: 520, maxZoom: 8.2 }); } catch{}
+        try { map.stop(); map.fitBounds([[minLng-pad, minLat-pad],[maxLng+pad, maxLat+pad]], { padding: 40, duration: 520, maxZoom: ZOOM_COLONY }); } catch{}
         console.log(`[SEALv] fitBounds ${footages.length}F ${detections.length}G -> [[${minLng.toFixed(2)},${minLat.toFixed(2)}],[${maxLng.toFixed(2)},${maxLat.toFixed(2)}]] zoom=${map.getZoom().toFixed(2)}`);
       }
     }
@@ -352,8 +369,9 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
     console.log(`[SEALv] push ${footages.length} footages, ${detections.length} detections, layers`, layerState, "zoom", mapRef.current?.getZoom?.()?.toFixed(2));
   },[footages.length, detections.length, layerState, mapLoaded]);
 
-  // DOM fallback overlay — guaranteed visible even if MapLibre layers/glyphs fail
-  const [overlayDots, setOverlayDots] = useState<Array<{x:number,y:number,lat:number,lng:number,count:number,id:string,fid:string,cluster?:boolean,label?:boolean}>>([]);
+  /* DOM overlay — tracks and colony chips. Projected on move/zoom/resize (and
+     a slow safety timer), guaranteed visible even if GL layers/glyphs fail. */
+  const [overlayChips, setOverlayChips] = useState<ColonyChip[]>([]);
   const [overlayTracks, setOverlayTracks] = useState<Array<{pts:Array<{x:number,y:number}>, id:string}>>([]);
   useEffect(()=>{
     const map=mapRef.current; if(!map||!mapLoaded) return;
@@ -373,48 +391,40 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
         // a single pinned anchor has no path to overlay
       }
       setOverlayTracks(prev=> sameTracks(prev, tTracks) ? prev : tTracks);
-      // dots / clusters — reuse same clustering logic as layers for consistency
-      if (!layerState.detections && !layerState.clusters) { setOverlayDots([]); return; }
-      const dets = detections;
-      const zoom = m.getZoom();
-      const doCluster = layerState.clusters && zoom < 9.5 && dets.length>0;
-      let feats: Array<{lat:number,lng:number,count:number,id:string,fid:string,cluster?:boolean}> = [];
-      if (doCluster) {
-        const cell=0.06; const grid=new Map<string,{lat:number,lng:number,count:number,ids:string[],fids:string[]}>();
-        for(const d of dets){
-          const key=`${Math.floor(d.lat/cell)}_${Math.floor(d.lng/cell)}`;
-          if(!grid.has(key)) grid.set(key,{lat:0,lng:0,count:0,ids:[],fids:[]});
-          const g=grid.get(key)!; g.lat+=d.lat; g.lng+=d.lng; g.count+=d.count; g.ids.push(d.id); g.fids.push(d.footageId);
-        }
-        for(const g of grid.values()){
-          const n=g.ids.length; const avgLat=g.lat/n, avgLng=g.lng/n;
-          const isSingle=n===1;
-          if(isSingle && layerState.detections) feats.push({lat:avgLat,lng:avgLng,count:g.count,id:g.ids[0],fid:g.fids[0]});
-          else if(!isSingle) feats.push({lat:avgLat,lng:avgLng,count:g.count,id:g.ids[0],fid:g.fids[0],cluster:true});
-        }
-      } else {
-        if(layerState.detections) feats = dets.map(d=>({lat:d.lat,lng:d.lng,count:d.count,id:d.id,fid:d.footageId}));
+      // chips — one per sortie: the count with its band, anchored at the
+      // centre of the colony's bounding box (fallback: the sortie centre)
+      if (!layerState.detections) { setOverlayChips([]); return; }
+      const byFootage = new Map<string, {pts: Detection[]; sum: number}>();
+      for(const d of detections){
+        if(d.status==="false_positive") continue;
+        let e = byFootage.get(d.footageId);
+        if(!e){ e = { pts: [], sum: 0 }; byFootage.set(d.footageId, e); }
+        e.pts.push(d); e.sum += d.count;
       }
-      const projected = feats.map(f=>{
-        try{
-          const pr=m.project([f.lng,f.lat]);
-          const { width, height } = m.getCanvas().getBoundingClientRect();
-          if(pr.x < -80 || pr.x > width+80 || pr.y < -80 || pr.y > height+80) return null;
-          return {x:pr.x,y:pr.y,lat:f.lat,lng:f.lng,count:f.count,id:f.id,fid:f.fid,cluster:f.cluster};
-        }catch{ return null; }
-      }).filter(Boolean) as Array<{x:number,y:number,lat:number,lng:number,count:number,id:string,fid:string,cluster?:boolean,label?:boolean}>;
-
-      // Label collision: at low zoom the count chips pile on top of each other and
-      // the map turns to mush. Keep the dot for every detection, but only show the
-      // number where it has room — biggest counts and clusters win the space.
-      const placed: Array<{x:number,y:number}> = [];
-      const ranked = [...projected].sort((a,b)=> (b.cluster?1:0)-(a.cluster?1:0) || b.count-a.count);
-      for(const f of ranked){
-        const clash = placed.some(p=> Math.abs(p.x-f.x) < 34 && Math.abs(p.y-f.y) < 15);
-        f.label = !clash;
-        if(!clash) placed.push({x:f.x, y:f.y});
+      let rect: { width: number; height: number } | null = null;
+      try{ rect = m.getCanvas().getBoundingClientRect(); }catch{}
+      const chips: ColonyChip[] = [];
+      for(const f of footages){
+        const entry = byFootage.get(f.id);
+        // The count the platform stands behind: the engine's best estimate;
+        // the raw sum of placed detections only when no band exists.
+        const count = f.band?.best ?? entry?.sum ?? 0;
+        const b = entry ? colonyBounds(entry.pts) : null;
+        const lat = b ? (b.minLat+b.maxLat)/2 : f.center?.lat;
+        const lng = b ? (b.minLng+b.maxLng)/2 : f.center?.lng;
+        if(!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+        let x=0, y=0;
+        try{ const pr=m.project([lng as number, lat as number]); x=pr.x; y=pr.y; }catch{ continue; }
+        if(rect && (x < -120 || x > rect.width+120 || y < -120 || y > rect.height+120)) continue;
+        const hasBand = f.band != null && f.band.low != null && f.band.high != null && f.band.low !== f.band.high;
+        chips.push({
+          x, y, fid: f.id,
+          count,
+          low: hasBand ? f.band!.low : null,
+          high: hasBand ? f.band!.high : null,
+        });
       }
-      setOverlayDots(prev=> sameDots(prev, projected) ? prev : (projected as any));
+      setOverlayChips(prev=> sameChips(prev, chips) ? prev : chips);
     };
     update();
     map.on("move", update);
@@ -423,6 +433,26 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
     const id = setInterval(update, 600);
     return ()=>{ try{ map.off("move",update); map.off("zoom",update); map.off("resize",update);}catch{} clearInterval(id); };
   },[mapLoaded, footages, detections, layerState, pinMode, pinPoints, selectedId]);
+
+  /* Chip click = select the sortie and frame its colony. Store read at event
+     time — closures over store state go stale (the map outlives renders). */
+  const handleChipClick = useCallback((fid: string)=>{
+    select(fid);
+    const m = mapRef.current; if(!m) return;
+    try{ m.stop(); }catch{}
+    const s = useFootageStore.getState();
+    const pts = s.detections.filter(d=> d.footageId===fid && d.status!=="false_positive");
+    const b = colonyBounds(pts);
+    if (b) {
+      try{ m.fitBounds([[b.minLng, b.minLat],[b.maxLng, b.maxLat]], { padding: 80, duration: 420, maxZoom: 13 }); }catch{}
+    } else {
+      const f = s.footages.find(x=>x.id===fid);
+      if (f && Number.isFinite(f.center?.lat) && Number.isFinite(f.center?.lng)) {
+        try{ m.easeTo({ center:[f.center.lng, f.center.lat], zoom: Math.max(m.getZoom(), ZOOM_ANIMALS+0.1), duration: 420 }); }catch{}
+      }
+    }
+  },[select]);
+
   return (
     <div className="relative w-full h-full bg-bg">
       <div ref={containerRef} className="absolute inset-0" />
@@ -444,56 +474,23 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
         ))}
       </svg>
 
-      {/* Counts — the only saturated thing on screen */}
-      <div className="absolute inset-0 z-[6] pointer-events-none">
-        {overlayDots.map(d=>{
-          const isSel = d.fid===selectedId;
-          const isCluster = !!d.cluster;
-          const handleClick = ()=>{
-            select(d.fid);
-            const m = mapRef.current; if(!m) return;
-            try{ m.stop(); }catch{}
-            const targetZoom = isCluster ? Math.min(10.5, Math.max(m.getZoom()+1.6, 9.2)) : Math.max(m.getZoom(), 11);
-            m.easeTo({ center:[d.lng, d.lat], zoom: targetZoom, duration: 320 });
-          };
-
-          if (isCluster) {
-            return (
-              <button
-                key={d.id}
-                onClick={handleClick}
-                title={`${d.count} seals across ${d.cluster} sorties`}
-                className="absolute pointer-events-auto -translate-x-1/2 -translate-y-1/2 flex items-center gap-1 px-2 h-[22px] rounded-full bg-accent text-accent-ink hover:brightness-110 transition-[filter] shadow-pop"
-                style={{ left:d.x, top:d.y }}
-              >
-                <span className="text-xs font-medium tnum leading-none">{d.count}</span>
-              </button>
-            );
-          }
-
+      {/* Colony chips — the only saturated thing on screen. One per sortie:
+          the count, and under it the honest low–high band. In pin mode they
+          step back and stop catching clicks meant for the anchor. */}
+      <div className={`absolute inset-0 z-[6] pointer-events-none ${pinMode ? "colony-chips-dimmed" : ""}`}>
+        {overlayChips.map(c=>{
+          const isSel = c.fid===selectedId;
           return (
             <button
-              key={d.id}
-              onClick={handleClick}
-              title={`${d.count} seals`}
-              className={`absolute pointer-events-auto -translate-x-1/2 -translate-y-1/2 group flex items-center ${isSel ? "z-10" : ""}`}
-              style={{ left:d.x, top:d.y }}
+              key={c.fid}
+              onClick={()=>handleChipClick(c.fid)}
+              title={c.low!=null ? `${c.count} seals (range ${c.low}–${c.high})` : `${c.count} seals`}
+              className={`colony-chip ${isSel ? "selected z-10" : ""}`}
+              style={{ left:c.x, top:c.y }}
             >
-              <span
-                className={`w-[7px] h-[7px] rounded-full shrink-0 transition-colors ${
-                  isSel
-                    ? "bg-accent ring-[3px] ring-accent/25"
-                    : "bg-white ring-1 ring-black/60 group-hover:bg-accent"
-                }`}
-              />
-              {(d.label || isSel) && (
-                <span
-                  className={`ml-1.5 px-1 rounded text-2xs tnum leading-[14px] whitespace-nowrap transition-colors ${
-                    isSel ? "bg-accent text-accent-ink" : "bg-black/65 text-white group-hover:bg-black/85"
-                  }`}
-                >
-                  {d.count}
-                </span>
+              <span className="chip-best tnum">{c.count}</span>
+              {c.low!=null && c.high!=null && (
+                <span className="chip-range tnum">{c.low}–{c.high}</span>
               )}
             </button>
           );
@@ -506,8 +503,7 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
           <Toggle checked={satellite} onChange={setSatellite} label="Satellite" />
           <span className="w-px h-4 bg-line mx-0.5" />
           <Toggle checked={layerState.footprints} onChange={v=>setLayer("footprints",v)} label="Tracks" />
-          <Toggle checked={layerState.detections} onChange={v=>setLayer("detections",v)} label="Counts" />
-          <Toggle checked={layerState.clusters} onChange={v=>setLayer("clusters",v)} label="Cluster" />
+          <Toggle checked={layerState.detections} onChange={v=>setLayer("detections",v)} label="Colonies" />
           <Toggle checked={layerState.heatmap} onChange={v=>setLayer("heatmap",v)} label="Heat" />
         </div>
         {pinMode && (
@@ -526,15 +522,13 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
   );
 }
 
-type DetectionCluster = { lat:number; lng:number; count:number; ids:string[]; members: any[] };
-
 // The overlay re-projects on every map move and on a timer; bail out of the
 // state update when the projection is identical so React can stay idle.
-function sameDots(a:any[], b:any[]){
+function sameChips(a: ColonyChip[], b: ColonyChip[]){
   if(a.length!==b.length) return false;
   for(let i=0;i<a.length;i++){
     const x=a[i], y=b[i];
-    if(x.id!==y.id || x.count!==y.count || x.label!==y.label || x.cluster!==y.cluster) return false;
+    if(x.fid!==y.fid || x.count!==y.count || x.low!==y.low || x.high!==y.high) return false;
     if(Math.abs(x.x-y.x)>0.5 || Math.abs(x.y-y.y)>0.5) return false;
   }
   return true;
