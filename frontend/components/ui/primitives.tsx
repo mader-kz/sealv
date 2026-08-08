@@ -119,8 +119,12 @@ export function Stat({
       <div className="label mt-1.5 truncate">{label}</div>
       {/* The sub-line is where a figure's qualification lives ("5 sorties rest
           on an assumed scale"), so a narrow column must not be the only place
-          it exists: it truncates visually but stays readable on hover. */}
-      {sub && <div className="text-2xs text-ink3 mt-1 truncate" title={sub}>{sub}</div>}
+          it exists. It used to truncate to ONE line and rely on a hover title,
+          which on today's data clipped "…rest on an assumed scale, not a
+          measured one" to "…assumed sca" — the whole caveat behind a hover
+          nobody performs, next to a hectare figure that is entirely built on
+          it. It wraps to three lines now and still carries the title. */}
+      {sub && <div className="text-2xs text-ink3 mt-1 leading-tight line-clamp-3" title={sub}>{sub}</div>}
     </div>
   );
 }

@@ -22,6 +22,26 @@ import { clusterIndices } from "./groups";
 /** Default site radius, meters. */
 export const SITE_RADIUS_M = 2000;
 
+/**
+ * Does this sortie have a position at all?
+ *
+ * A run that flew no track and georeferenced no animal still counted animals,
+ * so it is kept — but its `center` is `{lat: NaN, lng: NaN}` and `placed` is
+ * false, because there is no honest coordinate for it and inventing (0,0)
+ * would put a Caspian survey in the Gulf of Guinea. Every surface that PRINTS
+ * a coordinate has to ask this first: `NaN, NaN` in a report reads as a
+ * measurement, and this product's whole claim is that its numbers are
+ * measured. One predicate, so the list row, the CSV, the inspector and the
+ * PDF cannot disagree about whether a sortie is on the map.
+ */
+export function isPlaced(
+  f: { center?: { lat: number; lng: number } | null; placed?: boolean } | null | undefined,
+): boolean {
+  if (!f) return false;
+  if (f.placed === false) return false;
+  return Number.isFinite(Number(f.center?.lat)) && Number.isFinite(Number(f.center?.lng));
+}
+
 export type CountBandLike = {
   low: number | null;
   best: number | null;

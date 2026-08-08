@@ -362,13 +362,14 @@ const POINT_FIELDS = "id,x,y,lat,lng,score,status";
 
 export type RunPoints = {
   points: RunResult["points"];
-  /* The service's own per-status tally and export figure. Derived from the
-     database rather than from the rows this call happened to fetch, so the
-     inspector can say "N rejected" without the number depending on a filter. */
-  counts: { auto: number; validated: number; false_positive: number } | null;
-  verified_count: number | null;
 };
 
+/* The response also carries the service's own per-status tally and export
+   figure. They are not mapped: this call fetches EVERY point of the run, so
+   the client derives both from `detections` exactly, and a second copy on the
+   Footage was a parallel source of truth that nothing read. Should a paged
+   points fetch ever land, the tallies come back here — as the figures that
+   survive the paging. */
 export async function fetchRunPoints(
   runId: string,
   opts: { signal?: AbortSignal } = {},
@@ -376,12 +377,8 @@ export async function fetchRunPoints(
   const d = await jsonOrThrow(
     await fetch(`${API}/v1/runs/${runId}/points?fields=${POINT_FIELDS}`, { signal: opts.signal }),
   );
-  if (Array.isArray(d)) return { points: d, counts: null, verified_count: null };
-  return {
-    points: d.points ?? [],
-    counts: d.counts ?? null,
-    verified_count: typeof d.verified_count === "number" ? d.verified_count : null,
-  };
+  if (Array.isArray(d)) return { points: d };
+  return { points: d.points ?? [] };
 }
 
 export async function fetchTrack(
@@ -395,23 +392,11 @@ export async function fetchTrack(
 
 export const mediaFileUrl = (mediaId: string) => `${API}/media/${mediaId}/file`;
 
-/* Operator verdicts persist through the same append-only edit log the
-   operator webapp writes: remove -> false_positive, reinstate -> validated.
-   Never a DELETE - rejected detections are survey evidence, and the only
-   recall data this system will ever have. */
-export async function editPoint(
-  runId: string,
-  op: "remove" | "reinstate",
-  pointId: number,
-): Promise<void> {
-  await jsonOrThrow(
-    await fetch(`${API}/v1/runs/${runId}/points`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ op, point_id: pointId, operator: "platform" }),
-    }),
-  );
-}
+/* No single-point `editPoint`. The batch call below took over every write
+   from this client, and the service's one-point body is kept for the operator
+   webapp — leaving an unused second write path here is an invitation to
+   reintroduce the 400-round-trip pattern the batch endpoint exists to kill.
+   `editPoints` with one id is the same request. */
 
 /* One reviewer gesture over many animals, one request, one transaction. Select
    400 rows and mark them rejected and the old path fired 400 PATCHes: 400

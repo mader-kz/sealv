@@ -32,7 +32,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Optional
+from typing import Any, Iterable, Iterator, Optional, Sequence
 
 SCHEMA_PATH = Path(__file__).resolve().with_name("schema.sql")
 DEFAULT_DB_PATH = Path.home() / ".sealv" / "sealv.db"
@@ -835,6 +835,92 @@ def list_edits(conn: sqlite3.Connection, run_id: str, limit: int = 1000) -> list
     )
 
 
+#: What a verdict does to a point. One definition, because the single-point
+#: and the batch path must never disagree about what "remove" means - the API
+#: layer used to carry its own copy of this ternary.
+STATUS_FOR_EDIT_OP: dict[str, str] = {
+    "remove": "false_positive",
+    "reinstate": "validated",
+}
+
+#: Ids per SQL statement. SQLite caps host parameters per statement (999 on
+#: older builds, 32766 since 3.32); chunking keeps one IN-list from ever
+#: hitting it, whatever interpreter the service is running under.
+_ID_CHUNK = 900
+
+
+def _chunks(items: list[int], n: int = _ID_CHUNK):
+    for i in range(0, len(items), n):
+        yield items[i:i + n]
+
+
+def apply_edits_batch(
+    conn: sqlite3.Connection,
+    run_id: str,
+    op: str,
+    point_ids: Sequence[int],
+    operator: str | None = None,
+) -> dict:
+    """One reviewer gesture over many points: one transaction, all or nothing.
+
+    Returns {"updated", "point_ids", "verified_count"}.
+
+    'Mark 400 selected rows as false positives' was 400 separate PATCHes, each
+    opening its own IMMEDIATE transaction - 400 chances to lose SQLite's single
+    writer lock to the counting worker, and 400 chances for the browser to give
+    up halfway and leave the run half-edited.
+
+    Every id is READ AND VALIDATED BEFORE the write transaction opens. The old
+    batch did its membership SELECT per point inside IMMEDIATE, so at the API's
+    5000-id cap it held the writer lock across 5000 statements while a caller
+    typo was still able to roll the whole thing back. Points are append-only -
+    nothing deletes a row or moves it between runs - so a membership fact
+    established a moment earlier is still true inside the transaction.
+
+    The `edit` log still gets one append-only row per point: that is the part
+    that is evidence, and collapsing it into one row would lose which animals
+    a reviewer actually ruled on.
+    """
+    if op not in STATUS_FOR_EDIT_OP:
+        raise ValueError(
+            f"batch edit op must be one of {sorted(STATUS_FOR_EDIT_OP)}, got {op!r}"
+        )
+    # A duplicated id is one verdict, not two log entries.
+    ids = list(dict.fromkeys(int(p) for p in point_ids))
+    if not ids:
+        return {"updated": 0, "point_ids": [], "verified_count": verified_count(conn, run_id)}
+
+    coords: dict[int, tuple[float, float]] = {}
+    for chunk in _chunks(ids):
+        marks = ",".join("?" * len(chunk))
+        for row in conn.execute(
+            f"SELECT id, x, y FROM point WHERE run_id = ? AND id IN ({marks})",
+            (run_id, *chunk),
+        ):
+            coords[int(row["id"])] = (float(row["x"]), float(row["y"]))
+    missing = [p for p in ids if p not in coords]
+    if missing:
+        raise ValueError(f"point {missing[0]} does not belong to run {run_id}")
+
+    status = STATUS_FOR_EDIT_OP[op]
+    with _tx(conn, "IMMEDIATE"):
+        for chunk in _chunks(ids):
+            marks = ",".join("?" * len(chunk))
+            conn.execute(
+                f"UPDATE point SET status = ? WHERE run_id = ? AND id IN ({marks})",
+                (status, run_id, *chunk),
+            )
+        for pid in ids:
+            px, py = coords[pid]
+            add_edit(conn, run_id, op, point_id=pid, x=px, y=py, operator=operator)
+
+    return {
+        "updated": len(ids),
+        "point_ids": ids,
+        "verified_count": verified_count(conn, run_id),
+    }
+
+
 def apply_edit(
     conn: sqlite3.Connection,
     run_id: str,
@@ -887,8 +973,10 @@ def apply_edit(
             ).fetchone()
             if existing is None:
                 raise ValueError(f"point {point_id} does not belong to run {run_id}")
-            status = "false_positive" if op == "remove" else "validated"
-            conn.execute("UPDATE point SET status = ? WHERE id = ?", (status, point_id))
+            conn.execute(
+                "UPDATE point SET status = ? WHERE id = ?",
+                (STATUS_FOR_EDIT_OP[op], point_id),
+            )
             px = float(existing["x"]) if x is None else float(x)
             py = float(existing["y"]) if y is None else float(y)
 
@@ -1388,8 +1476,27 @@ if __name__ == "__main__":
                apply_edit, conn, other_run, "remove", point_id=pts[1]["id"])
         check("failed apply_edit left no edit row", len(list_edits(conn, other_run)) == 0)
 
+        # --- batch verdicts: one transaction, all or nothing ------------
+        batch_ids = [pts[0]["id"], pts[2]["id"], pts[0]["id"]]  # duplicate on purpose
+        res = apply_edits_batch(conn, run_id, "remove", batch_ids, operator="a.n")
+        check("batch dedupes a repeated id", res["updated"] == 2, res["point_ids"])
+        check("batch marks every point", all(
+            get_point(conn, p)["status"] == "false_positive" for p in res["point_ids"]))
+        check("batch lowers the verified count", res["verified_count"] == 3)
+        check("batch logs one edit per point", len(list_edits(conn, run_id)) == 6)
+
+        raises("batch refuses a point from another run", ValueError,
+               apply_edits_batch, conn, run_id, "remove", [pts[1]["id"], 999999])
+        check("a rejected batch wrote nothing", verified_count(conn, run_id) == 3
+              and len(list_edits(conn, run_id)) == 6)
+        raises("batch rejects 'add'", ValueError,
+               apply_edits_batch, conn, run_id, "add", [pts[1]["id"]])
+
+        reinstated = apply_edits_batch(conn, run_id, "reinstate", res["point_ids"])
+        check("batch reinstate restores the count", reinstated["verified_count"] == 5)
+
         log = list_edits(conn, run_id)
-        check("edit log is append-only and complete", len(log) == 4,
+        check("edit log is append-only and complete", len(log) == 8,
               [e["op"] for e in log])
         check("verified_count on an empty run is 0", verified_count(conn, other_run) == 0)
 

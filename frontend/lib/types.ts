@@ -99,13 +99,12 @@ export type Footage = {
      guess that silently shifts every derived area. */
   gsdCmPx?: number | null;
   gsdSource?: string | null;
-  /* The service's own tally of this run's points by status, and the number it
-     would export (everything not rejected). The client can derive both from
-     `detections`, but only for the points it actually loaded - these come from
-     the database, so the inspector can say "N rejected" without that claim
-     quietly depending on what a page happened to fetch. */
-  counts?: { auto: number; validated: number; false_positive: number };
-  verifiedCount?: number | null;
+  /* No `counts` / `verifiedCount`. They mirrored the service's own per-status
+     tally onto the Footage and nothing ever read them: the hydrate fetches
+     every point of a run, so the inspector, the dashboard and the report
+     derive the same figures from `detections` exactly. A second source of
+     truth that no screen consults is not a safety net, it is a contract the
+     next author will believe is live. */
   error?: string;
 };
 

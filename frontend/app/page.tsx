@@ -11,6 +11,7 @@ import Timeline from "@/components/layout/Timeline";
 import Workbench from "@/components/workbench/Workbench";
 import { useFootageStore } from "@/store/useFootageStore";
 import { seasonEstimate } from "@/lib/analytics/estimate";
+import { footagesInRange } from "@/lib/analytics/brush";
 import { Button, IconButton } from "@/components/ui/primitives";
 import Icon from "@/components/ui/Icon";
 import { useT } from "@/lib/i18n";
@@ -73,6 +74,7 @@ export default function Page(){
   },[mapRef]);
 
   const footages = useFootageStore(s=>s.footages);
+  const timeRange = useFootageStore(s=>s.timeRange);
   const selectedId = useFootageStore(s=>s.selectedId);
   const select = useFootageStore(s=>s.select);
   const seedTestData = useFootageStore(s=>s.seedTestData);
@@ -85,9 +87,10 @@ export default function Page(){
   const loadedRuns = useFootageStore(s=> Number((s as any).loadedRuns ?? 0));
   const totalRuns = useFootageStore(s=> Number((s as any).totalRuns ?? 0));
 
-  // Reload the season's counts from the service on boot. hydrate() itself
-  // refuses to run over a non-empty store, which also makes React 18's
-  // strict-mode double-invoke of this effect harmless.
+  // Reload the season's counts from the service on boot. hydrate() holds a
+  // module-scope promise for the run in flight and hands the same one back to
+  // a second caller, so React 18's strict-mode double-invoke of this effect
+  // joins the first hydrate instead of starting a rival one.
   useEffect(()=>{ hydrate(); },[hydrate]);
 
   /* Selection opens the inspector without closing analytics. Closing the
@@ -118,12 +121,18 @@ export default function Page(){
     if(next && !wide){ setShowLeft(false); setInspectorOpen(false); }
   };
 
-  /* The season's standing estimate — the latest sortie at each site — from the
-     one shared helper the panel, the analytics view and the report also use.
-     This chip used to print the sum over every sortie, which counts a
-     re-flown haul-out once per visit: 1475 where 1175 animals were standing.
-     The raw sum is still here, one line down, named for what it measures. */
-  const est = useMemo(()=> seasonEstimate(footages), [footages]);
+  /* The standing estimate — the latest sortie at each site — from the one
+     shared helper the panel, the analytics view and the report also use. This
+     chip used to print the sum over every sortie, which counts a re-flown
+     haul-out once per visit: 1475 where 1175 animals were standing. The raw
+     sum is still here, one line down, named for what it measures.
+     Over the BRUSHED list, not the whole store: the chip is pinned to a map
+     that draws only the brushed sorties, and the panel and the report beside
+     it are brushed too. An unbrushed chip on a brushed map says "1175 seals ·
+     5 sorties" over two drawn sorties — the same one-screen-two-totals
+     failure the shared helper exists to prevent. */
+  const brushed = useMemo(()=> footagesInRange(footages, timeRange), [footages, timeRange]);
+  const est = useMemo(()=> seasonEstimate(brushed), [brushed]);
   const empty = footages.length===0;
   const restoring = empty && hydrating;
   const unreachable = empty && !hydrating && !!hydrateError;
@@ -184,14 +193,14 @@ export default function Page(){
                 {!empty && (
                   <div
                     className="bg-surface border border-line rounded px-2.5 py-[3px] shadow-pop"
-                    title={t("est.observedSub", { n: est.observed, m: footages.length })}
+                    title={t("est.observedSub", { n: est.observed, m: brushed.length })}
                   >
                     <div className="flex items-baseline gap-1.5">
                       <span className="text-sm tnum text-ink">{est.current}</span>
                       {!mapNarrow && <span className="text-2xs text-ink3">{tp(est.current, "unit.seals")}</span>}
                       <span className="text-line px-0.5">·</span>
-                      <span className="text-sm tnum text-ink">{footages.length}</span>
-                      {!mapNarrow && <span className="text-2xs text-ink3">{tp(footages.length, "unit.sorties")}</span>}
+                      <span className="text-sm tnum text-ink">{brushed.length}</span>
+                      {!mapNarrow && <span className="text-2xs text-ink3">{tp(brushed.length, "unit.sorties")}</span>}
                     </div>
                     {/* The demoted raw total, kept visible rather than deleted:
                         it is the season's observation count, not a population. */}

@@ -35,6 +35,7 @@ import { countOf } from "./count";
 import {
   SITE_RADIUS_M,
   groupIntoSites,
+  isPlaced,
   siteSeries,
   type SurveyFootage,
 } from "./surveys";
@@ -54,8 +55,6 @@ export type SeasonEstimate = {
   /** Distinct sites behind `current`. */
   sites: number;
 };
-
-const finite = (n: unknown): boolean => Number.isFinite(Number(n));
 
 /**
  * The season's current estimate and the raw observation total it was demoted
@@ -81,7 +80,7 @@ export function seasonEstimate<T extends EstimateFootage>(
   let strayCount = 0;
   let strays = 0;
   for (const f of list) {
-    if (finite(f?.center?.lat) && finite(f?.center?.lng)) placeable.push(f);
+    if (isPlaced(f)) placeable.push(f);
     else {
       strays += 1;
       strayCount += countOf(f);

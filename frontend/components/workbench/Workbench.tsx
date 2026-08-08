@@ -97,7 +97,13 @@ function WorkbenchBody({ onClose }: { onClose: ()=>void }){
   },[detections, footageById, q, status, sort, recent]);
 
   const total = filtered.length;
-  const listRef = useRef<HTMLDivElement | null>(null);
+  /* The scroller as STATE, not a ref. DialogContent does not commit its
+     children on the drawer's first render, so a ref is still null when the
+     layout effect below first runs - and with a dependency array that effect
+     never ran again, which left the table showing nothing but its bottom
+     spacer until the reviewer happened to scroll. A callback ref into state
+     re-runs every effect at the moment the element actually attaches. */
+  const [listEl, setListEl] = useState<HTMLDivElement | null>(null);
 
   /* A new filter is a new pass: the retained rows, the undo offer and the
      pending confirmation all belong to the previous one. (The scroll position
@@ -139,21 +145,21 @@ function WorkbenchBody({ onClose }: { onClose: ()=>void }){
   const [range, setRange] = useState<{start:number; end:number}>({start:0, end:0});
 
   const recompute = useCallback(()=>{
-    const el = listRef.current;
+    const el = listEl;
     if(!el) return;
     const h = el.clientHeight || 1;
     const start = Math.max(0, Math.floor(el.scrollTop / rowH) - OVERSCAN);
     const end = Math.min(total, Math.ceil((el.scrollTop + h) / rowH) + OVERSCAN);
     setRange(r => (r.start===start && r.end===end) ? r : { start, end });
-  },[rowH, total]);
+  },[listEl, rowH, total]);
 
   useEffect(()=>{
-    const el = listRef.current;
+    const el = listEl;
     if(!el || typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver(()=> recompute());
     ro.observe(el);
     return ()=> ro.disconnect();
-  },[recompute]);
+  },[listEl, recompute]);
 
   /* One post-render pass over the scroller, pre-paint so the first frame
      already carries the right slice, and in a single effect so it costs one
@@ -167,22 +173,51 @@ function WorkbenchBody({ onClose }: { onClose: ()=>void }){
        3. the window is recomputed from the live scrollTop and height. */
   const firstRowRef = useRef<HTMLTableRowElement | null>(null);
   const passRef = useRef("");
+  const measuredRef = useRef(false);
+  /* Rows are mounted, so there is something to measure. Read off `range`
+     rather than `visible`, which is derived below this effect. */
+  const hasRows = range.end > range.start;
   useLayoutEffect(()=>{
-    const el = listRef.current;
+    const el = listEl;
     if(!el) return;
-    const pass = `${q} ${status} ${sort}`;
-    if (passRef.current !== pass){
+    const pass = `${q} ${status} ${sort}`;
+    const passChanged = passRef.current !== pass;
+    if (passChanged){
       passRef.current = pass;
       if (el.scrollTop !== 0) el.scrollTop = 0;
+      measuredRef.current = false;
     }
-    const row = firstRowRef.current;
-    if (row){
-      const h = row.getBoundingClientRect().height;
-      // Re-render on the corrected height; this pass runs again right after.
-      if (h > 8 && Math.abs(h - rowH) > 0.5){ setRowH(h); return; }
+    /* Measure ONCE per list, not once per render. getBoundingClientRect is a
+       synchronous reflow, and this effect used to carry no dependency array —
+       so every scroll event (recompute -> setRange -> render) paid a forced
+       layout on top of re-rendering the slice. A row's height only changes
+       when the pass or the mount does, which is what these deps cover. */
+    if (!measuredRef.current){
+      const row = firstRowRef.current;
+      if (row){
+        const h = row.getBoundingClientRect().height;
+        if (h > 8){
+          measuredRef.current = true;
+          // Re-render on the corrected height; this pass runs again right after.
+          if (Math.abs(h - rowH) > 0.5){ setRowH(h); return; }
+        }
+      }
     }
     recompute();
-  });
+    // rowH is compared, not tracked: setRowH changes `recompute`'s identity,
+    // which re-runs this effect anyway.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[listEl, recompute, q, status, sort, hasRows]);
+
+  /* One recompute per frame while scrolling. A trackpad fling fires scroll
+     events faster than React can render, and each one read scrollTop and set
+     state; the map overlay coalesces the same way. */
+  const rafRef = useRef(0);
+  const onScroll = useCallback(()=>{
+    if (rafRef.current) return;
+    rafRef.current = requestAnimationFrame(()=>{ rafRef.current = 0; recompute(); });
+  },[recompute]);
+  useEffect(()=> ()=> { if (rafRef.current) cancelAnimationFrame(rafRef.current); },[]);
 
   const start = Math.max(0, Math.min(range.start, total));
   const end = Math.max(start, Math.min(range.end, total));
@@ -337,7 +372,7 @@ function WorkbenchBody({ onClose }: { onClose: ()=>void }){
         </div>
       )}
 
-      <div ref={listRef} onScroll={recompute} className="flex-1 overflow-auto">
+      <div ref={setListEl} onScroll={onScroll} className="flex-1 overflow-auto">
         {/* table-fixed: with only a window of rows mounted, auto layout would
             re-measure the columns against each slice and the header would
             jitter under the reviewer's eyes as they scroll. */}
@@ -396,7 +431,19 @@ function WorkbenchBody({ onClose }: { onClose: ()=>void }){
                   <td className="px-3 py-2 text-right text-ink2 tnum">
                     {score===null ? <span title={t("wb.noScore")}>—</span> : score.toFixed(2)}
                   </td>
-                  <td className="px-3 py-2">
+                  <td className="px-3 py-2 whitespace-nowrap">
+                    {/* A verdict the service refused. The store keeps the
+                        reviewer's decision on screen, which is right — but a
+                        row that did not reach the archive must not look
+                        identical to one that did, or the reviewer walks away
+                        believing work is saved that is not. */}
+                    {d.unsaved && (
+                      <span
+                        className="inline-block w-1.5 h-1.5 rounded-full bg-bad mr-1.5 align-middle"
+                        title={t("wb.unsaved")}
+                        aria-label={t("wb.unsaved")}
+                      />
+                    )}
                     <Pill tone={d.status==="validated" ? "good" : "neutral"}>
                       {d.status==="false_positive" ? t("status.falseShort") : d.status==="validated" ? t("status.validatedL") : t("status.autoL")}
                     </Pill>

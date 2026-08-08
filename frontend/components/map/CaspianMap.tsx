@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useFootageStore } from "@/store/useFootageStore";
 import { colonyHull, expandHull, colonyBounds } from "@/lib/colony";
 import { countOf } from "@/lib/analytics/count";
+import { footagesInRange, detectionsFor } from "@/lib/analytics/brush";
 import type { Detection } from "@/lib/types";
 import { useT } from "@/lib/i18n";
 
@@ -109,23 +110,19 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
   const footagesRaw = useFootageStore(s=>s.footages);
   const detectionsRaw = useFootageStore(s=>s.detections);
   const timeRange = useFootageStore(s=>s.timeRange);
+  const hydrating = useFootageStore(s=>s.hydrating);
   // Filter by the timeline brush. These MUST be memoised — the overlay effect
   // depends on them, so rebuilding the arrays every render made the effect
   // re-run, setState, and re-render forever.
-  // (The same brush arithmetic lives in several views; the shared selector is
-  // lib/analytics/brush.ts. The .sort() this copy used to do was dead — the
-  // window comes from Math.min/max, which do not care about order.)
-  const footages = useMemo(()=> {
-    if(footagesRaw.length===0) return footagesRaw;
-    const dates=footagesRaw.map(f=> new Date(f.uploadedAt).getTime());
-    const min=Math.min(...dates), max=Math.max(...dates), span=max-min||1;
-    const lo=min+span*(timeRange[0]/100), hi=min+span*(timeRange[1]/100);
-    return footagesRaw.filter(f=>{ const t=new Date(f.uploadedAt).getTime(); return t>=lo && t<=hi; });
-  },[footagesRaw, timeRange]);
-  const detections = useMemo(()=> {
-    const ids=new Set(footages.map(f=>f.id));
-    return detectionsRaw.filter(d=> ids.has(d.footageId));
-  },[footages, detectionsRaw]);
+  // This was the fifth private copy of the brush arithmetic, and it differed
+  // from the shared one: on a sortie whose date will not parse it compared
+  // NaN, so the map dropped a survey that the panel, the dashboard and the
+  // report all still counted. footagesInRange keeps it — a malformed
+  // timestamp is a reason to show a survey suspiciously, not to hide it.
+  // The functions are pure (no React, no zustand), so importing them here
+  // does not disturb this file's once-per-mount discipline.
+  const footages = useMemo(()=> footagesInRange(footagesRaw, timeRange), [footagesRaw, timeRange]);
+  const detections = useMemo(()=> detectionsFor(footages, detectionsRaw), [footages, detectionsRaw]);
   const selectedId = useFootageStore(s=>s.selectedId);
   const select = useFootageStore(s=>s.select);
   const layerState = useFootageStore(s=>s.layerState);
@@ -218,7 +215,6 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
         "circle-opacity": 1
       }});
 
-      (window as any).__sealvMap = map;
       setMapLoaded(true);
       onMapReadyRef.current?.(map);
 
@@ -274,13 +270,11 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
       try { roRef.current?.disconnect(); } catch {}
       try { anchorMarkerRef.current?.remove(); } catch {}
       anchorMarkerRef.current = null;
-      // Drop the window handle with the map it points at. LeftPanel still
-      // easeTo()s __sealvMap, so leaving it aimed at a removed instance threw
-      // on the first list click after any remount. (P2 replaces the global
-      // with the onMapReady handle; until then it must be nulled, not deleted.)
-      try {
-        if ((window as any).__sealvMap === mapRef.current) (window as any).__sealvMap = null;
-      } catch {}
+      /* No `window.__sealvMap` to drop any more. It was a global handle on the
+         whole map — every source, every tile, the GL context — published for
+         LeftPanel to easeTo() through, and LeftPanel now dispatches `flyto`
+         instead. Nothing read it, so it was a live reference to a torn-down
+         map waiting for its first stale reader. */
       try { mapRef.current?.remove(); } catch {}
       roRef.current = null;
       mapRef.current = null;   // the guard must reopen for the next mount
@@ -464,6 +458,13 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
   const fitKey = useMemo(()=> footages.map(f=>f.id).join(","), [footages]);
   useEffect(()=>{
     const map=mapRef.current; if(!map||!mapLoaded) return;
+    /* Not while the archive is still arriving. Hydration commits each sortie
+       to the store the moment its points resolve, so during boot fitKey takes
+       a new value per merged run — five self-cancelling 520 ms fitBounds
+       animations on today's fixture, and one per sortie at the design target
+       of hundreds per season. hydrating is in the deps, so the camera settles
+       exactly once, on the finished set, the moment it flips false. */
+    if (hydrating) return;
     if (fitKey && !selectedId) {
       // compute bounds of all tracks + detections
       let minLng=180, minLat=90, maxLng=-180, maxLat=-90;
@@ -479,7 +480,7 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
        fitKey), never because a verdict click handed us a new `detections`
        array identity — that would yank the map out from under the review. */
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[fitKey, mapLoaded, selectedId]);
+  },[fitKey, mapLoaded, selectedId, hydrating]);
 
   /* DOM overlay — tracks and colony chips, guaranteed visible even if GL
      layers/glyphs fail. Everything that depends only on the DATA is computed

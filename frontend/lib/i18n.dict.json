@@ -222,7 +222,10 @@
     "map.zoomOut": "Алыстату",
     "map.attribution": "Дереккөздер",
     "store.editsNotSaved": "{total} шешімнің {n} сақталмады",
-    "store.archiveUnreadable": "Мұрағатты оқу мүмкін болмады"
+    "store.archiveUnreadable": "Мұрағатты оқу мүмкін болмады",
+    "btn.exportGeojson": "GeoJSON экспорттау",
+    "misc.notPlaced": "координаталары жоқ",
+    "wb.unsaved": "Бұл шешім мұрағатқа сақталмады"
   },
   "ru": {
     "brand.sub": "Учёт каспийского тюленя",
@@ -447,7 +450,10 @@
     "map.zoomOut": "Отдалить",
     "map.attribution": "Источники данных",
     "store.editsNotSaved": "{n} из {total} решений не сохранились",
-    "store.archiveUnreadable": "Не удалось прочитать архив"
+    "store.archiveUnreadable": "Не удалось прочитать архив",
+    "btn.exportGeojson": "Экспорт GeoJSON",
+    "misc.notPlaced": "координат нет",
+    "wb.unsaved": "Это решение не сохранилось в архиве"
   },
   "en": {
     "brand.sub": "Caspian seal survey",
@@ -672,6 +678,9 @@
     "map.zoomOut": "Zoom out",
     "map.attribution": "Data sources",
     "store.editsNotSaved": "{n} of {total} verdicts did not save",
-    "store.archiveUnreadable": "The archive could not be read"
+    "store.archiveUnreadable": "The archive could not be read",
+    "btn.exportGeojson": "Export GeoJSON",
+    "misc.notPlaced": "no position",
+    "wb.unsaved": "This verdict did not save to the archive"
   }
 }

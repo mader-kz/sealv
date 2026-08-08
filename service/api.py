@@ -1240,43 +1240,27 @@ def _apply_batch(run_id: str, op: str, raw_ids: Any, operator: Optional[str]) ->
     to give up halfway and leave the run half-edited. Here the whole gesture
     commits or none of it does.
 
-    `db.apply_edit` cannot be looped inside the transaction (it opens its own,
-    and SQLite has no nested transactions), so its remove/reinstate branch is
-    reproduced here against the same `db.add_edit` helper - the `edit` log still
-    gets one append-only row per point, which is the part that is evidence.
+    The transaction and the remove/reinstate semantics live in
+    `db.apply_edits_batch`, next to the single-point `db.apply_edit` they have
+    to agree with. This function used to reproduce that branch inline against
+    `db._tx` - a private helper - which meant the batch path and the single
+    path each had their own idea of what a verdict does to a point, and the
+    first edit to one would have silently diverged them.
     """
     ids = _batch_ids(raw_ids)
     if op == "add":
         # 'add' invents a point from x/y; there is nothing for a list of
         # existing ids to mean. Say so rather than silently ignoring them.
         raise HTTPException(400, "point_ids applies to 'remove' and 'reinstate', not 'add'")
-    status = "false_positive" if op == "remove" else "validated"
 
     with _conn() as conn:
         if db.get_run(conn, run_id) is None:
             raise HTTPException(404, "run not found")
         try:
-            with db._tx(conn, "IMMEDIATE"):
-                for pid in ids:
-                    existing = conn.execute(
-                        "SELECT x, y FROM point WHERE id = ? AND run_id = ?", (pid, run_id)
-                    ).fetchone()
-                    if existing is None:
-                        raise ValueError(f"point {pid} does not belong to run {run_id}")
-                    conn.execute("UPDATE point SET status = ? WHERE id = ?", (status, pid))
-                    db.add_edit(
-                        conn, run_id, op, point_id=pid,
-                        x=float(existing["x"]), y=float(existing["y"]), operator=operator,
-                    )
+            result = db.apply_edits_batch(conn, run_id, op, ids, operator=operator)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
-        return {
-            "run_id": run_id,
-            "op": op,
-            "updated": len(ids),
-            "point_ids": ids,
-            "verified_count": db.verified_count(conn, run_id),
-        }
+        return {"run_id": run_id, "op": op, **result}
 
 
 @app.patch("/v1/runs/{run_id}/points")
@@ -1467,11 +1451,11 @@ async def stats(
     """
     # Clamped rather than rejected: a caller asking for 10_000 runs wants "all
     # of them", and the honest answer to that is a page plus the real total.
-    try:
-        runs_limit = max(1, min(int(runs_limit), MAX_LATEST_RUNS_CEILING))
-        runs_offset = max(0, int(runs_offset))
-    except (TypeError, ValueError) as exc:
-        raise HTTPException(400, "runs_limit and runs_offset must be integers") from exc
+    # No int() guard here - FastAPI has already coerced both from the signature
+    # and answered 422 for anything that is not an integer, so the try/except
+    # that used to wrap this could never fire and only read as a live check.
+    runs_limit = max(1, min(runs_limit, MAX_LATEST_RUNS_CEILING))
+    runs_offset = max(0, runs_offset)
 
     def load() -> dict:
         with _conn() as conn:

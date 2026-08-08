@@ -12,7 +12,7 @@ import { formatArea, totalAreaM2 } from "../analytics/area";
 import { formatDate, localeForLang } from "../analytics/brush";
 import { countOf } from "../analytics/count";
 import { seasonEstimate } from "../analytics/estimate";
-import { SITE_RADIUS_M } from "../analytics/surveys";
+import { SITE_RADIUS_M, isPlaced } from "../analytics/surveys";
 import dict from "../i18n.dict.json";
 
 export type ReportLang = "kk" | "ru" | "en";
@@ -224,8 +224,17 @@ export async function buildReportDoc(footages: Footage[], lang: ReportLang) {
     doc.setFontSize(6.5);
     const parts = [
       `${tr(lang, "rep.basis")}: ${f.band?.basis ? basisLabel(lang, f.band.basis) : tr(lang, "rep.basisNone")}`,
-      `${tr(lang, "rep.coords")}: ${f.center.lat.toFixed(5)}, ${f.center.lng.toFixed(5)}`,
     ];
+    /* Only a sortie that HAS a position gets a coordinate line. A run that
+       flew no track and georeferenced no animal carries a NaN centre by
+       design; printing "NaN, NaN" to five decimal places in a published
+       report is the worst place in this product for an invented number, so
+       the line is omitted and the sortie is named as unplaced instead. */
+    if (isPlaced(f)) {
+      parts.push(`${tr(lang, "rep.coords")}: ${f.center.lat.toFixed(5)}, ${f.center.lng.toFixed(5)}`);
+    } else {
+      parts.push(`${tr(lang, "rep.coords")}: ${tr(lang, "misc.notPlaced")}`);
+    }
     if (f.unplaced) parts.push(tr(lang, "insp.withoutCoords", { n: f.unplaced }));
     put(fit(parts.join("  ·  "), W), L + 1, y + 3.4);
     y += 8.5;

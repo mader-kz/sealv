@@ -423,8 +423,6 @@ export const useFootageStore = create<Store>((set, get) => ({
         band: { low: r.low ?? null, best, high: r.high ?? null, basis: r.basis ?? "" },
         unplaced,
         pixels,
-        counts: pts.counts ?? undefined,
-        verifiedCount: pts.verified_count,
         /* Only a list the service actually sent becomes caveats. A service
            too old to report them leaves this undefined, so the inspector
            stays silent instead of certifying the run as clean. */
@@ -494,7 +492,12 @@ export const useFootageStore = create<Store>((set, get) => ({
   // Everything created here is tagged source:"test" and named TEST_* so it is
   // never mistaken for an actual survey.
   seedTestData: () => {
-    if (get().footages.length > 0) return;
+    /* Not over real data, and not INTO a hydrate that is still landing runs:
+       the archive arrives run by run, so an empty store is not proof that the
+       store will stay empty. The two "load test data" buttons also disable
+       themselves while hydrating, but the invariant belongs here — a UI
+       attribute is not where a store's rules should live. */
+    if (get().footages.length > 0 || get().hydrating) return;
     const demo: Footage[] = KZ_SITES.slice(0,8).map((site, idx)=> {
       const duration = 90 + Math.random()*80;
       const track = generateSeedTrack({lat: site.lat, lng: site.lng}, duration, 40);

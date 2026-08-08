@@ -1,5 +1,5 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useFootageStore } from "@/store/useFootageStore";
 import { Button, Field, Stat, SectionHead, Pill } from "@/components/ui/primitives";
 import Icon from "@/components/ui/Icon";
@@ -8,7 +8,15 @@ import { formatArea, totalAreaM2 } from "@/lib/analytics/area";
 import { countOf } from "@/lib/analytics/count";
 import { footagesInRange, formatDate } from "@/lib/analytics/brush";
 import { seasonEstimate } from "@/lib/analytics/estimate";
+import { isPlaced } from "@/lib/analytics/surveys";
 import { csvCell, downloadText } from "@/lib/export/animals";
+
+/* Nominal sortie row height, px. Corrected from a real measurement on the
+   first pass; the constant only has to be close enough to pick a first slice. */
+const ROW_H = 62;
+/* Rows above and below the viewport. Also absorbs the sticky section header,
+   which eats into the scroller's usable height. */
+const OVERSCAN = 6;
 
 export default function LeftPanel(){
   const { t, tp, lang } = useT();
@@ -61,7 +69,10 @@ export default function LeftPanel(){
     for(const f of filtered){
       const area = f.areaM2;
       rows.push([
-        f.id, csvCell(f.filename), f.uploadedAt, f.center.lat, f.center.lng,
+        // Empty cells, not NaN: a spreadsheet reads NaN as a value, and this
+        // sortie has no measured position to report.
+        f.id, csvCell(f.filename), f.uploadedAt,
+        isPlaced(f) ? f.center.lat : "", isPlaced(f) ? f.center.lng : "",
         f.track.length,
         // Rejected rows live in this list too. The header says "detections",
         // which in every other figure this app prints means "animals the
@@ -82,9 +93,89 @@ export default function LeftPanel(){
     downloadText(`sealv-footage-${new Date().toISOString().slice(0,10)}.csv`, "text/csv", rows.join("\n"));
   };
 
+  /* ---------------------------------------------------------- windowing */
+  /* The same defect the Detections table had, one panel over: every sortie in
+     the season mounted a ~12-element row the moment the panel opened, and the
+     design target is hundreds of sorties per season — several thousand nodes
+     built synchronously, rebuilt whenever the store's array identity changes
+     (which the progressive hydrate does once per merged run). Only the visible
+     slice is mounted; two spacers of computed height stand in for the rest so
+     the scrollbar and the scroll position stay truthful. Dependency-free, and
+     the same shape as components/workbench/Workbench.tsx. */
+  const total = filtered.length;
+  /* The scroller as STATE, not a ref: an effect with a dependency array can
+     only see the element if it re-runs when the element attaches, and this
+     panel mounts inside a width-collapsed wrapper. Same shape as Workbench. */
+  const [listEl, setListEl] = useState<HTMLDivElement | null>(null);
+  const firstRowRef = useRef<HTMLDivElement | null>(null);
+  const [rowH, setRowH] = useState(ROW_H);
+  const [range, setRange] = useState<{start:number; end:number}>({start:0, end:0});
+
+  const recompute = useCallback(()=>{
+    const el = listEl;
+    if(!el) return;
+    const h = el.clientHeight || 1;
+    const start = Math.max(0, Math.floor(el.scrollTop / rowH) - OVERSCAN);
+    const end = Math.min(total, Math.ceil((el.scrollTop + h) / rowH) + OVERSCAN);
+    setRange(r => (r.start===start && r.end===end) ? r : { start, end });
+  },[listEl, rowH, total]);
+
+  useEffect(()=>{
+    const el = listEl;
+    if(!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(()=> recompute());
+    ro.observe(el);
+    return ()=> ro.disconnect();
+  },[listEl, recompute]);
+
+  const passRef = useRef("");
+  const measuredRef = useRef(false);
+  const hasRows = range.end > range.start;
+  useLayoutEffect(()=>{
+    const el = listEl;
+    if(!el) return;
+    /* A new filter scrolls back to the top BEFORE the slice is chosen, or the
+       window is picked for the old offset and the reader stares at a blank
+       strip until they nudge the wheel. */
+    if (passRef.current !== q){
+      passRef.current = q;
+      if (el.scrollTop !== 0) el.scrollTop = 0;
+      measuredRef.current = false;
+    }
+    /* Measured once per list, not per render: getBoundingClientRect forces a
+       synchronous reflow, and scrolling renders. */
+    if (!measuredRef.current){
+      const row = firstRowRef.current;
+      if (row){
+        const h = row.getBoundingClientRect().height;
+        if (h > 8){
+          measuredRef.current = true;
+          if (Math.abs(h - rowH) > 0.5){ setRowH(h); return; }
+        }
+      }
+    }
+    recompute();
+    // rowH is compared, not tracked: setRowH changes recompute's identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[listEl, recompute, q, hasRows]);
+
+  const rafRef = useRef(0);
+  const onScroll = useCallback(()=>{
+    if (rafRef.current) return;
+    rafRef.current = requestAnimationFrame(()=>{ rafRef.current = 0; recompute(); });
+  },[recompute]);
+  useEffect(()=> ()=> { if (rafRef.current) cancelAnimationFrame(rafRef.current); },[]);
+
+  const winStart = Math.max(0, Math.min(range.start, total));
+  const winEnd = Math.max(winStart, Math.min(range.end, total));
+  const visible = filtered.slice(winStart, winEnd);
+  const padTop = winStart * rowH;
+  const padBottom = Math.max(0, (total - winEnd) * rowH);
+
   /* One camera channel for the whole app. This reached through
-     `window.__sealvMap`, a global the map happens to set — a second, private
-     path to the same camera that nothing else could see or replace. */
+     `window.__sealvMap`, a global the map used to set — a second, private
+     path to the same camera that nothing else could see or replace. The map
+     no longer publishes it. */
   const flyTo = (lat:number, lng:number)=>{
     if(!Number.isFinite(lat) || !Number.isFinite(lng)) return;
     document.dispatchEvent(new CustomEvent("flyto", { detail:{ lat, lng, zoom: 10 } }));
@@ -146,13 +237,14 @@ export default function LeftPanel(){
         )}
       </div>
 
-      <div className="flex-1 overflow-auto">
+      <div ref={setListEl} onScroll={onScroll} className="flex-1 overflow-auto">
         <SectionHead
           title={`${t("nav.footage")} · ${filtered.length}`}
           className="px-3 h-8 sticky top-0 bg-surface border-b border-line-soft z-10"
         />
 
-        {filtered.map(f=>{
+        {padTop>0 && <div aria-hidden="true" style={{ height: padTop }} />}
+        {visible.map((f, rowIdx)=>{
           const sealCount = countOf(f);
           const active = f.id===selectedId;
           const open = ()=>{ select(f.id); flyTo(f.center.lat, f.center.lng); };
@@ -161,6 +253,7 @@ export default function LeftPanel(){
                stop, no role, no key handler. */
             <div
               key={f.id}
+              ref={rowIdx===0 ? firstRowRef : undefined}
               role="button"
               tabIndex={0}
               aria-current={active || undefined}
@@ -221,8 +314,13 @@ export default function LeftPanel(){
                 )}
               </div>
               <div className="text-xs text-ink3 mt-1 flex items-center gap-1.5">
-                {/* The centre, not a latitude bucket named after a region. */}
-                <span className="tnum">{f.center.lat.toFixed(2)}, {f.center.lng.toFixed(2)}</span>
+                {/* The centre, not a latitude bucket named after a region.
+                    A sortie that flew no track and placed no animal has no
+                    centre — printing its NaN would be a fabricated
+                    coordinate, so it says so instead. */}
+                {isPlaced(f)
+                  ? <span className="tnum">{f.center.lat.toFixed(2)}, {f.center.lng.toFixed(2)}</span>
+                  : <span className="text-ink3">{t("misc.notPlaced")}</span>}
                 {f.duration>0 && <>
                   <span className="text-line">·</span>
                   <span className="tnum">{f.duration}{t("unit.s")}</span>
@@ -237,6 +335,7 @@ export default function LeftPanel(){
             </div>
           );
         })}
+        {padBottom>0 && <div aria-hidden="true" style={{ height: padBottom }} />}
 
         {filtered.length===0 && footages.length>0 && (
           <div className="p-6 text-center text-sm text-ink3">{t("left.noMatch", { q })}</div>

@@ -158,9 +158,18 @@ export async function parseMP4Metadata(file: File): Promise<MP4Location> {
      fix — XMP order is time order but carries no timestamps here — and the
      caller is told so via `timesSynthesized` rather than left to assume. */
   const spread = candidates.length > 1;
+  /* `alt` stays undefined when the file did not record one. It used to default
+     to 75 m, and that invented number was not cosmetic: the service takes the
+     track's median altitude as the flight height, divides it into the sensor
+     geometry to get a ground sample distance, and multiplies THAT into every
+     hectare the dashboard, the panel and the printed report publish — all
+     labelled as if an altitude had been read off the aircraft. An unknown
+     altitude makes the area unknown, which the whole stack already renders
+     honestly ("no scale recorded"), and an unknown area is a far smaller lie
+     than a confidently wrong one. */
   const track: TrackPoint[] = candidates.map((c,i)=> ({
     t: spread ? (i/(candidates.length-1))*SYNTHETIC_SPREAD_S : 0,
-    lat: c.lat, lng: c.lng, alt: c.alt ?? 75,
+    lat: c.lat, lng: c.lng, alt: c.alt,
   }));
   return {
     track,

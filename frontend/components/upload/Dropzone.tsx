@@ -118,7 +118,11 @@ export default function Dropzone(){
         detections = [{
           id: `${id}-agg`, footageId: id, t: 0,
           lat: footage.center.lat, lng: footage.center.lng,
-          count: best, confidence: 1, status: "auto" as const,
+          /* null, not 1. This marker is synthetic — the platform minted it to
+             carry a count the engine could not place — and 1.00 is a perfect
+             model score, which no synthetic thing has. The reload path already
+             mints it as null, so the same sortie changed its score on F5. */
+          count: best, confidence: null, status: "auto" as const,
         }];
       }
       /* The band and the engine's reasons to doubt it are one result, not a
@@ -222,7 +226,11 @@ export default function Dropzone(){
         // whole count aggregates onto that marker, exactly as honest as the
         // engine result allows without per-animal coordinates.
         const p0 = pinPoints[0];
-        track = [{ t: 0, lat: p0.lat, lng: p0.lng, alt: 75 }];
+        /* No `alt`. A hand-dropped pin says WHERE, never HOW HIGH, and the
+           service turns a flight altitude into the ground sample distance
+           behind every published hectare. 75 was a plausible-looking guess
+           that would have been printed as a measured scale. */
+        track = [{ t: 0, lat: p0.lat, lng: p0.lng }];
         source = "manual";
         parseInfo = t("drop.photoPinned");
         setPinPoints([]); setPinMode(false);
@@ -258,7 +266,8 @@ export default function Dropzone(){
         // single anchor at the shot's centre plus real pixel offsets is the
         // honest picture; track_at clamps a 1-point track to it for every t.
         const p0 = pinPoints[0];
-        track = [{ t: 0, lat: p0.lat, lng: p0.lng, alt: 75 }];
+        // Location only — see the photo branch above on why there is no `alt`.
+        track = [{ t: 0, lat: p0.lat, lng: p0.lng }];
         source = "manual";
         parseInfo = t("drop.pinnedCentre");
         setPinPoints([]); setPinMode(false);

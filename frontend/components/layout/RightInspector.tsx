@@ -7,6 +7,7 @@ import EvidenceView, { EvidenceFrame } from "@/components/evidence/EvidenceView"
 import { basisText, useT } from "@/lib/i18n";
 import { formatArea } from "@/lib/analytics/area";
 import { countOf } from "@/lib/analytics/count";
+import { isPlaced } from "@/lib/analytics/surveys";
 
 export default function RightInspector({ compact }: { compact?: boolean }){
   const { t, tp, lang } = useT();
@@ -243,10 +244,13 @@ export default function RightInspector({ compact }: { compact?: boolean }){
           {f.duration > 0 && <Row label={t("row.duration")} value={`${f.duration}${t("unit.s")}`} mono />}
           <Row label={t("row.source")} value={f.source} />
           <Row label={t("row.track")} value={`${f.track.length} ${tp(f.track.length, "misc.trackPoints")}`} mono />
+          {/* A sortie with no track and no georeferenced animal has no centre.
+              Its stored centre is NaN precisely so that nothing prints it as a
+              position; four decimal places of NaN is a fabricated measurement. */}
           <Row
             label={t("row.location")}
-            value={`${f.center.lat.toFixed(4)}, ${f.center.lng.toFixed(4)}`}
-            mono
+            value={isPlaced(f) ? `${f.center.lat.toFixed(4)}, ${f.center.lng.toFixed(4)}` : t("misc.notPlaced")}
+            mono={isPlaced(f)}
           />
           {(f.areaM2 != null || f.gsdSource) && (
             <Row
