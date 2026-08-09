@@ -114,12 +114,16 @@ export default function Dropzone() {
       const entries: NewIngest[] = [];
       const claimed = new Set<File>();
       let unreadable = 0;
-      /* A drop of exactly one video is the moment the frame choice is worth
-         asking about: the operator is looking at one clip and has not yet
-         committed to twenty minutes of counting. A bulk drop is NOT stalled on
-         twelve questions — it queues for full analysis, the primary and honest
-         path, and every still-queued video row offers the picker until the
-         worker reaches it. */
+      /* A drop of exactly one video goes to the picker, because picking the
+         frame IS how a clip is counted now — there is no longer a second
+         button offering the whole video instead.
+         A bulk drop is the one remaining exception, and it is a deliberate
+         one: twelve clips would mean twelve pickers each decoding twelve
+         frames in this browser at once, so they queue and the engine reads
+         them whole. That is a wider claim than one frame, not a narrower one,
+         and every still-queued video row keeps the "pick a frame" button until
+         the worker reaches it. If bulk should become frame-first too, this
+         line is the change — and it needs a story for the decode load. */
       const videos = arr.filter((f) => kindOf(f.name) === "video");
       const media = arr.filter((f) => { const k = kindOf(f.name); return k === "video" || k === "image"; });
       const askFrames = media.length === 1 && videos.length === 1 ? videos[0] : null;

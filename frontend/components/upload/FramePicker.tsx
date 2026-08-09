@@ -13,7 +13,7 @@
  * Two things this card owes the operator, and both are here because a frame
  * count is a narrower claim than the clip it came from:
  *
- *  · A frame big enough to judge. The panel column is 320 px, so the strip is
+ *  · A frame big enough to judge. The panel column is 360 px, so the strip is
  *    two columns of thumbnails and the real look happens in a lightbox — the
  *    same Dialog the evidence view uses, arrow keys and all. The lightbox
  *    starts from the strip's own bitmap (nothing is re-extracted to open it)
@@ -271,7 +271,7 @@ export default function FramePicker({ item }: { item: IngestItem }) {
                 key={f.atSeconds}
                 className="relative group rounded overflow-hidden border border-line hover:border-accent transition-colors"
               >
-                {/* Opening the frame is the main path: a 140 px thumbnail is
+                {/* Opening the frame is the main path: a ~130 px thumbnail is
                     for finding the candidate, not for ruling on it. */}
                 <button
                   onClick={() => setOpen(i)}

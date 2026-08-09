@@ -482,7 +482,6 @@ type IngestStore = {
   countAgain: (id: string) => void;
 
   wantFrames: (id: string) => Promise<void>;
-  chooseFullAnalysis: (id: string) => void;
   chooseQuickCount: (id: string, atSeconds: number) => Promise<void>;
 
   refreshFailed: () => Promise<void>;
@@ -739,17 +738,15 @@ export const useIngestStore = create<IngestStore>((set, get) => ({
     if (itemOf(id)?.phase === "frame_choice") patch(id, { frameMoveM: track ? trackSpanM(track) : null });
   },
 
-  /* Queue the WHOLE clip for the engine's cross-frame consensus.
-     NO UI reaches this any more: video ingest is frame-first, and a second
-     button that quietly counted the whole video instead is exactly the hidden
-     path the picker was rewritten to remove. The action is kept because the
-     service capability is unchanged and other callers use it — a clip dropped
-     in bulk still queues here, through `enqueue`, not through a button. */
-  chooseFullAnalysis: (id) => {
-    patch(id, { phase: "queued", frames: undefined, framesBusy: false, frameMoveM: undefined });
-    get().runNext();
-  },
-
+  /* There is deliberately no `chooseFullAnalysis` next to this. It used to sit
+     here, moving a clip from `frame_choice` straight to `queued` so the engine
+     counted the whole video — and once the picker's button was removed, no
+     caller was left. A kept-but-unreachable action for a path the product no
+     longer offers is how a removed feature grows back: the next person wiring
+     up a button finds it and assumes it is supported. The service capability
+     is untouched and other clients still use it; nothing in THIS app does.
+     A clip dropped in bulk still reaches the engine whole, but through
+     `enqueue`, which is a different decision in a different file. */
   chooseQuickCount: async (id, atSeconds) => {
     const it = itemOf(id);
     if (!it) return;
