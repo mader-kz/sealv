@@ -516,6 +516,7 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
   /* DOM overlay — tracks and colony chips, guaranteed visible even if GL
      layers/glyphs fail. Everything that depends only on the DATA is computed
      here, once; the move handler below is left with nothing but projection. */
+  const chipLayerRef = useRef<HTMLDivElement>(null);
   const [overlayChips, setOverlayChips] = useState<ColonyChip[]>([]);
   const [overlayTracks, setOverlayTracks] = useState<Array<{pts:Array<{x:number,y:number}>, id:string}>>([]);
 
@@ -627,6 +628,51 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
     }
   },[select]);
 
+  /* A chip is a clickable DOM overlay, not a child of MapLibre's canvas
+     container. That is why clicks work — but it also means a wheel / trackpad
+     gesture over the chip bubbles through this React overlay instead of into
+     MapLibre, leaving the browser to handle it (a pinch can zoom the whole
+     page). Forward an exact native copy to MapLibre's interaction surface and
+     cancel the original. Native + passive:false is load-bearing: React's
+     wheel listener is passive, so it cannot reliably keep a ctrl+wheel pinch
+     away from browser zoom. */
+  useEffect(()=>{
+    const layer = chipLayerRef.current;
+    if(!mapLoaded || !layer) return;
+    const forwardWheel = (event: WheelEvent)=>{
+      const target = event.target;
+      if(!(target instanceof Element) || !target.closest(".colony-chip")) return;
+      const map = mapRef.current;
+      if(!map) return;
+      let interactionSurface: HTMLElement;
+      try{ interactionSurface = map.getCanvasContainer(); }catch{ return; }
+
+      event.preventDefault();
+      event.stopPropagation();
+      interactionSurface.dispatchEvent(new WheelEvent("wheel", {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        clientX: event.clientX,
+        clientY: event.clientY,
+        screenX: event.screenX,
+        screenY: event.screenY,
+        deltaX: event.deltaX,
+        deltaY: event.deltaY,
+        deltaZ: event.deltaZ,
+        deltaMode: event.deltaMode,
+        ctrlKey: event.ctrlKey,
+        shiftKey: event.shiftKey,
+        altKey: event.altKey,
+        metaKey: event.metaKey,
+        button: event.button,
+        buttons: event.buttons,
+      }));
+    };
+    layer.addEventListener("wheel", forwardWheel, { passive: false });
+    return ()=> layer.removeEventListener("wheel", forwardWheel);
+  },[mapLoaded]);
+
   return (
     <div className="relative w-full h-full bg-bg">
       <div ref={containerRef} className="absolute inset-0" />
@@ -651,7 +697,7 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
       {/* Colony chips — the only saturated thing on screen. One per sortie:
           the count, and under it the honest low–high band. In pin mode they
           step back and stop catching clicks meant for the anchor. */}
-      <div className={`absolute inset-0 z-[6] pointer-events-none ${pinMode ? "colony-chips-dimmed" : ""}`}>
+      <div ref={chipLayerRef} className={`absolute inset-0 z-[6] pointer-events-none ${pinMode ? "colony-chips-dimmed" : ""}`}>
         {overlayChips.map(c=>{
           const isSel = c.fid===selectedId;
           return (
