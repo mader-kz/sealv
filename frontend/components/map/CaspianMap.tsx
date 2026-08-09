@@ -76,6 +76,23 @@ type ColonyChip = {
   name: string | null;
 };
 
+/* A counted zero, at the weight a zero deserves. Inline rather than a class
+   because .colony-chip's amber lives in globals.css and this is the only
+   caller that wants it turned down; the geometry (the translate centring, the
+   hover scale) is left to the stylesheet so the chip still moves and still
+   clicks exactly like every other one. `selected` is re-stated here because an
+   inline box-shadow outranks the .selected rule it would otherwise silence. */
+const ZERO_CHIP_BEST: React.CSSProperties = { fontSize: 12, fontWeight: 500 };
+const zeroChipStyle = (selected: boolean): React.CSSProperties => ({
+  background: "var(--surface)",
+  color: "var(--ink-3)",
+  padding: "3px 8px 4px",
+  borderRadius: 8,
+  boxShadow: selected
+    ? "0 0 0 2px #fff, 0 2px 6px rgb(0 0 0 / 0.35)"
+    : "0 0 0 1px var(--line), 0 2px 6px rgb(0 0 0 / 0.35)",
+});
+
 /* Where a chip wants to sit, in world coordinates. Computed from the data
    once; the move handler only projects it. */
 type ChipAnchor = {
@@ -705,6 +722,11 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
       <div ref={chipLayerRef} className={`absolute inset-0 z-[6] pointer-events-none ${pinMode ? "colony-chips-dimmed" : ""}`}>
         {overlayChips.map(c=>{
           const isSel = c.fid===selectedId;
+          /* A sortie that counted nothing is data, so its chip stays, keeps its
+             number and keeps its click. What it loses is the volume: a
+             full-weight amber chip reading "0" shouts louder over an empty
+             beach than over the 645 next to it. Quiet, not hidden. */
+          const zero = c.count===0;
           return (
             <button
               key={c.fid}
@@ -719,9 +741,9 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
                   : `${c.count} ${tp(c.count, "unit.seals")}`,
               ].filter(Boolean).join(" · ")}
               className={`colony-chip ${isSel ? "selected z-10" : ""}`}
-              style={{ left:c.x, top:c.y }}
+              style={{ left:c.x, top:c.y, ...(zero ? zeroChipStyle(isSel) : null) }}
             >
-              <span className="chip-best tnum">{c.count}</span>
+              <span className="chip-best tnum" style={zero ? ZERO_CHIP_BEST : undefined}>{c.count}</span>
               {c.low!=null && c.high!=null && (
                 <span className="chip-range tnum">{c.low}–{c.high}</span>
               )}

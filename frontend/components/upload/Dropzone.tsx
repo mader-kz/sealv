@@ -20,6 +20,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   useIngestStore,
+  isRunning,
+  isWaiting,
   kindOf,
   NOTE_MAX,
   SIDECAR_RE,
@@ -43,6 +45,11 @@ const LOG_RE = /\.(csv|txt|log|gpx|kml|kmz|dat|xml)$/i;
 
 const stemOf = (name: string) => name.replace(/\.[^.]+$/, "").toLowerCase();
 
+/** How long a finished queue stays on screen before the panel shows itself
+ *  out. Long enough that the last card is read as "done" rather than as
+ *  something that vanished mid-count. */
+const SETTLED_CLOSE_MS = 1500;
+
 /** The honest per-type sentence for a file this platform cannot read. */
 function skipReason(name: string): IngestReason {
   if (RAW_RE.test(name)) return { key: "ingest.skipRaw", vars: { name } };
@@ -50,7 +57,13 @@ function skipReason(name: string): IngestReason {
   return { key: "ingest.skipUnknown", vars: { name } };
 }
 
-export default function Dropzone() {
+export default function Dropzone({
+  /** Called once the queue has finished and nothing in it wants a person.
+   *  The panel that owns this component uses it to close itself. */
+  onSettled,
+}: {
+  onSettled?: () => void;
+}) {
   const { t } = useT();
   const [drag, setDrag] = useState(false);
   const [loadingSample, setLoadingSample] = useState(false);
@@ -78,6 +91,39 @@ export default function Dropzone() {
   useEffect(() => {
     void refreshFailed();
   }, [refreshFailed]);
+
+  /* --------------------------------------------- showing itself out */
+  /* An ingest panel that stays open over a finished queue is a lid on the map
+     the counts were just drawn onto. It closes itself, but only on a queue
+     that is genuinely done with this person: anything running, anything queued
+     behind it, anything asking a question (a duplicate, a missing location, a
+     frame to pick) and anything that FAILED keeps the panel up — a failure is
+     the one card nobody should have to go looking for.
+     `armed` is why reopening a settled panel does not immediately close it
+     again: the close only fires on a queue this mount watched go busy. */
+  const items = useIngestStore((s) => s.items);
+  const onSettledRef = useRef(onSettled);
+  useEffect(() => {
+    onSettledRef.current = onSettled;
+  });
+  const armedRef = useRef(false);
+  useEffect(() => {
+    const busy = items.some((i) => isRunning(i.phase) || i.phase === "queued");
+    const wantsYou = items.some((i) => isWaiting(i.phase) || i.phase === "failed");
+    if (busy || wantsYou) {
+      armedRef.current = true;
+      return;
+    }
+    if (!armedRef.current) return;
+    // "The last item finished" — a queue of nothing but skipped files never
+    // produced a count, and closing over it would hide the reason it didn't.
+    if (!items.some((i) => i.phase === "done")) return;
+    const timer = setTimeout(() => {
+      armedRef.current = false;
+      onSettledRef.current?.();
+    }, SETTLED_CLOSE_MS);
+    return () => clearTimeout(timer);
+  }, [items]);
 
   /* One pass over the drop. Every file leaves this loop as a row: countable,
      skipped-with-a-reason, or attached to a media file as its sidecar. Nothing

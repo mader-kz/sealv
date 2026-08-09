@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import dynamic from "next/dynamic";
 import TopBar from "@/components/layout/TopBar";
 import Rail from "@/components/layout/Rail";
@@ -119,6 +119,9 @@ export default function Page(){
     if(!wideRef.current) setShowLeft(false);
   },[selectedId]);
   const closeInspector = ()=>{ setInspectorOpen(false); select(null); };
+  /* Stable identity: Dropzone hangs a timer off this, and a fresh arrow every
+     render would restart the countdown on every store tick. */
+  const closeUpload = useCallback(()=> setShowUpload(false), []);
 
   // Open the footage list once there's something in it — while empty, the
   // centred call-to-action is the only thing worth showing. Not below the
@@ -156,9 +159,10 @@ export default function Page(){
   /* Analytics wins the right column while it is open — a bar click must not
      destroy the panel it was clicked in. The inspector waits behind it. */
   const showInspector = !analyticsOpen && inspectorOpen && !!selectedId;
-  /* Both panels next to the map leave it as narrow as a small laptop does;
-     the chip drops its words rather than its numbers. */
-  const mapNarrow = !wide || (showLeft && (analyticsOpen || showInspector));
+  /* A small laptop leaves the map no room for words; the chip drops those
+     rather than its numbers. (The two-panel case that used to be here is now
+     unreachable: the chip only renders with the footage list closed.) */
+  const mapNarrow = !wide;
   const partial = totalRuns > 0 && loadedRuns > 0 && loadedRuns < totalRuns;
 
   /* A sortie still being counted lives only in this tab. Reloading throws the
@@ -207,7 +211,12 @@ export default function Page(){
               <div className="flex items-center gap-2">
                 {/* symmetric padding, not h-7: items-baseline packs a fixed-height
                     line to the top, so the text sat above centre */}
-                {!empty && (
+                {/* Not while the footage list is open: the panel's header
+                    prints this same estimate, in the same words, 340 px to the
+                    left. Two copies of one number invite the reader to check
+                    them against each other; the chip exists for the state
+                    where the panel is closed and nothing else says the total. */}
+                {!empty && !showLeft && (
                   <div
                     className="bg-surface border border-line rounded px-2.5 py-[3px] shadow-pop"
                     title={t("est.observedSub", { n: est.observed, m: brushed.length })}
@@ -285,7 +294,10 @@ export default function Page(){
                   <IconButton name="close" onClick={()=> setShowUpload(false)} title={t("btn.close")} />
                 </div>
                 <div className="p-3 overflow-y-auto min-h-0">
-                  <Dropzone />
+                  {/* The panel shows itself out once the queue is finished and
+                      nothing in it is waiting on a person. It never closes over
+                      a card that needs an answer — see Dropzone. */}
+                  <Dropzone onSettled={closeUpload} />
                 </div>
               </div>
             )}

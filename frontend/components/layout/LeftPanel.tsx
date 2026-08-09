@@ -15,8 +15,10 @@ import { REASON_MAX } from "@/lib/api";
 import ManualCount from "@/components/record/ManualCount";
 
 /* Nominal sortie row height, px. Corrected from a real measurement on the
-   first pass; the constant only has to be close enough to pick a first slice. */
-const ROW_H = 62;
+   first pass; the constant only has to be close enough to pick a first slice.
+   One line per sortie since the row shed its coordinates, so ~37 rather than
+   the two-storey 62. */
+const ROW_H = 37;
 /* Rows above and below the viewport. Also absorbs the sticky section header,
    which eats into the scroller's usable height. */
 const OVERSCAN = 6;
@@ -39,6 +41,27 @@ export default function LeftPanel(){
   const [showRetired, setShowRetired] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
   const [pendingClear, setPendingClear] = useState(false);
+  /* The header's overflow: a disclosure, not an ARIA menu — there is no
+     arrow-key ring here, so it does not claim one. Tab reaches the two
+     actions, Escape and a click outside put it away. */
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement|null>(null);
+  useEffect(()=>{
+    /* Closing forgets a half-answered "clear everything?". Every route out —
+       the button, Escape, a click elsewhere, the season emptying — lands here,
+       so the confirm can never be waiting behind a closed panel. */
+    if(!menuOpen){ setPendingClear(false); return; }
+    const onPointer = (e: MouseEvent)=>{
+      if(menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent)=>{ if(e.key==="Escape") setMenuOpen(false); };
+    document.addEventListener("mousedown", onPointer);
+    document.addEventListener("keydown", onKey);
+    return ()=>{
+      document.removeEventListener("mousedown", onPointer);
+      document.removeEventListener("keydown", onKey);
+    };
+  },[menuOpen]);
   const timeRange = useFootageStore(s=>s.timeRange);
   /* Read defensively: the store gains these while the archive is being
      restored, and this panel must compile and behave whether or not that
@@ -262,6 +285,72 @@ export default function LeftPanel(){
         <div className="flex gap-1.5">
           <Field value={q} onChange={setQ} placeholder={t("left.filter")} icon="search" />
           <Button icon="download" onClick={exportCSV} title={t("left.exportCsvTitle")} />
+          {/* The rare and the destructive, one click further away. Showing the
+              retired sorties and discarding the season are things a person does
+              once a month and once ever; they were sitting in the header at the
+              same weight as the search box. The overflow only exists once there
+              is a season to act on. */}
+          {footages.length>0 && (
+            <div className="relative shrink-0" ref={menuRef}>
+              <button
+                onClick={()=> setMenuOpen(v=>!v)}
+                aria-label={t("left.more")}
+                aria-expanded={menuOpen}
+                aria-controls="left-more"
+                title={t("left.more")}
+                className={`w-7 h-7 grid place-items-center rounded border border-line transition-colors ${
+                  menuOpen ? "bg-surface2 text-ink border-ink3" : "bg-surface2 text-ink2 hover:text-ink hover:border-ink3"
+                }`}
+              >
+                <span aria-hidden="true" className="text-sm leading-none -translate-y-[3px]">···</span>
+              </button>
+              {menuOpen && (
+                <div
+                  id="left-more"
+                  className="absolute right-0 top-8 z-30 w-[228px] p-1 bg-surface border border-line rounded shadow-pop"
+                >
+                  {retiredInWindow.length>0 && (
+                    <button
+                      onClick={()=>{ setShowRetired(v=>!v); setMenuOpen(false); }}
+                      className="w-full text-left px-2 py-1.5 rounded text-xs text-ink2 hover:bg-surface2 hover:text-ink transition-colors"
+                    >
+                      {showRetired
+                        ? t("rec.retire.hide", { n: retiredInWindow.length })
+                        : t("rec.retire.show", { n: retiredInWindow.length })}
+                    </button>
+                  )}
+                  {pendingClear ? (
+                    /* Discarding the season's work took one click on a 10px
+                       link. It still asks, and it asks here. */
+                    <div className="px-2 py-1.5 space-y-1.5">
+                      <p className="text-2xs text-ink2 leading-relaxed">{t("left.confirmClear")}</p>
+                      <div className="flex items-center gap-2 text-2xs">
+                        <button
+                          onClick={()=>{ clearAll(); setPendingClear(false); setMenuOpen(false); }}
+                          className="text-bad hover:underline"
+                        >
+                          {t("btn.confirm")}
+                        </button>
+                        <button
+                          onClick={()=> setPendingClear(false)}
+                          className="text-ink3 hover:text-ink transition-colors"
+                        >
+                          {t("btn.cancel")}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={()=> setPendingClear(true)}
+                      className="w-full text-left px-2 py-1.5 rounded text-xs text-ink2 hover:bg-surface2 hover:text-bad transition-colors"
+                    >
+                      {t("left.clearAll")}
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
         {/* A count a person made is a survey too. It sits next to the upload
             path rather than buried in a menu, because for most of this
@@ -269,41 +358,13 @@ export default function LeftPanel(){
         <Button icon="plus" full onClick={()=> setManualOpen(true)}>
           {t("rec.manual.open")}
         </Button>
-        {retiredInWindow.length>0 && (
-          <button
-            onClick={()=> setShowRetired(v=>!v)}
-            className="text-2xs text-ink3 hover:text-ink transition-colors"
-          >
-            {showRetired
-              ? t("rec.retire.hide", { n: retiredInWindow.length })
-              : t("rec.retire.show", { n: retiredInWindow.length })}
-          </button>
-        )}
-        {footages.length===0 ? (
+        {footages.length===0 && (
           /* Disabled while the archive is being read: seeding synthetic sorties
              into a store that hydrate() is about to fill is a race whose loser
              is the real data. */
           <Button variant="primary" full onClick={seedTestData} disabled={hydrating}>
             {hydrating ? `${t("est.restoring")}…` : t("left.loadTest")}
           </Button>
-        ) : pendingClear ? (
-          <div className="flex items-center gap-2 text-2xs">
-            <span className="text-ink2">{t("left.confirmClear")}</span>
-            <button
-              onClick={()=>{ clearAll(); setPendingClear(false); }}
-              className="text-bad hover:underline"
-            >
-              {t("btn.confirm")}
-            </button>
-            <button onClick={()=> setPendingClear(false)} className="text-ink3 hover:text-ink transition-colors">
-              {t("btn.cancel")}
-            </button>
-          </div>
-        ) : (
-          /* Discarding the season's work took one click on a 10px link. */
-          <button onClick={()=> setPendingClear(true)} className="text-2xs text-ink3 hover:text-ink transition-colors">
-            {t("left.clearAll")}
-          </button>
         )}
       </div>
 
@@ -337,42 +398,82 @@ export default function LeftPanel(){
               onKeyDown={(e)=>{
                 if(e.key==="Enter" || e.key===" "){ e.preventDefault(); open(); }
               }}
-              className={`group relative px-3 py-2.5 cursor-pointer border-b border-line-soft transition-colors outline-none focus-visible:bg-surface2 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent ${active?"bg-surface2":"hover:bg-surface2/60"}`}
+              className={`group relative px-3 py-2 cursor-pointer border-b border-line-soft transition-colors outline-none focus-visible:bg-surface2 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent ${active?"bg-surface2":"hover:bg-surface2/60"}`}
             >
               {active && <span className="absolute left-0 top-0 bottom-0 w-px bg-accent" />}
-              <div className="flex items-baseline gap-2">
+              {/* One line per sortie. The coordinates, the clip length and the
+                  track-point count used to fill a second storey with facts the
+                  inspector prints in full the instant this row is clicked — a
+                  list is for finding a sortie, not for reading one. What stays
+                  is what a person scans by: the name, what it is, how far the
+                  review got, when it landed, and the count. */}
+              <div className="flex items-baseline gap-1.5 overflow-hidden">
                 <span
-                  className={`text-sm truncate text-ink ${isManual ? "" : "font-mono"} ${f.retiredAt ? "line-through opacity-60" : ""}`}
+                  className={`text-sm truncate min-w-0 text-ink ${isManual ? "" : "font-mono"} ${f.retiredAt ? "line-through opacity-60" : ""}`}
                   title={title}
                 >
                   {title}
                 </span>
-                {f.source==="test" && <Pill>{t("pill.test")}</Pill>}
-                {/* One frame of a clip, not a photograph. It survives a reload
-                    because the archive stores the clip and the second, so the
-                    label is a fact about the row rather than a leftover from
-                    the session that made it. */}
-                {f.quickCount && (
-                  <Pill>
-                    <span title={t("ingest.quickFrom", { name: f.quickCount.fromVideo, s: f.quickCount.atSeconds })}>
-                      {t("pill.quick")}
-                    </span>
-                  </Pill>
+                {/* The place, by name once somebody has named it — three
+                    sorties over one beach are three identical filenames and
+                    this is the only thing that tells them apart. */}
+                {f.siteName && (
+                  <span className="text-2xs text-ink2 truncate min-w-0 max-w-[88px]" title={f.siteName}>
+                    {f.siteName}
+                  </span>
                 )}
-                {isManual && <Pill tone="accent">{t("rec.manual.pill")}</Pill>}
-                {f.retiredAt && <Pill>{t("rec.retire.pill")}</Pill>}
-                <span className="flex-1" />
+                <span className="shrink-0 flex items-baseline gap-1.5 empty:hidden">
+                  {f.source==="test" && <Pill>{t("pill.test")}</Pill>}
+                  {/* One frame of a clip, not a photograph. It survives a reload
+                      because the archive stores the clip and the second, so the
+                      label is a fact about the row rather than a leftover from
+                      the session that made it. */}
+                  {f.quickCount && (
+                    <Pill>
+                      <span title={t("ingest.quickFrom", { name: f.quickCount.fromVideo, s: f.quickCount.atSeconds })}>
+                        {t("pill.quick")}
+                      </span>
+                    </Pill>
+                  )}
+                  {isManual && <Pill tone="accent">{t("rec.manual.pill")}</Pill>}
+                  {f.retiredAt && <Pill>{t("rec.retire.pill")}</Pill>}
+                  {/* Losing the coordinates must not lose the fact that there
+                      are none: this sortie is in the list and on no map. */}
+                  {!isPlaced(f) && <Pill>{t("misc.notPlaced")}</Pill>}
+                </span>
+                <span className="flex-1 min-w-[2px]" />
+                {/* How far the review has got. Rulings, not confirmations: a
+                    reviewer who rejected every animal of this sortie has
+                    finished it. Printed only where there is something to
+                    review — "0/0" on a sortie with no reviewable row reads as
+                    neglect rather than as a fact about this build. */}
+                {review.reviewable>0 && (
+                  <span
+                    className="tnum text-2xs text-ink3 shrink-0"
+                    title={t("rec.review.short", { v: review.ruled, r: review.reviewable })}
+                  >
+                    {review.ruled}/{review.reviewable}
+                  </span>
+                )}
+                {/* Day and month at list density, the full date on hover —
+                    same formatter, same locale as every other date in the app. */}
+                <span
+                  className="tnum text-2xs text-ink3 shrink-0"
+                  title={t("left.rowDate", { when: formatDate(f.uploadedAt, lang) })}
+                >
+                  {formatDate(f.uploadedAt, lang, { day: "2-digit", month: "2-digit" })}
+                </span>
                 {/* A sortie still being counted has no band and no detections,
                     so countOf() is 0 — and "0 seals" reads as a finished survey
                     that found nothing. State, not a number, until there is one. */}
                 {f.status==="processing" ? (
-                  <Pill tone="accent">{t("left.processing")}…</Pill>
+                  <span className="shrink-0"><Pill tone="accent">{t("left.processing")}…</Pill></span>
                 ) : f.status==="error" ? (
-                  <Pill tone="bad">{t("left.failed")}</Pill>
+                  <span className="shrink-0"><Pill tone="bad">{t("left.failed")}</Pill></span>
                 ) : (
                   <>
-                    <span className="tnum text-sm text-ink">{sealCount}</span>
-                    <span className="text-2xs text-ink3">{tp(sealCount, "unit.seals")}</span>
+                    <span className="tnum text-sm text-ink shrink-0">{sealCount}</span>
+                    <span className="text-2xs text-ink3 shrink-0">{tp(sealCount, "unit.seals")}</span>
                   </>
                 )}
                 {/* Retire, not remove. The × used to filter the sortie out of
@@ -385,7 +486,7 @@ export default function LeftPanel(){
                   <button
                     onClick={(e)=>{e.stopPropagation(); setPendingRetire(f.id); setRetireReason(""); setRetireError(null);}}
                     onKeyDown={(e)=> e.stopPropagation()}
-                    className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 text-ink3 hover:text-bad transition-opacity"
+                    className="shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 text-ink3 hover:text-bad transition-opacity"
                     aria-label={t("rec.retire.action")}
                     title={t("rec.retire.action")}
                   >
@@ -434,39 +535,6 @@ export default function LeftPanel(){
                   </div>
                 </div>
               )}
-              <div className="text-xs text-ink3 mt-1 flex items-center gap-1.5 flex-wrap">
-                {/* The place, by name once somebody has named it. Falls back to
-                    the centre — not a latitude bucket named after a region.
-                    A sortie that flew no track and placed no animal has no
-                    centre either, and says so rather than printing NaN. */}
-                {f.siteName
-                  ? <span className="text-ink2 truncate max-w-[130px]" title={f.siteName}>{f.siteName}</span>
-                  : isPlaced(f)
-                    ? <span className="tnum">{f.center.lat.toFixed(2)}, {f.center.lng.toFixed(2)}</span>
-                    : <span className="text-ink3">{t("misc.notPlaced")}</span>}
-                {f.duration>0 && <>
-                  <span className="text-line">·</span>
-                  <span className="tnum">{f.duration}{t("unit.s")}</span>
-                </>}
-                {f.track.length>0 && <>
-                  <span className="text-line">·</span>
-                  <span className="tnum">{f.track.length} {tp(f.track.length, "unit.points")}</span>
-                </>}
-                <span className="text-line">·</span>
-                {/* The reader's language, like every other date in the app —
-                    this one was pinned to en-CA next to a localised one. */}
-                <span className="tnum">{formatDate(f.uploadedAt, lang)}</span>
-                {/* How far the review has got. Rulings, not confirmations: a
-                    reviewer who rejected every animal of this sortie has
-                    finished it, and the row used to still read 0. Printed only
-                    where there is something to review — "0/0" on a sortie with
-                    no reviewable row reads as neglect rather than as a fact
-                    about this build. */}
-                {review.reviewable>0 && <>
-                  <span className="text-line">·</span>
-                  <span className="tnum">{t("rec.review.short", { v: review.ruled, r: review.reviewable })}</span>
-                </>}
-              </div>
             </div>
           );
         })}
