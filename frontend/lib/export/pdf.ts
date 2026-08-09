@@ -134,7 +134,9 @@ function countText(lang: ReportLang, f: Footage): string {
  *  counted nothing. */
 function verifiedText(lang: ReportLang, f: Footage): string {
   const rs = reviewStats(f);
-  if (rs.total === 0) return "—";
+  /* A ground count is not unreviewed work; it is a different kind of evidence
+     and the column has nothing to say about it. */
+  if (rs.groundCount || rs.total === 0) return "—";
   if (rs.reviewable === 0) return tr(lang, "rep.notReviewable");
   /* Rulings over reachable rows. A rejection is a verdict and it is work done:
      scoring only confirmations printed a sortie whose animals were every one of

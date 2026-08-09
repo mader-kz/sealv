@@ -400,7 +400,12 @@ export default function RightInspector({ compact }: { compact?: boolean }){
           <Row
             label={t("row.review")}
             value={
-              review.reviewable === 0 ? (
+              review.groundCount ? (
+                /* A person's count has no per-animal record and never will —
+                   that is not the same claim as "this build cannot show you
+                   the rows", and it must not be printed as one. */
+                <span className="text-ink3">{t("rec.review.ground")}</span>
+              ) : review.reviewable === 0 ? (
                 <span className="text-ink3">{t("rec.review.nothing")}</span>
               ) : (
                 <span className="tnum text-2xs">

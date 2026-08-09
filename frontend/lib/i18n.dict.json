@@ -570,7 +570,10 @@
     "pill.quick": "кадр",
     "rec.quick.label": "Жылдам есеп",
     "rec.quick.tradeoff": "тек бір кадр — кадраралық диапазон жоқ",
-    "map.pinPrecisionTyped": "енгізілген күйінде дәл жазылады"
+    "map.pinPrecisionTyped": "енгізілген күйінде дәл жазылады",
+    "trust.rowGroundCount": "жерүсті есебі",
+    "trust.groundCountsExcluded": "Жоғарыдағы тексеру сандарына {n} жерүсті есебі кірмейді: адам санаған сан бойынша тексеретін жеке жазба жоқ, ол бағалауда қалады.",
+    "rec.review.ground": "жерүсті есебі — тексеретін жеке жазба жоқ"
   },
   "ru": {
     "brand.sub": "Учёт каспийского тюленя",
@@ -1143,7 +1146,10 @@
     "pill.quick": "кадр",
     "rec.quick.label": "Быстрый подсчёт",
     "rec.quick.tradeoff": "только один кадр — без межкадрового диапазона",
-    "map.pinPrecisionTyped": "записывается ровно так, как введено"
+    "map.pinPrecisionTyped": "записывается ровно так, как введено",
+    "trust.rowGroundCount": "наземный учёт",
+    "trust.groundCountsExcluded": "В цифры проверки выше не входят {n} наземных учёта: у числа, названного человеком, нет отдельных записей для проверки — в оценке оно остаётся.",
+    "rec.review.ground": "наземный учёт — отдельных записей для проверки нет"
   },
   "en": {
     "brand.sub": "Caspian seal survey",
@@ -1716,6 +1722,9 @@
     "pill.quick": "frame",
     "rec.quick.label": "Quick count",
     "rec.quick.tradeoff": "one frame only — no cross-frame band",
-    "map.pinPrecisionTyped": "recorded exactly as entered"
+    "map.pinPrecisionTyped": "recorded exactly as entered",
+    "trust.rowGroundCount": "ground count",
+    "trust.groundCountsExcluded": "The review figures above leave out {n} ground count(s): a number a person reported has no per-animal record to rule on. It stays in the estimate.",
+    "rec.review.ground": "ground count — no per-animal record to review"
   }
 }

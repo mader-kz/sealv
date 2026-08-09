@@ -32,7 +32,7 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import { isAssumedGsd } from "@/lib/analytics/area";
-import { reviewStats, seasonReviewStats } from "@/lib/analytics/review";
+import { isGroundCount, reviewStats, seasonReviewStats } from "@/lib/analytics/review";
 import { fetchJobs, type JobRow } from "@/lib/api";
 import { SectionHead } from "@/components/ui/primitives";
 import { useT } from "@/lib/i18n";
@@ -77,6 +77,9 @@ export default function TrustPanel({
   const { t, tp } = useT();
 
   const season = useMemo(() => seasonReviewStats(footages), [footages]);
+  /* Counts a person made. They are in the estimate and in no review figure —
+     there is no per-animal record to rule on and there never was one. */
+  const groundCounts = useMemo(() => footages.filter(isGroundCount).length, [footages]);
 
   /* Where each sortie's scale came from. explicit/optics were given or derived
      from real optics; anything prefixed assumed_ had a term guessed; the rest
@@ -230,6 +233,13 @@ export default function TrustPanel({
           <Figure value={season.unreviewable} label={t("trust.notReviewable")} />
         </div>
         <p className="text-2xs text-ink3 mt-1.5 leading-relaxed">{t("trust.notReviewableWhy")}</p>
+        {/* Ground counts are outside every figure above, and saying so is the
+            difference between an exclusion and an omission. */}
+        {groundCounts > 0 && (
+          <p className="text-2xs text-ink3 mt-1.5 leading-relaxed">
+            {t("trust.groundCountsExcluded", { n: groundCounts })}
+          </p>
+        )}
         {/* What the per-sortie fraction counts, said once. Its numerator is
             rulings of either kind, so a sortie whose animals were all rejected
             reads as finished rather than as untouched. */}
@@ -240,13 +250,20 @@ export default function TrustPanel({
           <ul className="mt-2 space-y-1">
             {perSortie.map((f) => {
               const rs = reviewStats(f);
+              /* A ground count has no filename, and printing an empty label
+                 next to a review state left a blank row claiming "nothing to
+                 review · 41 not reviewable" over a number a person reported.
+                 It is named for what it is and says so instead. */
+              const label = rs.groundCount ? t("rec.manual.title") : f.filename;
               return (
                 <li key={f.id} className="flex items-baseline justify-between gap-2 text-2xs">
-                  <span className="text-ink3 truncate" title={f.filename}>{f.filename}</span>
+                  <span className="text-ink3 truncate" title={label}>{label}</span>
                   <span className="tnum text-ink2 shrink-0">
-                    {rs.reviewable > 0
-                      ? t("trust.rowReviewed", { v: rs.ruled, r: rs.reviewable })
-                      : t("trust.rowNothing")}
+                    {rs.groundCount
+                      ? <span className="text-ink3">{t("trust.rowGroundCount")}</span>
+                      : rs.reviewable > 0
+                        ? t("trust.rowReviewed", { v: rs.ruled, r: rs.reviewable })
+                        : t("trust.rowNothing")}
                     {rs.unreviewable > 0 && (
                       <span className="text-ink3"> · {t("trust.rowNotReviewable", { n: rs.unreviewable })}</span>
                     )}

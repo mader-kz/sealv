@@ -33,7 +33,7 @@ execFileSync(
   { cwd: frontendDir, stdio: "inherit" },
 );
 
-const { reviewStats, seasonReviewStats, isAggregateMarker, pointIdOf } = await import(
+const { reviewStats, seasonReviewStats, isAggregateMarker, pointIdOf, isGroundCount } = await import(
   pathToFileURL(path.join(outDir, "analytics", "review.js")).href
 );
 
@@ -111,6 +111,36 @@ ok("pointIdOf reads the backend point id, or nothing",
   pointIdOf("run-7-p42") === 42 && pointIdOf("run-7-agg") === null &&
   pointIdOf("d1") === null && pointIdOf("") === null);
 ok("point 0 is a real point id, not a falsy miss", pointIdOf("run-7-p0") === 0);
+
+/* ------------------------------------------------------ a person's count */
+/* A shore count has no per-animal record and never will. That is a different
+   fact from "the engine counted these and this build cannot show you the
+   rows", and folding the two together printed a ground count of 41 under the
+   season's "animals the engine counted with no individual row to open". */
+for (const manual of [
+  { engine: "manual", detections: [{ id: "run-9-agg", status: "auto", count: 41 }] },
+  { band: { basis: "manual" }, detections: [{ id: "run-9-agg", status: "auto", count: 41 }], unplaced: 41 },
+]) {
+  const s = reviewStats(manual);
+  ok("a ground count is not an engine backlog",
+    s.groundCount === true && s.unreviewable === 0 && s.total === 0 && s.pct === null,
+    JSON.stringify(s));
+}
+ok("an engine run is not mistaken for a ground count",
+  reviewStats({ detections: rows("auto", 3) }).groundCount === false);
+ok("isGroundCount reads either the engine or the basis",
+  isGroundCount({ engine: "manual" }) && isGroundCount({ band: { basis: "manual" } }) &&
+  !isGroundCount({ engine: "countgd", band: { basis: "single_image" } }) &&
+  !isGroundCount(null));
+{
+  const season = seasonReviewStats([
+    { detections: rows("auto", 10) },
+    { engine: "manual", detections: [{ id: "run-9-agg", status: "auto", count: 41 }] },
+  ]);
+  ok("a season's review figures leave ground counts out entirely",
+    season.reviewable === 10 && season.unreviewable === 0 && season.total === 10,
+    JSON.stringify(season));
+}
 
 /* ------------------------------------------------------------- the season */
 {

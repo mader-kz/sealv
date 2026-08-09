@@ -228,7 +228,9 @@ export default function SiteDynamics({
                 <span className="block text-2xs text-ink3 mt-0.5 leading-tight">
                   {manual && <span className="text-ink2">{t("pill.manual")} · </span>}
                   {basis}
-                  {rs.reviewable > 0
+                  {rs.groundCount
+                    ? ` · ${t("rec.manual.pill")}`
+                    : rs.reviewable > 0
                     ? ` · ${t("dyn.reviewed", { v: rs.ruled, r: rs.reviewable })}`
                     : ""}
                   {rs.unreviewable > 0 ? ` · ${t("dyn.unreviewable", { n: rs.unreviewable })}` : ""}

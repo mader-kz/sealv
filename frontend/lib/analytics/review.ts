@@ -41,7 +41,21 @@ export type ReviewFootageLike = {
   detections?: ReviewDetectionLike[] | null;
   /** Animals the engine counted but could not place on the map. */
   unplaced?: number | null;
+  /** 'manual' for a count a person made on the ground. */
+  engine?: string | null;
+  band?: { basis?: string | null } | null;
 };
+
+/** A number a person reported, not one an engine produced.
+ *
+ *  It has no per-animal record and never will: nobody drew a box round each
+ *  seal on a beach. That is a different fact from "the engine counted these
+ *  and this build cannot show you the rows", and folding the two together put
+ *  a shore count of 41 under the sentence "animals the engine counted with no
+ *  individual row to open" — a claim about a pipeline that never ran. */
+export function isGroundCount(f: ReviewFootageLike | null | undefined): boolean {
+  return f?.engine === "manual" || f?.band?.basis === "manual";
+}
 
 export type ReviewStats = {
   /** Detections a human has confirmed as animals. */
@@ -68,6 +82,10 @@ export type ReviewStats = {
   /** reviewable + unreviewable — every animal a complete review would have to
    *  rule on, including the ones only a later build can reach. */
   total: number;
+  /** This is a person's count, so every figure above is zero and means it.
+   *  Reported so a panel can say "ground count" rather than print a review
+   *  state that does not apply to it. */
+  groundCount: boolean;
   /** Percent of `reviewable` that has been RULED ON, 0–100. NULL when there is
    *  nothing to review: "no work done" and "no work to do" are different
    *  claims and only one of them accuses the reviewer. */
@@ -97,7 +115,18 @@ const nonNegative = (v: unknown): number => {
 };
 
 /** One sortie's review state. */
+const NOTHING_TO_REVIEW: ReviewStats = {
+  verified: 0, rejected: 0, ruled: 0, reviewable: 0, unreviewable: 0,
+  total: 0, pct: null, groundCount: true,
+};
+
 export function reviewStats(f: ReviewFootageLike | null | undefined): ReviewStats {
+  /* A ground count leaves every review figure at zero, and `groundCount` says
+     why. Its aggregate marker used to land in `unreviewable`, which put a
+     person's shore count into the season's "animals the engine counted with no
+     row to open" — the engine never saw them. */
+  if (isGroundCount(f)) return NOTHING_TO_REVIEW;
+
   let verified = 0;
   let rejected = 0;
   let openReviewable = 0;
@@ -143,6 +172,7 @@ export function reviewStats(f: ReviewFootageLike | null | undefined): ReviewStat
     unreviewable,
     total: reviewable + unreviewable,
     pct: reviewable === 0 ? null : (ruled / reviewable) * 100,
+    groundCount: false,
   };
 }
 
@@ -155,6 +185,9 @@ export function seasonReviewStats(fs: ReviewFootageLike[] | null | undefined): R
   let rejected = 0;
   let reviewable = 0;
   let unreviewable = 0;
+  /* Ground counts contribute nothing to any term — reviewStats already returns
+     zeros for them — so a season of shore counts reads as "nothing to review",
+     which is true, rather than as a backlog nobody is working through. */
   for (const f of fs ?? []) {
     const s = reviewStats(f);
     verified += s.verified;
@@ -171,5 +204,6 @@ export function seasonReviewStats(fs: ReviewFootageLike[] | null | undefined): R
     unreviewable,
     total: reviewable + unreviewable,
     pct: reviewable === 0 ? null : (ruled / reviewable) * 100,
+    groundCount: false,
   };
 }
