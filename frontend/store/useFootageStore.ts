@@ -5,7 +5,8 @@ import type { Footage, Detection, TrackPoint, MapLayerState } from "@/lib/types"
 import { mockDetections, generateSeedTrack, KZ_SITES } from "@/lib/mock/detections";
 import {
   fetchStats, fetchRunPoints, fetchTrack, pointsToDetections, mediaFileUrl, editPoints,
-  patchSurvey, retireSurvey, unretireSurvey, createObservation, NOTES_MAX, REASON_MAX,
+  patchSurvey, retireSurvey, unretireSurvey, createObservation, correctCount, purgeSurvey,
+  NOTES_MAX, REASON_MAX,
 } from "@/lib/api";
 import { locationSourceOf } from "@/lib/api";
 import type { ObservationIn, StatsLatestRun, SurveyOut, SurveyPatch } from "@/lib/api";
@@ -23,6 +24,25 @@ export type ObservationInput = ObservationIn;
  *  reviewer has typed and the request has not gone yet — and it is a distinct
  *  claim from "error", which means the archive refused it. */
 export type NotesState = "saved" | "saving" | "unsaved" | "error";
+
+/** A standing count a PERSON corrected, and what it replaced.
+ *
+ *  Kept beside the Footage rather than on it for the reason `retirement` is:
+ *  the Footage carries the number, and this carries the claim about where the
+ *  number came from. It is not a display nicety — a corrected figure with no
+ *  visible trace of the measurement it corrected is an unsourced number, and
+ *  this product's whole argument is that its numbers are traceable. */
+export type CorrectionNote = {
+  /** The manual run that IS the standing count (not the run holding points). */
+  runId: string;
+  value: number;
+  reason: string | null;
+  by: string | null;
+  at: string | null;
+  /** The band this replaced, as the archive recorded it. Null only where the
+   *  survey had no count at all before — a first count, not a correction. */
+  previous: { best: number | null; basis: string | null; engine: string | null } | null;
+};
 
 type Store = {
   footages: Footage[];
@@ -48,6 +68,10 @@ type Store = {
    *  itself carries only `retiredAt`; the annotation lives here so a banner
    *  can say more than "retired" without inventing a field on the type. */
   retirement: Record<string, { reason: string | null; by: string | null }>;
+  /** Standing counts a person corrected, keyed by footage id. Written by
+   *  `correctFootageCount` and rebuilt by hydrate, so the badge and the
+   *  "was N" line survive a reload exactly as the retirement banner does. */
+  corrections: Record<string, CorrectionNote>;
   /** Progress of an in-flight multi-sortie site assignment, or null. */
   siteAssign: { done: number; total: number } | null;
   /** Frame geometry per footage, kept out of Footage because only one caller
@@ -93,6 +117,15 @@ type Store = {
   /** Take a sortie out of the counting without destroying it. */
   retireFootage: (footageId: string, reason: string) => Promise<boolean>;
   unretireFootage: (footageId: string) => Promise<boolean>;
+  /** Replace the standing count with a number a person is accountable for.
+   *  Records a correction against the same survey; nothing is overwritten. */
+  correctFootageCount: (
+    footageId: string,
+    value: number,
+    reason?: string | null,
+  ) => Promise<boolean>;
+  /** Destroy a retired sortie for good — rows and footage. No undo. */
+  purgeFootage: (footageId: string) => Promise<boolean>;
   /** Record a count a person made on the ground. */
   addObservation: (input: ObservationInput) => Promise<boolean>;
   seedTestData: () => void;
@@ -322,6 +355,7 @@ export const useFootageStore = create<Store>((set, get) => ({
   totalRuns: null,
   notesState: {},
   retirement: {},
+  corrections: {},
   siteAssign: null,
   frameGeom: {},
   verdictsInFlight: 0,
@@ -678,6 +712,156 @@ export const useFootageStore = create<Store>((set, get) => ({
     }
   },
 
+  /* Correcting the number itself — the one write in this store that changes
+     what the product reports about a colony.
+
+     It is NOT an overwrite, here or in the archive. The service records a
+     second run against the same survey with basis 'manual', and latest-per-
+     survey (the rule every reader already follows) makes it the standing
+     figure; the engine's run keeps its count, its animals and its edit log.
+     That is what makes a corrected figure defensible: the number a person
+     published and the number a model produced are both still quotable, side by
+     side, in `GET /v1/surveys/{id}/counts`.
+
+     The Footage keeps its id and its `runId` — both point at the run that
+     holds the animals, so review, the edit log and the evidence view go on
+     working against the rows they belong to. Only the band moves. hydrate()
+     rebuilds exactly this shape from the archive, so an F5 changes nothing. */
+  correctFootageCount: async (footageId, value, reason) => {
+    const lang = () => useLangStore.getState().lang;
+    const f = get().footages.find(x => x.id === footageId);
+    if (!f) return false;
+    if (!f.surveyId) {
+      toast.error(translate(lang(), "rec.correct.noSurvey"));
+      return false;
+    }
+    /* Refused before the request, against the same rule the service applies:
+       a fraction is rejected, never rounded. A count is the one number in this
+       archive that must not be silently adjusted on its way to storage. */
+    if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0) {
+      toast.error(translate(lang(), "rec.correct.badCount"));
+      return false;
+    }
+    const why = String(reason ?? "").trim().slice(0, REASON_MAX);
+    const who = getOperator();
+    try {
+      const out = await correctCount(f.surveyId, value, why || null, who);
+      /* The SERVICE's numbers, not the form's — what was stored is what the
+         panel must show, or a value the archive adjusted would render as if it
+         had been accepted verbatim. */
+      const run = out.run;
+      const standing = out.counts?.find(c => c.standing) ?? null;
+      const best = finiteOrNull(run.count_best) ?? value;
+      const previous = standing?.previous ?? null;
+      set(s => ({
+        footages: s.footages.map(x =>
+          x.id === footageId
+            ? {
+                ...x,
+                /* low = best = high. Not a band of width zero: a person's
+                   count has no cross-frame spread to measure, and hasRange is
+                   false so nothing downstream draws whiskers over it. */
+                band: {
+                  low: finiteOrNull(run.count_low) ?? best,
+                  best,
+                  high: finiteOrNull(run.count_high) ?? best,
+                  basis: run.basis || "manual",
+                },
+              }
+            : x),
+        /* Only where a number was actually replaced. A first count against a
+           survey that had none is not a correction of anything, and the badge
+           must not claim it was. */
+        corrections: previous
+          ? {
+              ...s.corrections,
+              [footageId]: {
+                runId: run.id,
+                value: best,
+                reason: standing?.reason ?? (why || null),
+                by: standing?.operator ?? who,
+                at: run.created_at ?? new Date().toISOString(),
+                previous: {
+                  best: previous.best ?? null,
+                  basis: previous.basis ?? null,
+                  engine: previous.engine ?? null,
+                },
+              },
+            }
+          : s.corrections,
+      }));
+      toast.success(translate(lang(), "rec.correct.saved", { n: best }));
+      return true;
+    } catch (e) {
+      toast.error(`${translate(lang(), "rec.correct.failed")}: ${messageOf(e)}`);
+      return false;
+    }
+  },
+
+  /* The end of the line. Everything else in this store is reversible or
+     additive; this destroys a survey, its runs, every animal, the correction
+     log and the footage on disk, and nothing brings them back.
+
+     Reachable only for a sortie already RETIRED — the service answers 409
+     otherwise and this does not try to route round that. Two steps, two
+     decisions: retirement is the one that takes a reason and can be undone,
+     and it is what stands between a season's work and one click. */
+  purgeFootage: async (footageId) => {
+    const lang = () => useLangStore.getState().lang;
+    const f = get().footages.find(x => x.id === footageId);
+    if (!f) return false;
+
+    /* Never sent to the service, and this is the whole of the operation for
+       test data and an upload that never reached it: there is no archive row,
+       so forgetting it here IS the durable outcome. Same rule retireFootage
+       follows, and the caller says so before asking. */
+    const forget = () => {
+      releaseBlob(f.videoUrl);
+      set(s => {
+        const retirement = { ...s.retirement };
+        const corrections = { ...s.corrections };
+        const frameGeom = { ...s.frameGeom };
+        const notesState = { ...s.notesState };
+        delete retirement[footageId];
+        delete corrections[footageId];
+        delete frameGeom[footageId];
+        delete notesState[footageId];
+        return {
+          footages: s.footages.filter(x => x.id !== footageId),
+          detections: s.detections.filter(d => d.footageId !== footageId),
+          selectedId: s.selectedId === footageId ? null : s.selectedId,
+          retirement, corrections, frameGeom, notesState,
+        };
+      });
+    };
+
+    if (!f.surveyId) {
+      forget();
+      return true;
+    }
+    try {
+      const receipt = await purgeSurvey(f.surveyId);
+      forget();
+      /* What actually went, from the service's own count — not a restatement
+         of what the confirmation promised. A file the service could not remove
+         is said out loud: an orphan in the workspace is somebody's problem and
+         a silent success would hide it. */
+      toast.success(
+        translate(lang(), "rec.purge.done", {
+          files: receipt.files_removed ?? receipt.files ?? 0,
+          points: receipt.counts?.points ?? 0,
+        }),
+      );
+      if (receipt.files_failed) {
+        toast.error(translate(lang(), "rec.purge.filesLeft", { n: receipt.files_failed }));
+      }
+      return true;
+    } catch (e) {
+      toast.error(`${translate(lang(), "rec.purge.failed")}: ${messageOf(e)}`);
+      return false;
+    }
+  },
+
   /* A count a person made, standing on the shore. It becomes a sortie because
      that is what it is - one visit to one place on one date - and the site
      estimate treats it as such. What it is NOT is an engine result: the band
@@ -757,7 +941,7 @@ export const useFootageStore = create<Store>((set, get) => ({
     set({
       footages: [], detections: [], selectedId: null, pinPoints: [],
       loadedRuns: 0, totalRuns: null, hydrateSkipped: 0, hydrateError: null,
-      notesState: {}, retirement: {}, siteAssign: null, frameGeom: {},
+      notesState: {}, retirement: {}, corrections: {}, siteAssign: null, frameGeom: {},
     });
   },
   /* Reload the season's counts from the service. The store is browser memory;
@@ -795,6 +979,7 @@ export const useFootageStore = create<Store>((set, get) => ({
       f: Footage,
       geom: { widthPx: number; heightPx: number; frames: number | null },
       retired: { reason: string | null; by: string | null } | null,
+      corrected: CorrectionNote | null,
     ) => set(s => {
       if (s.footages.some(x => x.id === f.id)) return s;
       return {
@@ -803,15 +988,33 @@ export const useFootageStore = create<Store>((set, get) => ({
         loadedRuns: s.loadedRuns + 1,
         frameGeom: { ...s.frameGeom, [f.id]: geom },
         retirement: retired ? { ...s.retirement, [f.id]: retired } : s.retirement,
+        corrections: corrected ? { ...s.corrections, [f.id]: corrected } : s.corrections,
       };
     });
     const skip = (n = 1) => set(s => ({ hydrateSkipped: s.hydrateSkipped + n }));
 
     const loadRun = async (r: StatsLatestRun): Promise<void> => {
-      const id = `run-${r.run_id}`;
+      /* A standing count somebody corrected by hand. The row that arrives is
+         the CORRECTION - it carries the number, the media and the survey, but
+         no animals, because a person typed it. The engine's run is still in
+         the archive holding every point, every verdict and every edit, and
+         `evidence_run` is the thread back to it.
+
+         So the sortie is keyed by the run that holds the evidence, not by the
+         run that holds the number. Keyed the other way, correcting a count
+         would silently empty the sortie: 643 animals off the map, an empty
+         review queue, a dead edit log - and it would all come back if the
+         correction were undone, which is exactly the kind of "did the data
+         move?" question this product must never make somebody ask. */
+      const corr = r.correction ?? null;
+      const evidenceRun =
+        typeof corr?.evidence_run === "string" && corr.evidence_run
+          ? corr.evidence_run
+          : r.run_id;
+      const id = `run-${evidenceRun}`;
       if (get().footages.some(f => f.id === id)) return;
       const [pts, track] = await Promise.all([
-        fetchRunPoints(r.run_id),
+        fetchRunPoints(evidenceRun),
         r.media_id ? fetchTrack(r.media_id).catch(() => []) : Promise.resolve([]),
       ]);
       const { placed, unplaced, pixels } = pointsToDetections(id, pts.points);
@@ -903,7 +1106,14 @@ export const useFootageStore = create<Store>((set, get) => ({
         retiredAt: r.retired_at ?? null,
         altitudeM: r.altitude_m ?? null,
         tideState: r.tide_state ?? null,
-        engine: r.engine ?? null,
+        /* What produced the DETECTIONS on this sortie, which after a
+           correction is still the engine that made them - the correction
+           produced a number, not the animals. Reading 'manual' off the
+           correction row here would print "ground count" over a drone sortie
+           and hide its filename. The standing number's own provenance is not
+           lost by this: `band.basis` says 'manual' and the correction note
+           below says who changed it, to what and why. */
+        engine: corr?.previous?.engine ?? r.engine ?? null,
         falsePositiveRisk: r.false_positive_risk ?? null,
         falsePositiveBasis: Array.isArray(r.false_positive_basis) ? r.false_positive_basis : null,
         track: trk,
@@ -919,7 +1129,10 @@ export const useFootageStore = create<Store>((set, get) => ({
            note the operator can edit away. */
         source: quick ? "frame" : "archive",
         quickCount: quick,
-        runId: r.run_id,
+        /* The run that owns the points, so a verdict written from here reaches
+           the rows it is about. The correction's own run has no points and a
+           PATCH against it would be refused, one animal at a time. */
+        runId: evidenceRun,
         mediaId: r.media_id ?? undefined,
         videoUrl: r.kind === "video" && r.media_id ? mediaFileUrl(r.media_id) : undefined,
         band: { low: r.low ?? null, best, high: r.high ?? null, basis: r.basis ?? "" },
@@ -953,6 +1166,30 @@ export const useFootageStore = create<Store>((set, get) => ({
          unsaid rather than filled in. */
       r.retired_at
         ? { reason: r.retired_reason ?? null, by: r.retired_by ?? null }
+        : null,
+      /* The correction, as the archive recorded it - so the badge, the person
+         who signed it and the number it replaced are all still there after an
+         F5. Null where nobody corrected anything, which is almost every row.
+
+         `corrects_run` is what makes it a correction. A hand count entered
+         against a survey that had NO count is a first count, not a correction
+         of one, and badging it "corrected by hand" would claim a number was
+         replaced when none existed. */
+      corr && corr.corrects_run
+        ? {
+            runId: r.run_id,
+            value: best ?? 0,
+            reason: corr.reason ?? null,
+            by: corr.operator ?? null,
+            at: instantFromService(r.created_at),
+            previous: corr.previous
+              ? {
+                  best: corr.previous.best ?? null,
+                  basis: corr.previous.basis ?? null,
+                  engine: corr.previous.engine ?? null,
+                }
+              : null,
+          }
         : null,
       );
     };

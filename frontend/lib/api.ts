@@ -168,6 +168,36 @@ export type StatsLatestRun = {
      reassurance this product exists not to give. Null = never recorded. */
   false_positive_risk?: string | null;
   false_positive_basis?: string[] | null;
+  /* Set only when the standing count of this survey is a human's CORRECTION of
+     an earlier one. Absent everywhere else, which is almost everywhere — so
+     `if (row.correction)` reads the same against a service too old to send it.
+     `evidence_run` is the run that still holds the animals: this row's own run
+     has none (a person typed a number), and fetching points from it would
+     empty a sortie whose detections are all still in the archive. */
+  correction?: RunCorrection | null;
+};
+
+/* What a manual correction replaced, and who replaced it. The engine's run is
+   not touched by a correction — it keeps its count, its animals and its edit
+   log — so both numbers stay quotable and this is the half that says how the
+   standing one came to differ. */
+export type RunCorrection = {
+  /* The run this one superseded. For a correction of a correction that is the
+     previous correction, not the engine run. */
+  corrects_run?: string | null;
+  /* The run that carries the points and the media — always the engine run,
+     however long the chain of corrections above it. */
+  evidence_run?: string | null;
+  operator?: string | null;
+  reason?: string | null;
+  previous?: {
+    low?: number | null;
+    best?: number | null;
+    high?: number | null;
+    basis?: string | null;
+    engine?: string | null;
+    run_id?: string | null;
+  } | null;
 };
 
 /* The wire types above keep `location_source` as a plain string on purpose: a
@@ -756,6 +786,146 @@ export async function retireSurvey(
 
 export async function unretireSurvey(id: string): Promise<SurveyOut> {
   return jsonOrThrow(await fetch(`${API}/v1/surveys/${id}/unretire`, { method: "POST" }));
+}
+
+/* ------------------------------------------------- counts of one sortie */
+
+/* One line of a sortie's count history. The engine's run and every human
+   correction above it, in one list, newest first — `standing` marks the one
+   the whole product is currently reporting. */
+export type SurveyCount = {
+  run_id: string;
+  engine: string | null;
+  basis: string | null;
+  low: number | null;
+  best: number | null;
+  high: number | null;
+  created_at: string | null;
+  media_id: string | null;
+  /* The count that currently represents this survey. Derived server-side from
+     the ordering, never stored — so this list and the archive listing cannot
+     disagree about which number is the one being published. */
+  standing: boolean;
+  correction: boolean;
+  corrects_run: string | null;
+  evidence_run: string | null;
+  /* Who entered this number and why. Null on an engine run: nobody signed it
+     and it needs no reason. */
+  operator: string | null;
+  reason: string | null;
+  /* How a ground count was arrived at (binoculars, boat transect…). */
+  method: string | null;
+  previous: RunCorrection["previous"];
+};
+
+export async function fetchSurveyCounts(id: string): Promise<SurveyCount[]> {
+  const d = await jsonOrThrow(await fetch(`${API}/v1/surveys/${id}/counts`));
+  return Array.isArray(d.counts) ? d.counts : [];
+}
+
+export type CorrectionOut = {
+  run: {
+    id: string;
+    engine: string;
+    basis: string;
+    count_low: number;
+    count_best: number;
+    count_high: number;
+    media_id: string | null;
+    created_at: string;
+    quality?: Record<string, unknown> | null;
+  };
+  supersedes: { id: string; count_best: number | null; basis: string | null } | null;
+  counts: SurveyCount[];
+};
+
+/** Correct the standing count of a sortie that already exists.
+ *
+ *  Not an edit of the number: the service records a new run with basis
+ *  'manual' against the same survey, latest-per-survey makes it the standing
+ *  figure, and the engine's run keeps everything it had. Both numbers stay in
+ *  `counts`, which is what lets a corrected figure be defended later.
+ *
+ *  Validated here against the service's own limits so a value that types fine
+ *  cannot come back as a 400 behind a generic toast: whole and non-negative
+ *  (`_whole` on the service refuses a fraction rather than rounding it — a
+ *  count is the one number that must never be silently adjusted), and the two
+ *  free-text fields cut at the columns' caps. */
+export async function correctCount(
+  surveyId: string,
+  count: number,
+  reason?: string | null,
+  operator?: string | null,
+): Promise<CorrectionOut> {
+  if (!Number.isFinite(count) || !Number.isInteger(count) || count < 0) {
+    throw new Error(`corrected count must be a whole number >= 0, got ${count}`);
+  }
+  const why = typeof reason === "string" ? reason.trim().slice(0, REASON_MAX) : null;
+  /* Same rule as retireSurvey and editPoints: an explicit null records that
+     nobody said who they were, and omitting the argument means "whoever is at
+     the keyboard". Substituting a stored name over an explicit null would put
+     a name on a correction that person did not claim. */
+  const who = operator === undefined ? getOperator() : operator;
+  return jsonOrThrow(
+    await fetch(`${API}/v1/surveys/${surveyId}/counts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        count,
+        reason: why || null,
+        operator: who ? String(who).slice(0, OPERATOR_MAX) : null,
+      }),
+    }),
+  );
+}
+
+/* ------------------------------------------------------------ hard delete */
+
+/* Exactly what a purge destroys — or would destroy, from the preview. The
+   counts come from the same function that does the deleting, so a confirmation
+   dialog states real numbers rather than the client's guess at them.
+   `files` is a COUNT: the service withholds workspace paths. */
+export type PurgeReceipt = {
+  survey_id: string;
+  retired: boolean;
+  retired_at: string | null;
+  retired_reason: string | null;
+  counts: {
+    media: number;
+    jobs: number;
+    runs: number;
+    points: number;
+    edits: number;
+    track_points: number;
+  };
+  filenames: string[];
+  files: number;
+  dry_run: boolean;
+  /* Preview only: whether the retire step has been taken yet. */
+  deletable?: boolean;
+  /* Delete only: what actually went from disk, and what would not go. */
+  files_removed?: number;
+  files_failed?: number;
+};
+
+/** What `purgeSurvey` would destroy, without destroying it. Answers on a
+ *  sortie that is still in the estimate too, with `deletable: false` — that is
+ *  how the UI learns the retire step is still owed while it can still say what
+ *  is at stake. */
+export async function fetchPurgePreview(id: string): Promise<PurgeReceipt> {
+  return jsonOrThrow(await fetch(`${API}/v1/surveys/${id}/purge`));
+}
+
+/** Destroy a retired sortie: its survey row, its runs, every animal, the edit
+ *  log, the media rows and the footage on disk. There is no undo and no
+ *  archive copy — this is the one call in this client that ends evidence.
+ *
+ *  Refused with 409 on a sortie that has not been retired first. That gate is
+ *  the product decision, not a technicality: retirement is reversible and
+ *  takes a reason, so a season cannot be destroyed by one click, while test
+ *  junk can still be removed completely. */
+export async function purgeSurvey(id: string): Promise<PurgeReceipt> {
+  return jsonOrThrow(await fetch(`${API}/v1/surveys/${id}`, { method: "DELETE" }));
 }
 
 export type SiteOut = {

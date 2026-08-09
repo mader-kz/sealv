@@ -1,6 +1,6 @@
 "use client";
 import { useFootageStore } from "@/store/useFootageStore";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Row, SectionHead, Pill } from "@/components/ui/primitives";
 import Icon from "@/components/ui/Icon";
 import EvidenceView, { EvidenceFrame } from "@/components/evidence/EvidenceView";
@@ -16,6 +16,11 @@ import SortieNotes from "@/components/record/SortieNotes";
 import SitePicker from "@/components/record/SitePicker";
 import SurveyMetaEdit from "@/components/record/SurveyMetaEdit";
 import EditHistory from "@/components/record/EditHistory";
+import {
+  fetchSurveyCounts, fetchPurgePreview, REASON_MAX,
+  type PurgeReceipt, type SurveyCount,
+} from "@/lib/api";
+import type { Footage } from "@/lib/types";
 
 export default function RightInspector({ compact }: { compact?: boolean }){
   const { t, tp, lang } = useT();
@@ -23,11 +28,30 @@ export default function RightInspector({ compact }: { compact?: boolean }){
   const selectedId = useFootageStore(s=>s.selectedId);
   const select = useFootageStore(s=>s.select);
   const retirement = useFootageStore(s=>s.retirement);
+  const corrections = useFootageStore(s=>s.corrections);
   const unretireFootage = useFootageStore(s=>s.unretireFootage);
+  const correctFootageCount = useFootageStore(s=>s.correctFootageCount);
   const openReview = useReviewStore(s=>s.openReview);
   const [evidenceOpen, setEvidenceOpen] = useState(false);
   const [replayOpen, setReplayOpen] = useState(false);
   const f = useMemo(()=> footages.find(x=>x.id===selectedId) || null, [footages, selectedId]);
+
+  /* Correcting the number. Open/closed, the draft, and what the last attempt
+     said — held here rather than in the store because a half-typed value is
+     not archive state, and the store must never hold a count nobody saved. */
+  const [correctOpen, setCorrectOpen] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [why, setWhy] = useState("");
+  const [correctError, setCorrectError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  /* A selection change swaps the sortie under an open form; a value typed for
+     sortie A must never be one Enter away from landing on sortie B. */
+  useEffect(() => {
+    setCorrectOpen(false);
+    setDraft("");
+    setWhy("");
+    setCorrectError(null);
+  }, [selectedId]);
 
   /* Copy-to-clipboard outcome, shown for ~1.5s. It is not cosmetic: the
      documented deployment is a FastAPI container on a plain-http LAN, where
@@ -116,10 +140,26 @@ export default function RightInspector({ compact }: { compact?: boolean }){
      as NOT REVIEWABLE rather than folded into the denominator: "0 of 562
      verified" over rows nobody can rule on reads as neglect, not as a
      structural limit of this build. */
-  const review = reviewStats(f);
+  /* A standing count a person corrected by hand, or null. Everything below
+     reads this rather than inferring it from `basis`, because a corrected
+     sortie and a shore count both store basis 'manual' and they are not the
+     same thing: one has footage, animals and a review queue behind it. */
+  const corrected = corrections[f.id] ?? null;
+  /* Review is a question about the ENGINE's animals, which a correction did
+     not touch — so it is answered against the basis the engine gave. Left as
+     'manual', `reviewStats` reports "ground count" over a drone sortie whose
+     2431 detections are all still there to rule on. */
+  const review = reviewStats(
+    corrected && f.band
+      ? { ...f, band: { ...f.band, basis: corrected.previous?.basis ?? "" } }
+      : f,
+  );
   /* A count a person made rather than the engine. Labelled, never dressed up
      with a range it does not have. */
   const isManual = f.engine === "manual";
+  /* Nothing to correct where the archive has no survey behind this row: test
+     data and an upload that never reached the service live in this tab only. */
+  const canCorrect = !!f.surveyId && f.status !== "processing" && f.status !== "error";
   const retired = f.retiredAt ?? null;
   const retiredNote = retirement[f.id] ?? null;
   /* "On map" means animals, so it counts animals. `detections.length` is the
@@ -160,6 +200,12 @@ export default function RightInspector({ compact }: { compact?: boolean }){
             {retiredNote?.reason && retiredNote?.by ? " · " : null}
             {retiredNote?.by ? t("rec.retire.byWho", { who: retiredNote.by }) : null}
           </div>
+          {/* The second step, and only ever the second. Withdrawing a sortie is
+              reversible and takes a reason; this destroys it. Offering both at
+              once would put "delete for ever" one click from a season's work,
+              so the irreversible one lives inside the banner the reversible one
+              raised. */}
+          <PurgeControl f={f} />
         </div>
       )}
 
@@ -179,6 +225,91 @@ export default function RightInspector({ compact }: { compact?: boolean }){
           <div className="flex items-baseline gap-2">
             <span className="text-hero tnum font-medium leading-none">{totalSeals}</span>
             <span className="text-sm text-ink2">{tp(totalSeals, "insp.sealsCounted")}</span>
+            <span className="flex-1" />
+            {/* The count is the one number a reviewer cannot fix from the
+                review queue: ruling on animals moves the verified share, not
+                the engine's estimate. This is where a person who counted the
+                frame themselves says so. */}
+            {canCorrect && !correctOpen && (
+              <button
+                onClick={() => {
+                  setDraft(String(totalSeals));
+                  setWhy("");
+                  setCorrectError(null);
+                  setCorrectOpen(true);
+                }}
+                className="text-2xs text-ink3 hover:text-ink transition-colors shrink-0"
+              >
+                {t("rec.correct.action")}
+              </button>
+            )}
+          </div>
+        )}
+
+        {correctOpen && (
+          <div className="mt-3 space-y-2 rounded border border-line bg-surface2 p-2.5">
+            {/* Said before the field, not after it. What this does is replace
+                the number the whole product reports for this sortie — and the
+                sentence has to promise only what the archive actually does:
+                the previous count is kept, not overwritten. */}
+            <p className="text-2xs text-ink2 leading-relaxed">{t("rec.correct.explain")}</p>
+            <label className="block">
+              <span className="sr-only">{t("rec.correct.countLabel")}</span>
+              <input
+                type="number"
+                min={0}
+                step={1}
+                inputMode="numeric"
+                autoFocus
+                value={draft}
+                onChange={(e) => { setDraft(e.currentTarget.value); setCorrectError(null); }}
+                aria-label={t("rec.correct.countLabel")}
+                className="w-full bg-bg border border-line rounded px-2 py-1 text-sm tnum text-ink outline-none focus:border-accent"
+              />
+            </label>
+            <input
+              type="text"
+              value={why}
+              /* The service caps this at REASON_MAX and refuses past it; the
+                 input stops at the same number so a reason that types fine
+                 cannot 400 behind a generic failure toast. */
+              maxLength={REASON_MAX}
+              onChange={(e) => setWhy(e.currentTarget.value)}
+              placeholder={t("rec.correct.reasonPlaceholder")}
+              aria-label={t("rec.correct.reasonLabel")}
+              className="w-full bg-bg border border-line rounded px-2 py-1 text-2xs text-ink outline-none focus:border-accent"
+            />
+            {correctError && <p className="text-2xs text-bad leading-relaxed">{correctError}</p>}
+            <div className="flex items-center gap-2">
+              <Button
+                variant="primary"
+                disabled={saving}
+                onClick={async () => {
+                  /* Parsed strictly. `Number("12abc")` is NaN and
+                     `parseInt("12.7")` is 12 — one of those silently stores a
+                     count nobody entered, which is the failure mode a counting
+                     product can least afford. */
+                  const n = Number(draft.trim());
+                  if (!draft.trim() || !Number.isFinite(n) || !Number.isInteger(n) || n < 0) {
+                    setCorrectError(t("rec.correct.badCount"));
+                    return;
+                  }
+                  setSaving(true);
+                  const ok = await correctFootageCount(f.id, n, why);
+                  setSaving(false);
+                  if (ok) { setCorrectOpen(false); setWhy(""); }
+                  else setCorrectError(t("rec.correct.failed"));
+                }}
+              >
+                {saving ? t("rec.correct.saving") : t("rec.correct.save")}
+              </Button>
+              <button
+                onClick={() => { setCorrectOpen(false); setCorrectError(null); }}
+                className="text-2xs text-ink3 hover:text-ink transition-colors"
+              >
+                {t("btn.cancel")}
+              </button>
+            </div>
           </div>
         )}
 
@@ -226,14 +357,39 @@ export default function RightInspector({ compact }: { compact?: boolean }){
           {/* A manual basis is not an engine basis and must not look like one:
               the accent pill says a person produced this number, and the line
               under it says what that costs — no cross-frame range. */}
-          {isManual
-            ? <Pill tone="accent">{t("rec.manual.pill")}</Pill>
-            : f.band?.basis && <Pill tone="neutral">{basisText(lang, f.band.basis)}</Pill>}
+          {/* A corrected number is a person's number, and the pill says which
+              KIND of person's: `basisText` would render the stored 'manual'
+              through a fallback that prints the raw English word in all three
+              languages, and "ground count" would be false over footage nobody
+              stood in front of. */}
+          {corrected
+            ? <Pill tone="accent">{t("rec.correct.pill")}</Pill>
+            : isManual
+              ? <Pill tone="accent">{t("rec.manual.pill")}</Pill>
+              : f.band?.basis && <Pill tone="neutral">{basisText(lang, f.band.basis)}</Pill>}
           {retired && <Pill tone="neutral">{t("rec.retire.pill")}</Pill>}
           {provenance && <span className="text-2xs text-ink3">{provenance}</span>}
         </div>
-        {isManual && (
+        {(isManual || corrected) && (
           <p className="text-2xs text-ink3 mt-1.5 leading-relaxed">{t("rec.manual.noBand")}</p>
+        )}
+        {/* What the standing number replaced, who replaced it and why — the
+            three facts that let a corrected figure be defended a year later.
+            The superseded count is named out loud: a correction whose "before"
+            is invisible is indistinguishable from an overwrite. */}
+        {corrected && (
+          <div className="text-2xs text-ink3 mt-1 leading-relaxed break-words">
+            {corrected.previous?.best != null
+              ? t("rec.correct.was", {
+                  n: corrected.previous.best,
+                  basis: corrected.previous.basis
+                    ? basisText(lang, corrected.previous.basis)
+                    : t("rep.basisNone"),
+                })
+              : null}
+            {corrected.by ? ` · ${t("rec.correct.byWho", { who: corrected.by })}` : null}
+            {corrected.reason ? ` · ${t("rec.correct.reasonIs", { reason: corrected.reason })}` : null}
+          </div>
         )}
       </div>
 
@@ -470,6 +626,9 @@ export default function RightInspector({ compact }: { compact?: boolean }){
             what was just written down. */}
         <SortieNotes f={f} />
         <SurveyMetaEdit f={f} />
+        {/* Two logs, two questions. This one answers "what has this sortie's
+            COUNT been", the one under it "who ruled on which animal". */}
+        <CountHistory surveyId={f.surveyId ?? null} standingRunId={corrected?.runId ?? f.runId ?? null} />
         <EditHistory f={f} />
 
         <div className="px-4 pb-4 flex gap-1.5">
@@ -519,6 +678,216 @@ export default function RightInspector({ compact }: { compact?: boolean }){
             {copyState === "ok" ? t("insp.copied") : copyState === "fail" ? t("insp.copyFailed") : ""}
           </span>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------- the count history
+
+   Every number this sortie has ever carried: the engine's run and each human
+   correction above it, newest first, with the standing one marked.
+
+   This is the panel that makes "correct the count" an honest operation rather
+   than an edit. The archive keeps both runs either way — but a record nobody
+   can read is not a record, and without this the only visible difference
+   between a corrected count and an overwritten one is a badge.
+
+   Loaded on demand, like the edit log next to it: nothing should fetch a
+   history nobody asked to see. */
+function CountHistory({
+  surveyId,
+  standingRunId,
+}: {
+  surveyId: string | null;
+  standingRunId: string | null;
+}) {
+  const { t, lang } = useT();
+  const [open, setOpen] = useState(false);
+  const [rows, setRows] = useState<SurveyCount[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  /* Reset on a different sortie AND on a new standing count. The second is
+     what keeps this from showing a stale history the moment somebody corrects
+     a number with the panel already open — the list would then be missing the
+     very row they just wrote. */
+  useEffect(() => {
+    setRows(null);
+    setError(null);
+  }, [surveyId, standingRunId]);
+
+  const load = useCallback(async () => {
+    if (!surveyId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      setRows(await fetchSurveyCounts(surveyId));
+    } catch (e) {
+      setError(`${t("rec.counts.failed")}: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setLoading(false);
+    }
+  }, [surveyId, t]);
+
+  /* Reloads when a correction lands under an open panel, for the reason
+     above. Not on mount: `open` is false there. */
+  useEffect(() => {
+    if (open && rows === null && !loading && !error) void load();
+  }, [open, rows, loading, error, load]);
+
+  return (
+    <div className="px-4 py-3 border-b border-line">
+      <SectionHead
+        title={t("rec.counts.title")}
+        className="mb-1.5"
+        right={
+          surveyId ? (
+            <button
+              onClick={() => setOpen(!open)}
+              aria-expanded={open}
+              className="text-2xs text-ink3 hover:text-ink transition-colors"
+            >
+              {open ? t("rec.counts.hide") : t("rec.counts.show")}
+            </button>
+          ) : undefined
+        }
+      />
+      {!surveyId ? (
+        <p className="text-2xs text-ink3 leading-relaxed">{t("rec.counts.noSurvey")}</p>
+      ) : open ? (
+        loading ? (
+          <p className="text-2xs text-ink3">{t("rec.counts.loading")}</p>
+        ) : error ? (
+          <p className="text-2xs text-bad leading-relaxed">{error}</p>
+        ) : rows && rows.length ? (
+          <div className="max-h-[180px] overflow-auto -mx-1 px-1">
+            {rows.map((c) => (
+              <div
+                key={c.run_id}
+                className="flex items-baseline gap-2 py-1 border-b border-line-soft last:border-0"
+              >
+                <span className={`text-xs tnum shrink-0 w-[52px] ${c.standing ? "text-ink" : "text-ink3"}`}>
+                  {c.best ?? "—"}
+                </span>
+                <span className="text-2xs text-ink3 flex-1 truncate">
+                  {/* The engine's own word for how it counted, or the fact
+                      that a person entered this one. Never both, and never a
+                      band's label over a number that has no band. */}
+                  {c.correction && c.corrects_run
+                    ? t("rec.correct.pill")
+                    : c.engine === "manual"
+                      ? t("rec.manual.pill")
+                      : c.basis
+                        ? basisText(lang, c.basis)
+                        : t("rep.basisNone")}
+                  {c.operator ? ` · ${c.operator}` : ""}
+                  {c.reason ? ` · ${c.reason}` : ""}
+                </span>
+                {c.standing && <Pill tone="accent">{t("rec.counts.standing")}</Pill>}
+                <span className="text-2xs text-ink3 tnum shrink-0">
+                  {c.created_at ? formatDate(c.created_at, lang) : "—"}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-2xs text-ink3">{t("rec.counts.empty")}</p>
+        )
+      ) : null}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------ hard delete
+
+   The end of the two-step. Retirement withdrew this sortie from the estimate
+   and can be undone; this destroys it — the survey row, every run, every
+   animal, the correction log and the footage on disk.
+
+   The confirmation names real numbers, and they come from the service's own
+   dry run rather than from anything this component counted: a client's guess
+   under a button marked "for ever" is worse than no number. */
+function PurgeControl({ f }: { f: Footage }) {
+  const { t } = useT();
+  const purgeFootage = useFootageStore(s => s.purgeFootage);
+  const [asked, setAsked] = useState(false);
+  const [preview, setPreview] = useState<PurgeReceipt | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  /* A selection change closes an armed confirmation. A dialog that survived
+     the sortie under it would delete the wrong season. */
+  useEffect(() => { setAsked(false); setPreview(null); setError(null); }, [f.id]);
+
+  const ask = async () => {
+    setAsked(true);
+    setError(null);
+    setPreview(null);
+    if (!f.surveyId) return;   // local-only row: nothing to count, nothing on disk
+    setBusy(true);
+    try {
+      setPreview(await fetchPurgePreview(f.surveyId));
+    } catch (e) {
+      setError(`${t("rec.purge.previewFailed")}: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!asked) {
+    return (
+      <button
+        onClick={() => void ask()}
+        className="mt-1.5 text-2xs text-ink3 hover:text-bad transition-colors"
+      >
+        {t("rec.purge.action")}
+      </button>
+    );
+  }
+
+  return (
+    <div className="mt-2 rounded border border-line bg-bg p-2 space-y-1.5">
+      <p className="text-2xs text-ink2 leading-relaxed">{t("rec.purge.confirmTitle")}</p>
+      {busy ? (
+        <p className="text-2xs text-ink3">{t("rec.purge.checking")}</p>
+      ) : error ? (
+        <p className="text-2xs text-bad leading-relaxed">{error}</p>
+      ) : (
+        <p className="text-2xs text-ink3 leading-relaxed">
+          {/* Counted by the same function that does the deleting. A sortie
+              this tab never sent to the service has no archive rows at all,
+              and the sentence says that instead of printing four zeros. */}
+          {f.surveyId && preview
+            ? t("rec.purge.what", {
+                files: preview.files,
+                points: preview.counts.points,
+                edits: preview.counts.edits,
+                runs: preview.counts.runs,
+              })
+            : t("rec.purge.localOnly")}
+        </p>
+      )}
+      <div className="flex items-center gap-2 text-2xs">
+        <button
+          disabled={busy || (!!f.surveyId && !preview)}
+          onClick={async () => {
+            setBusy(true);
+            const ok = await purgeFootage(f.id);
+            setBusy(false);
+            if (!ok) setAsked(false);
+            /* On success this component unmounts with the sortie it described. */
+          }}
+          className="text-bad hover:underline disabled:opacity-40 disabled:no-underline"
+        >
+          {t("rec.purge.confirm")}
+        </button>
+        <button
+          onClick={() => { setAsked(false); setError(null); }}
+          className="text-ink3 hover:text-ink transition-colors"
+        >
+          {t("btn.cancel")}
+        </button>
       </div>
     </div>
   );

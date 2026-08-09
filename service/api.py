@@ -1906,10 +1906,12 @@ async def get_survey(survey_id: str):
             if survey is None:
                 raise HTTPException(404, "survey not found")
             media = db.list_media(conn, survey_id=survey_id)
-            runs: list[dict] = []
-            for m in media:
-                runs.extend(db.list_runs(conn, media_id=m["id"]))
-            runs.sort(key=lambda r: (r.get("created_at") or "", r["id"]), reverse=True)
+            # Through `db.list_survey_runs`, which resolves a run's survey the
+            # way every other reader does: media.survey_id OR run.survey_id.
+            # Walking media alone - what this did - omitted every count with no
+            # footage behind it, so a ground count and a manual correction both
+            # reported that this survey had no runs at all.
+            runs = db.list_survey_runs(conn, survey_id)
             return {
                 **survey,
                 "site": db.get_site(conn, survey["site_id"]) if survey.get("site_id") else None,
@@ -2013,6 +2015,252 @@ async def unretire_survey(survey_id: str):
                 conn, survey_id,
                 retired_at=None, retired_reason=None, retired_by=None,
             )
+
+    return await asyncio.to_thread(apply)
+
+
+# ------------------------------------------------------- counts of a survey
+
+def _count_payload(run: dict, standing: bool) -> dict:
+    """One line of a survey's count history.
+
+    The provenance of a correction lives in the run's `quality` ledger, so it
+    is lifted out here rather than handed over as a raw JSON blob: a client
+    that has to know the ledger's internal shape is a client that will read it
+    wrong the first time the ledger grows a key.
+    """
+    q = run.get("quality")
+    q = q if isinstance(q, dict) else {}
+    prev = q.get("previous")
+    return {
+        "run_id": run["id"],
+        "engine": run.get("engine"),
+        "basis": run.get("basis"),
+        "low": run.get("count_low"),
+        "best": run.get("count_best"),
+        "high": run.get("count_high"),
+        "created_at": run.get("created_at"),
+        "media_id": run.get("media_id"),
+        # The one that currently represents this survey. Derived from the
+        # ordering, never stored: a flag on a row is a second source of truth
+        # about which number is standing, and the two would drift.
+        "standing": bool(standing),
+        "correction": bool(q.get("correction")),
+        "corrects_run": q.get("corrects_run"),
+        "evidence_run": q.get("evidence_run"),
+        # Who entered this number and why. Null on an engine run, which nobody
+        # signed and which needs no reason.
+        "operator": q.get("operator"),
+        "reason": q.get("reason"),
+        # How a ground count was arrived at (binoculars, boat transect...).
+        "method": q.get("method"),
+        "previous": prev if isinstance(prev, dict) else None,
+    }
+
+
+@app.get("/v1/surveys/{survey_id}/counts")
+async def survey_counts(survey_id: str, limit: int = 100):
+    """Every count ever recorded for one sortie, newest first.
+
+    This is the log that makes a corrected number defensible: the engine's run
+    is still here with what it said, and the human correction standing above it
+    says who changed it, to what, and why. A product that let an operator edit
+    a count without leaving both numbers visible would be a product where a
+    published figure cannot be traced to anything.
+    """
+    limit = max(1, min(limit, 500))
+
+    def load() -> dict:
+        with _conn() as conn:
+            if db.get_survey(conn, survey_id) is None:
+                raise HTTPException(404, "survey not found")
+            runs = db.list_survey_runs(conn, survey_id, limit=limit)
+            return {
+                "survey_id": survey_id,
+                "counts": [_count_payload(r, i == 0) for i, r in enumerate(runs)],
+            }
+
+    return await asyncio.to_thread(load)
+
+
+@app.post("/v1/surveys/{survey_id}/counts", status_code=201)
+async def correct_survey_count(survey_id: str, body: dict):
+    """Correct the standing count of a sortie that already exists.
+
+    Deliberately NOT a PATCH of the number. A correction is recorded as a new
+    run with `basis` = 'manual' against the same survey, and latest-per-survey
+    - the rule the whole archive already reads by - makes it the standing
+    figure. The engine's run keeps its count, its animals and its edit log, so
+    both numbers stay quotable and `GET /v1/surveys/{id}/counts` shows the two
+    side by side.
+
+    A sibling of `POST /v1/observations` rather than a mode of it: that route
+    mints a NEW sortie from a count, this one attaches a count to a sortie that
+    already happened. Sharing one endpoint would mean a caller who mistyped a
+    survey id silently created a phantom survey instead of being told.
+    """
+    body = body or {}
+    _reject_unknown(body, {"count", "reason", "operator"}, "body")
+
+    if body.get("count") is None:
+        raise HTTPException(400, "count is required")
+    count = _whole(body["count"], "count")
+    if count < 0:
+        raise HTTPException(400, "count may not be negative")
+    reason = _capped(body.get("reason"), "reason", REASON_MAX)
+    operator = _capped(body.get("operator"), "operator", OPERATOR_MAX)
+
+    def apply() -> dict:
+        with _conn() as conn:
+            try:
+                result = db.create_correction(
+                    conn, survey_id, count=count, reason=reason, operator=operator,
+                )
+            except LookupError as exc:
+                raise HTTPException(404, str(exc)) from exc
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            runs = db.list_survey_runs(conn, survey_id)
+            return {
+                "run": result["run"],
+                "supersedes": result["supersedes"],
+                "counts": [_count_payload(r, i == 0) for i, r in enumerate(runs)],
+            }
+
+    return await asyncio.to_thread(apply)
+
+
+# --------------------------------------------------------------- hard delete
+
+def _remove_media_files(paths: list[str]) -> dict:
+    """Unlink the bytes of a purged survey. Called only AFTER the commit.
+
+    Two containment rules, both the same one `media_file` serves under: the
+    path came out of our own database, and a moved workspace or a hand-edited
+    row must not turn a delete into an arbitrary file removal. Anything outside
+    the workspace is REPORTED, never removed - the operator asked to destroy a
+    survey, not to have this service guess at files it does not own.
+
+    A whole per-upload directory goes when the media sits in one, because the
+    worker writes each job's frames and tile crops next to the source file:
+    unlinking the source alone would leave a directory of derived evidence
+    behind with nothing in the archive referencing it, which is the orphan
+    problem the ingest path already had to fix once.
+    """
+    root = WORKSPACE.resolve()
+    removed: list[str] = []
+    failed: list[str] = []
+    for raw in paths:
+        if not raw:
+            continue
+        try:
+            target = Path(raw).resolve()
+        except (OSError, ValueError):
+            failed.append(raw)
+            continue
+        if not _inside(root, target):
+            failed.append(raw)
+            continue
+        parent = target.parent
+        try:
+            if parent != root and parent.parent == root:
+                shutil.rmtree(parent)
+            else:
+                target.unlink(missing_ok=True)
+            removed.append(raw)
+        except OSError:
+            failed.append(raw)
+    if failed:
+        # Server-side, where the paths belong. A file the archive no longer
+        # references and this process could not remove is an orphan somebody
+        # has to go and find, so it is named somewhere - just not over HTTP.
+        print(f"purge: {len(failed)} file(s) not removed: {failed[:5]}", flush=True)
+    # Counts, not paths. A workspace path is a server detail (the same reason
+    # `_media_payload` withholds `path` and `_scrub_paths` cleans error text),
+    # and the operator's question is "did the footage go" - which a number
+    # answers, including when the answer is "one of them did not".
+    return {"files_removed": len(removed), "files_failed": len(failed)}
+
+
+def _purge_payload(receipt: dict) -> dict:
+    """The receipt, minus the workspace paths.
+
+    `files` is what the unlink step consumes and it is absolute server paths;
+    handing them to a browser would publish the layout of the box this runs on
+    for no gain. The operator gets the FILENAMES they uploaded and a count,
+    which is what a confirmation dialog can actually say.
+    """
+    out = {k: v for k, v in receipt.items() if k != "files"}
+    out["files"] = len(receipt.get("files") or [])
+    return out
+
+
+@app.get("/v1/surveys/{survey_id}/purge")
+async def purge_preview(survey_id: str):
+    """What `DELETE /v1/surveys/{id}` would destroy, without destroying it.
+
+    The confirmation an operator reads has to name real numbers - "1 file, 2431
+    animals, 18 log entries" - and the only way for those to be true is for the
+    same function that does the deleting to count them. A second implementation
+    in the client would be a guess, and a guess under a button marked "delete
+    for ever" is worse than no number at all.
+
+    Answers on a survey that is not retired too, and says so with
+    `deletable: false`: the preview is how a caller finds out the retire step
+    is still owed, and a confirmation that cannot state what is at stake until
+    the sortie is already withdrawn is a confirmation nobody can read in time.
+    """
+    def load() -> dict:
+        with _conn() as conn:
+            if db.get_survey(conn, survey_id) is None:
+                raise HTTPException(404, "survey not found")
+            receipt = db.purge_survey(conn, survey_id, dry_run=True)
+            return {**_purge_payload(receipt), "deletable": bool(receipt.get("retired"))}
+
+    return await asyncio.to_thread(load)
+
+
+@app.delete("/v1/surveys/{survey_id}")
+async def delete_survey(survey_id: str):
+    """Destroy a retired sortie and everything hanging off it. No undo.
+
+    Two steps by design. Retirement is the reversible act - it takes a reason,
+    keeps every row, and can be undone; this is the irreversible one, and it is
+    only reachable from there. A season cannot be destroyed by one click, and
+    test junk can still be removed completely rather than left cluttering an
+    archive for ever.
+
+    Rows go in one IMMEDIATE transaction; the files go after it commits, never
+    before - bytes unlinked ahead of a rollback would leave footage destroyed
+    for a survey that still exists. The response says exactly what went, files
+    included, and names any file this service would not touch.
+    """
+    def apply() -> dict:
+        with _conn() as conn:
+            survey = db.get_survey(conn, survey_id)
+            if survey is None:
+                raise HTTPException(404, "survey not found")
+            if not survey.get("retired_at"):
+                raise HTTPException(
+                    409,
+                    f"survey {survey_id} is still in the estimate - withdraw it first "
+                    f"(POST /v1/surveys/{survey_id}/retire, with a reason), then delete "
+                    "it. Deleting a sortie destroys its footage, its animals and its "
+                    "correction log, and nothing here can bring them back",
+                )
+            try:
+                receipt = db.purge_survey(conn, survey_id)
+            except db.NotRetired as exc:
+                # Lost the race with an unretire between the read above and the
+                # transaction. The refusal still stands, and it is the same 409.
+                raise HTTPException(409, str(exc)) from exc
+            except LookupError as exc:
+                raise HTTPException(404, str(exc)) from exc
+        # Outside `_conn`, after the commit.
+        return {
+            **_purge_payload(receipt),
+            **_remove_media_files(receipt.get("files") or []),
+        }
 
     return await asyncio.to_thread(apply)
 
@@ -2278,6 +2526,21 @@ async def stats(
 
             latest_runs_total = int(_scalar(conn, total_sql) or 0)
 
+            # One ledger per evidence run, fetched at most once. Only a
+            # corrected survey reaches it, and a page holds at most `runs_limit`
+            # of those.
+            evidence_ledgers: dict[str, Optional[dict]] = {}
+
+            def _evidence_ledger(run_id: str) -> Optional[dict]:
+                if run_id not in evidence_ledgers:
+                    row = conn.execute(
+                        "SELECT quality FROM run WHERE id = ?", (run_id,)
+                    ).fetchone()
+                    evidence_ledgers[run_id] = (
+                        _quality_ledger(row["quality"]) if row is not None else None
+                    )
+                return evidence_ledgers[run_id]
+
             latest_runs = []
             for row in conn.execute(runs_sql, (runs_limit, runs_offset)):
                 run = dict(row)
@@ -2289,6 +2552,30 @@ async def stats(
                 # the job endpoint uses, so the two can never drift into telling
                 # a caller two different things about one run.
                 quality = _quality_ledger(run.pop("quality", None))
+                correction = (
+                    {
+                        "corrects_run": (quality or {}).get("corrects_run"),
+                        "evidence_run": (quality or {}).get("evidence_run"),
+                        "operator": (quality or {}).get("operator"),
+                        "reason": (quality or {}).get("reason"),
+                        "previous": (quality or {}).get("previous")
+                        if isinstance((quality or {}).get("previous"), dict) else None,
+                    }
+                    if (quality or {}).get("correction")
+                    else None
+                )
+                if correction and correction["evidence_run"]:
+                    # Everything derived below - the caveats, the frames the
+                    # count was assembled from, the false-positive risk -
+                    # describes the FOOTAGE and the engine's pass over it. A
+                    # correction repeated neither: it changed the number. Read
+                    # off the correction's own ledger these would all come back
+                    # empty, and an empty caveat list does not read as "not
+                    # recorded", it reads as "clean run" - so correcting a count
+                    # would quietly launder away every reason the engine gave to
+                    # doubt the footage. The band check still runs against the
+                    # STANDING band, which is the corrected one.
+                    quality = _evidence_ledger(correction["evidence_run"]) or quality
 
                 # The band check inside `_caveats` reads no counters, so it still
                 # runs on a ledgerless row - an incoherent band is a service
@@ -2322,6 +2609,13 @@ async def stats(
                 run["false_positive_basis"] = (
                     [str(b) for b in basis] if isinstance(basis, list) else None
                 )
+                # A standing number a PERSON corrected, and everything needed to
+                # say so without a second request: which run it replaced, which
+                # run still holds the animals (so a client fetches evidence from
+                # the row that has it rather than from this empty one), who
+                # changed it, why, and the band that was standing before. Null
+                # on every run nobody corrected, which is almost all of them.
+                run["correction"] = correction
                 latest_runs.append(run)
 
             return {

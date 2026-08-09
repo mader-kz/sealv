@@ -922,6 +922,142 @@ def list_runs(
     )
 
 
+# Every count that belongs to one survey, newest first.
+#
+# The join is the whole point: a run reaches its survey through its media
+# (every engine run) OR through `run.survey_id` (a ground count, and a manual
+# correction). Walking media alone - which is what the survey endpoint did -
+# silently omits every count a person entered, so the "history of this number"
+# would show the engine's run and not the human correction standing above it.
+_SURVEY_RUNS_SQL = """
+SELECT r.* FROM run r
+LEFT JOIN media m ON m.id = r.media_id
+WHERE COALESCE(m.survey_id, r.survey_id) = ?
+ORDER BY r.created_at DESC, r.id DESC
+LIMIT ?
+"""
+
+
+def list_survey_runs(conn: sqlite3.Connection, survey_id: str, limit: int = 200) -> list[dict]:
+    """Every count recorded against one survey, newest first.
+
+    The first row is the STANDING count - the same run `/v1/stats` picks with
+    `latest_per_survey`, ordered by the identical key, so the archive listing
+    and this history can never disagree about which number is current.
+    """
+    return _rows(conn.execute(_SURVEY_RUNS_SQL, (survey_id, limit)), "run")
+
+
+def standing_run(conn: sqlite3.Connection, survey_id: str) -> Optional[dict]:
+    """The count that currently represents a survey, or None if it has none."""
+    rows = _rows(conn.execute(_SURVEY_RUNS_SQL, (survey_id, 1)), "run")
+    return rows[0] if rows else None
+
+
+def create_correction(
+    conn: sqlite3.Connection,
+    survey_id: str,
+    count: int,
+    reason: str | None = None,
+    operator: str | None = None,
+) -> dict:
+    """A person corrects the standing count of a sortie that already exists.
+
+    NOT an update. Nothing is overwritten: the engine's run keeps its number,
+    its points and its edit log, and this adds a second run against the SAME
+    survey saying "a human counted N here instead". Latest-per-survey then makes
+    it the standing figure everywhere, without a single reader needing to learn
+    a new rule - the archive listing, the dashboard, the site estimate and the
+    PDF all already take the newest run of a survey.
+
+    Overwriting `count_best` would have been three lines and would have deleted
+    the measurement the correction is a correction OF. A number nobody can
+    compare against what the engine actually said is not a corrected count, it
+    is an unsourced one.
+
+    Three fields are carried deliberately:
+
+      media_id  inherited from the run being superseded, so the corrected
+                survey keeps its footage identity - filename, frame size,
+                scale, the video the operator can still open. Left NULL this
+                row would reload as a nameless ground count and the sortie
+                would appear to have lost its footage. With no previous run at
+                all it falls back to the survey's own media, but only when
+                there is exactly one - see below.
+      quality   the whole provenance of the correction: which run it replaces,
+                which run still holds the evidence (`evidence_run` - the chain
+                is followed, so a correction of a correction still points at
+                the engine run with the points), who made it, why, and the band
+                it superseded, verbatim.
+      basis     'manual', exactly as a ground count. The standing number IS a
+                human's, and every surface that draws a band has to say so.
+
+    Returns {"run", "supersedes"}; `supersedes` is None on a survey that had no
+    count at all, which is a first count rather than a correction and is
+    recorded as such (`corrects_run` NULL).
+    """
+    # Whole, non-negative, and actually a number - the same rule
+    # `create_observation` applies, and for the same reason: a count is the one
+    # value in this archive that must never be silently adjusted.
+    n = None if isinstance(count, bool) else _as_int(count, "correction.count")
+    if n is None or n < 0 or n != count:
+        raise ValueError(f"corrected count must be a whole number >= 0, got {count!r}")
+
+    with _tx(conn, "IMMEDIATE"):
+        survey = get_survey(conn, survey_id)
+        if survey is None:
+            raise LookupError(f"survey {survey_id!r} not found")
+        prev = standing_run(conn, survey_id)
+        prev_quality = (prev or {}).get("quality")
+        prev_quality = prev_quality if isinstance(prev_quality, dict) else {}
+        # Follow the chain rather than pointing at the run just superseded: a
+        # correction of a correction would otherwise name a run that holds no
+        # points, and the client would fetch an empty evidence set for a sortie
+        # whose animals are all still in the archive.
+        evidence = prev_quality.get("evidence_run") or (prev or {}).get("id")
+        media_id = (prev or {}).get("media_id")
+        if prev is None:
+            # A first count, entered by hand over footage no engine ever ran
+            # on. Attach it to that footage so the sortie keeps its filename
+            # and its frame size instead of reloading as a nameless ground
+            # count over a file that is still sitting in the archive. Only
+            # where there is exactly ONE piece of media: with several, picking
+            # any of them would be asserting which frame was counted, and the
+            # survey link already says everything that is actually known.
+            rows = conn.execute(
+                "SELECT id FROM media WHERE survey_id = ? LIMIT 2", (survey_id,)
+            ).fetchall()
+            if len(rows) == 1:
+                media_id = rows[0][0]
+        run_id = create_run(
+            conn,
+            job_id=None,
+            media_id=media_id,
+            survey_id=survey_id,
+            engine="manual",
+            band={"low": n, "best": n, "high": n, "basis": "manual"},
+            quality={
+                "manual": True,
+                "correction": True,
+                "corrects_run": (prev or {}).get("id"),
+                "evidence_run": evidence,
+                "reason": reason,
+                "operator": operator,
+                "previous": None if prev is None else {
+                    "low": prev.get("count_low"),
+                    "best": prev.get("count_best"),
+                    "high": prev.get("count_high"),
+                    "basis": prev.get("basis"),
+                    "engine": prev.get("engine"),
+                    "run_id": prev.get("id"),
+                },
+            },
+            seconds=None,
+        )
+        run = get_run(conn, run_id)
+    return {"run": run, "supersedes": prev}
+
+
 def create_observation(
     conn: sqlite3.Connection,
     count: int,
@@ -1247,6 +1383,140 @@ def verified_count(conn: sqlite3.Connection, run_id: str) -> int:
         (run_id,),
     ).fetchone()
     return int(row["n"])
+
+
+# --------------------------------------------------------------------------
+# purge
+# --------------------------------------------------------------------------
+
+class NotRetired(Exception):
+    """A survey was asked to be destroyed while it is still in the estimate.
+
+    Its own class rather than ValueError: the API answers 409 for this and 400
+    for a malformed request, and folding the two together would tell a caller
+    who forgot the retire step that their JSON was wrong.
+    """
+
+
+def _in_clause(ids: Sequence[str]) -> tuple[str, list]:
+    """`IN (?, ?, ?)` for a list that may be empty.
+
+    `IN ()` is a syntax error in SQLite, and the alternative - skipping the
+    statement when the list is empty - is how a delete pass grows a branch that
+    is never exercised. `IN (NULL)` matches nothing, which is the right answer.
+    """
+    if not ids:
+        return "(NULL)", []
+    return "(" + ",".join("?" * len(ids)) + ")", list(ids)
+
+
+def purge_survey(conn: sqlite3.Connection, survey_id: str, *, dry_run: bool = False) -> dict:
+    """Destroy a retired survey and everything hanging off it. No undo.
+
+    This is the only destructive call in this module and it is deliberately
+    hard to reach: a survey must ALREADY be retired, which means somebody
+    withdrew it from the estimate, gave a reason, and had it recorded. Two
+    steps, two decisions - a season cannot be destroyed by one click, and test
+    junk can still be removed completely.
+
+    What goes, in dependency order inside ONE `BEGIN IMMEDIATE`: every edit and
+    point of every run of this survey, those runs, the track points and jobs of
+    its media, the media rows, and the survey. Ordered explicitly rather than
+    left to ON DELETE CASCADE for two reasons - `run.survey_id` has no cascade
+    at all (a ground count would abort the delete on a foreign key), and a
+    cascade reports nothing, whereas the receipt below is what the caller shows
+    the operator afterwards.
+
+    Files are NOT touched here. This module knows nothing about the workspace,
+    and unlinking bytes before the transaction commits would destroy footage
+    that a rollback then leaves referenced. The paths come back in the receipt
+    and the caller removes them after the commit.
+
+    `dry_run=True` counts everything and writes nothing - the same receipt, so
+    the confirmation an operator reads names exactly what the delete will do
+    rather than a second implementation's guess at it.
+    """
+    with _tx(conn, "IMMEDIATE"):
+        survey = get_survey(conn, survey_id)
+        if survey is None:
+            raise LookupError(f"survey {survey_id!r} not found")
+        # Re-checked inside the transaction even though the API checks first:
+        # the API's read and this write are two statements, and the one that
+        # destroys evidence is the one that has to be sure. A dry run is a
+        # read: it answers over a live survey too, and `retired` in the receipt
+        # is how the caller learns the retire step is still owed - refusing to
+        # count would leave a confirmation dialog with nothing true to say.
+        if not dry_run and not survey.get("retired_at"):
+            raise NotRetired(
+                f"survey {survey_id} is not retired - withdraw it from the estimate "
+                "first (POST /v1/surveys/{id}/retire, with a reason), then delete it"
+            )
+
+        media = [dict(r) for r in conn.execute(
+            "SELECT id, path, filename FROM media WHERE survey_id = ?", (survey_id,))]
+        media_ids = [m["id"] for m in media]
+        m_sql, m_args = _in_clause(media_ids)
+
+        job_ids = [r[0] for r in conn.execute(
+            f"SELECT id FROM job WHERE media_id IN {m_sql}", m_args)]
+        j_sql, j_args = _in_clause(job_ids)
+
+        # Three ways a run belongs to this survey, and all three are real:
+        # through its media (every engine run), through `run.survey_id` (a
+        # ground count or a manual correction), and through a job of this
+        # survey's media (a run whose media row was already gone). Miss the
+        # second and the survey delete dies on a foreign key; miss the third
+        # and deleting the job cascades that run away unreported.
+        run_ids = [r[0] for r in conn.execute(
+            f"""SELECT id FROM run
+                 WHERE media_id IN {m_sql} OR survey_id = ? OR job_id IN {j_sql}""",
+            [*m_args, survey_id, *j_args],
+        )]
+        r_sql, r_args = _in_clause(run_ids)
+
+        counts = {
+            "media": len(media_ids),
+            "jobs": len(job_ids),
+            "runs": len(run_ids),
+            "points": int(conn.execute(
+                f"SELECT COUNT(*) FROM point WHERE run_id IN {r_sql}", r_args).fetchone()[0]),
+            "edits": int(conn.execute(
+                f"SELECT COUNT(*) FROM edit WHERE run_id IN {r_sql}", r_args).fetchone()[0]),
+            "track_points": int(conn.execute(
+                f"SELECT COUNT(*) FROM track_point WHERE media_id IN {m_sql}",
+                m_args).fetchone()[0]),
+        }
+        receipt = {
+            "survey_id": survey_id,
+            # Whether the two-step gate has been passed. A dry run over a live
+            # survey reports False and full counts, which is exactly what a
+            # confirmation dialog needs to explain why the button is not armed.
+            "retired": bool(survey.get("retired_at")),
+            "retired_at": survey.get("retired_at"),
+            "retired_reason": survey.get("retired_reason"),
+            "counts": counts,
+            # Absolute paths, straight out of the rows. The caller checks them
+            # against the workspace before unlinking anything - a moved
+            # workspace or a hand-edited row must not turn a delete into an
+            # arbitrary file removal.
+            "files": [m["path"] for m in media if m.get("path")],
+            "filenames": [m["filename"] for m in media if m.get("filename")],
+            "dry_run": bool(dry_run),
+        }
+        if dry_run:
+            # Nothing was written; the IMMEDIATE transaction still bought a
+            # consistent read of six tables, which is what makes the numbers
+            # above a receipt rather than a sample.
+            return receipt
+
+        conn.execute(f"DELETE FROM edit WHERE run_id IN {r_sql}", r_args)
+        conn.execute(f"DELETE FROM point WHERE run_id IN {r_sql}", r_args)
+        conn.execute(f"DELETE FROM run WHERE id IN {r_sql}", r_args)
+        conn.execute(f"DELETE FROM track_point WHERE media_id IN {m_sql}", m_args)
+        conn.execute(f"DELETE FROM job WHERE media_id IN {m_sql}", m_args)
+        conn.execute(f"DELETE FROM media WHERE id IN {m_sql}", m_args)
+        conn.execute("DELETE FROM survey WHERE id = ?", (survey_id,))
+    return receipt
 
 
 # --------------------------------------------------------------------------
@@ -1983,6 +2253,164 @@ if __name__ == "__main__":
                "2026-08-01T09:00:00Z", None, None, "no-such-site")
         check("a refused ground count leaves no orphan survey behind",
               conn.execute("SELECT COUNT(*) FROM survey").fetchone()[0] == before)
+
+        check("list_survey_runs finds a run linked straight to its survey",
+              [r["id"] for r in list_survey_runs(conn, obs["survey"]["id"])]
+              == [obs["run"]["id"]],
+              # Through run.survey_id, not through media - a ground count has
+              # none, and the survey endpoint used to walk media alone and so
+              # reported that a person's count did not exist.
+              )
+        check("list_survey_runs finds an engine run through its media",
+              obs["run"]["id"] not in [r["id"] for r in list_survey_runs(conn, survey["id"])]
+              and run_id in [r["id"] for r in list_survey_runs(conn, survey["id"])])
+
+        # --- correcting a standing count --------------------------------
+        # A whole sortie of its own so the corrections below cannot disturb the
+        # rows every earlier check reads.
+        c_survey = create_survey(conn, site_id=site["id"], captured_at="2026-08-03T08:00:00Z")
+        c_media = create_media(conn, tmp / "corrected.jpg", "image",
+                               survey_id=c_survey["id"], width=4000, height=3000)
+        c_job = create_job(conn, c_media["id"], params)
+        c_run = create_run(conn, c_job, c_media["id"], "countgd",
+                           band=CountBand(low=100, best=118, high=140,
+                                          basis="union_4_frames"))
+        insert_points(conn, c_run, [Point(x=10.0, y=20.0), Point(x=30.0, y=40.0)])
+        c_points = [p["id"] for p in get_points(conn, c_run)]
+        add_edit(conn, c_run, "remove", point_id=c_points[0], operator="a.n")
+
+        corrected = create_correction(conn, c_survey["id"], 127,
+                                      reason="two pups double-counted on the spit",
+                                      operator="a.n")
+        c_first = corrected["run"]
+        check("a correction is a NEW run, not an overwrite",
+              c_first["id"] != c_run and get_run(conn, c_run)["count_best"] == 118)
+        check("the engine's evidence survives a correction",
+              len(get_points(conn, c_run)) == 2 and len(list_edits(conn, c_run)) == 1)
+        check("a correction is the standing count",
+              standing_run(conn, c_survey["id"])["id"] == c_first["id"])
+        check("a correction is one number a person gave, not a band",
+              (c_first["count_low"], c_first["count_best"], c_first["count_high"])
+              == (127, 127, 127) and c_first["basis"] == "manual"
+              and c_first["engine"] == "manual")
+        check("a correction keeps the sortie's footage identity",
+              c_first["media_id"] == c_media["id"] and c_first["survey_id"] == c_survey["id"],
+              # NULL media would reload as a nameless ground count and the
+              # sortie would look as though it had lost its footage.
+              )
+        check("a correction records what it replaced, verbatim",
+              c_first["quality"]["corrects_run"] == c_run
+              and c_first["quality"]["previous"]["best"] == 118
+              and c_first["quality"]["previous"]["basis"] == "union_4_frames")
+        check("a correction records who and why",
+              c_first["quality"]["operator"] == "a.n"
+              and "double-counted" in c_first["quality"]["reason"])
+        check("a correction points at the run that holds the evidence",
+              c_first["quality"]["evidence_run"] == c_run)
+        check("supersedes names the run that was standing", corrected["supersedes"]["id"] == c_run)
+
+        second = create_correction(conn, c_survey["id"], 131, operator="b.k")["run"]
+        check("a correction of a correction still points at the engine run",
+              second["quality"]["evidence_run"] == c_run
+              and second["quality"]["corrects_run"] == c_first["id"],
+              # Following the chain matters: naming the run just superseded
+              # would send a client to fetch points from a row that has none.
+              )
+        check("both corrections and the engine run are all in the history",
+              [r["id"] for r in list_survey_runs(conn, c_survey["id"])]
+              == [second["id"], c_first["id"], c_run])
+        check("a correction with no reason records None, not an empty claim",
+              second["quality"]["reason"] is None)
+        raises("create_correction refuses a fractional count", ValueError,
+               create_correction, conn, c_survey["id"], 4.5)
+        raises("create_correction refuses a negative count", ValueError,
+               create_correction, conn, c_survey["id"], -1)
+        raises("create_correction refuses a survey that does not exist", LookupError,
+               create_correction, conn, "no-such-survey", 5)
+        check("a refused correction wrote no run",
+              len(list_survey_runs(conn, c_survey["id"])) == 3)
+
+        # An upload nobody ever ran the engine over, counted by hand.
+        uncounted = create_survey(conn, site_id=site["id"])
+        lone = create_media(conn, tmp / "uncounted.jpg", "image",
+                            survey_id=uncounted["id"], width=800, height=600)
+        first = create_correction(conn, uncounted["id"], 9)
+        check("a first hand count adopts the sortie's only piece of footage",
+              first["run"]["media_id"] == lone["id"] and first["supersedes"] is None
+              and first["run"]["quality"]["corrects_run"] is None,
+              # Left NULL it would reload as a nameless ground count over a
+              # file that is still sitting in the archive.
+              )
+        many = create_survey(conn, site_id=site["id"])
+        create_media(conn, tmp / "a.jpg", "image", survey_id=many["id"])
+        create_media(conn, tmp / "b.jpg", "image", survey_id=many["id"])
+        check("with several files a hand count claims none of them",
+              create_correction(conn, many["id"], 4)["run"]["media_id"] is None,
+              # Picking one would assert which frame was counted; the survey
+              # link already says everything that is actually known.
+              )
+
+        # --- hard delete, gated behind retirement ------------------------
+        keep = create_survey(conn, site_id=site["id"], captured_at="2026-08-04T08:00:00Z")
+        keep_media = create_media(conn, tmp / "keep.jpg", "image",
+                                  survey_id=keep["id"], width=100, height=100)
+        keep_run = create_run(conn, None, keep_media["id"], "countgd",
+                              band=CountBand(low=1, best=2, high=3, basis="single_image"))
+        insert_points(conn, keep_run, [Point(x=1.0, y=1.0)])
+
+        raises("a survey still in the estimate cannot be destroyed", NotRetired,
+               purge_survey, conn, c_survey["id"])
+        check("a refused purge destroyed nothing",
+              len(list_survey_runs(conn, c_survey["id"])) == 3
+              and len(get_points(conn, c_run)) == 2)
+        raises("purging a survey that does not exist is a lookup failure", LookupError,
+               purge_survey, conn, "no-such-survey")
+
+        update_survey(conn, c_survey["id"], retired_at=_utcnow(),
+                      retired_reason="test junk", retired_by="a.n")
+        preview = purge_survey(conn, c_survey["id"], dry_run=True)
+        check("the preview counts what the delete will destroy",
+              preview["counts"] == {"media": 1, "jobs": 1, "runs": 3, "points": 2,
+                                    "edits": 1, "track_points": 0},
+              preview["counts"])
+        check("the preview names the files on disk, exactly as the rows hold them",
+              preview["files"] == [c_media["path"]]
+              and preview["filenames"] == ["corrected.jpg"],
+              # Verbatim, unresolved: the caller checks them against the
+              # workspace itself, and a path this module had already rewritten
+              # would move that check onto a string nothing else ever stored.
+              preview["files"])
+        check("a dry run writes nothing",
+              get_survey(conn, c_survey["id"]) is not None
+              and len(list_survey_runs(conn, c_survey["id"])) == 3)
+
+        receipt = purge_survey(conn, c_survey["id"])
+        check("the purge reports what it destroyed",
+              receipt["counts"] == preview["counts"] and receipt["dry_run"] is False)
+        check("the survey is gone", get_survey(conn, c_survey["id"]) is None)
+        check("no orphan runs", conn.execute(
+            "SELECT COUNT(*) FROM run WHERE id IN (?, ?, ?)",
+            (c_run, c_first["id"], second["id"])).fetchone()[0] == 0)
+        check("no orphan points", conn.execute(
+            "SELECT COUNT(*) FROM point WHERE run_id = ?", (c_run,)).fetchone()[0] == 0)
+        check("no orphan edits", conn.execute(
+            "SELECT COUNT(*) FROM edit WHERE run_id = ?", (c_run,)).fetchone()[0] == 0)
+        check("no orphan media or jobs",
+              get_media(conn, c_media["id"]) is None and get_job(conn, c_job) is None)
+        check("the archive holds no dangling reference at all",
+              conn.execute("PRAGMA foreign_key_check").fetchall() == [],
+              # The one check that catches a table this function forgot: add a
+              # child table later and skip it here, and this fails loudly
+              # instead of leaving a row pointing at a survey nobody can find.
+              )
+        check("an unrelated survey is untouched",
+              get_survey(conn, keep["id"]) is not None
+              and get_run(conn, keep_run)["count_best"] == 2
+              and len(get_points(conn, keep_run)) == 1
+              and get_media(conn, keep_media["id"]) is not None)
+        check("the sortie every earlier check reads is untouched",
+              get_survey(conn, survey["id"]) is not None
+              and verified_count(conn, run_id) == 5)
 
         conn.close()
 
