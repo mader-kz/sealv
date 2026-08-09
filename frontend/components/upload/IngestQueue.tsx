@@ -15,7 +15,7 @@
  * silently discarded files.
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   useIngestStore,
   isRunning,
@@ -92,6 +92,21 @@ function Row({ item, queuePos, queueTotal }: { item: IngestItem; queuePos: numbe
   const pinPoints = useFootageStore((s) => s.pinPoints);
   const setPinMode = useFootageStore((s) => s.setPinMode);
   const setPinPoints = useFootageStore((s) => s.setPinPoints);
+
+  /* Arm the pin the moment a location-less file needs one — the gesture users
+     learned before the queue existed was drop-then-click-the-map, and without
+     this the map click silently did nothing until the button was found. Only
+     an UNOWNED pin is claimed (getState, not the subscribed value: two cards
+     mounting together both see null and would both claim), so a second file
+     still waits for an explicit hand-over; when the owner confirms or is
+     dismissed the store frees the pin and this effect claims for the next. */
+  useEffect(() => {
+    if (item.phase !== "needs_location") return;
+    if (useIngestStore.getState().pinTarget !== null) return;
+    claimPin(item.id);
+    setPinMode(true);
+    setPinPoints([]);
+  }, [item.phase, item.id, pinTarget, claimPin, setPinMode, setPinPoints]);
 
   const reason = item.reason ? t(item.reason.key, item.reason.vars) : null;
 
