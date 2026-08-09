@@ -69,7 +69,7 @@ export type IngestPhase =
   | "reading"
   | "hashing"
   | "duplicate_choice"
-  /** The operator is choosing between full analysis and one frame. */
+  /** The operator is choosing WHICH frame of a clip gets counted. */
   | "frame_choice"
   | "needs_location"
   | "uploading"
@@ -157,6 +157,12 @@ export type IngestItem = {
   frameError?: FrameErrorCode | null;
   framesBusy?: boolean;
   frameSpread?: { duration: number; evenlySpaced: boolean };
+  /** How far the aircraft travelled between the first and last fix of this
+   *  clip's own track, in metres. `undefined` = not looked at yet; `null` =
+   *  looked, and the clip carries no track. Null stays null: a clip with no
+   *  telemetry supports no claim about whether it moved, and the picker says
+   *  nothing rather than guessing either way. */
+  frameMoveM?: number | null;
   quickCount?: { fromVideo: string; atSeconds: number };
   /** What the service measured about the file once it had it. Held on the row
    *  because the surveyed area is derived from it AFTER the count returns, and
@@ -281,6 +287,51 @@ async function sidecarTrack(item: IngestItem): Promise<{ track: TrackPoint[]; sr
   const track = srt ? parseSRT(text) : parseJSONSidecar(text);
   return track.length ? { track, srt } : null;
 }
+
+/** The clip's own track: its dropped sidecar first, then the telemetry inside
+ *  the file itself. Null when neither answers — and null is returned as null,
+ *  never as an empty track, because "no telemetry" and "it did not move" are
+ *  different statements and only one of them is measured. */
+async function clipTrack(item: IngestItem): Promise<TrackPoint[] | null> {
+  try {
+    const side = await sidecarTrack(item);
+    if (side?.track.length) return side.track;
+  } catch {
+    /* An unreadable sidecar is not a track. The upload path reports it as its
+       own failure; here it simply means the file itself has to answer. */
+  }
+  const probe = await parseMP4Metadata(item.file).catch(() => null);
+  return probe?.track?.length ? probe.track : null;
+}
+
+const EARTH_R_M = 6371000;
+
+/** Great-circle metres between two fixes. */
+function metresBetween(a: TrackPoint, b: TrackPoint): number {
+  const rad = Math.PI / 180;
+  const dLat = (b.lat - a.lat) * rad;
+  const dLng = (b.lng - a.lng) * rad;
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLng / 2) ** 2;
+  return 2 * EARTH_R_M * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+/** Ground distance between the first and last fix of a track, in metres.
+ *  End to end, not path length: the question a frame picker has to answer is
+ *  "does one instant stand for this clip", and a transect that flew out and
+ *  came back to the same haul-out is one scene however many kilometres of
+ *  track it logged. */
+function trackSpanM(track: TrackPoint[]): number | null {
+  if (track.length < 2) return null;
+  const pts = [...track].sort((a, b) => a.t - b.t);
+  return metresBetween(pts[0], pts[pts.length - 1]);
+}
+
+/** Above this, the clip is a strip rather than a scene and the picker says so.
+ *  30 m is roughly two frame-widths at survey altitude — below it the frames
+ *  overlap enough that one of them genuinely stands for the clip. */
+export const CLIP_MOVED_M = 30;
 
 /** Where this file was taken, and how confident that answer is.
  *
@@ -671,7 +722,7 @@ export const useIngestStore = create<IngestStore>((set, get) => ({
     const it = itemOf(id);
     if (!it || it.kind !== "video") return;
     if (isRunning(it.phase)) return;
-    patch(id, { phase: "frame_choice", framesBusy: true, frameError: null });
+    patch(id, { phase: "frame_choice", framesBusy: true, frameError: null, frameMoveM: undefined });
     const ex = await extractFrames(it.file);
     patch(id, {
       frames: ex.frames,
@@ -679,10 +730,23 @@ export const useIngestStore = create<IngestStore>((set, get) => ({
       framesBusy: false,
       frameSpread: { duration: ex.duration, evenlySpaced: ex.evenlySpaced },
     });
+    /* Did the aircraft stay over one scene, or fly a strip? Measured here,
+       once, off the same track the chosen frame will be georeferenced against
+       — so the picker's warning and the frame's coordinate cannot disagree.
+       Second, after the strip: the frames are what the operator is waiting
+       for, and a metadata read must not hold them back. */
+    const track = await clipTrack(it);
+    if (itemOf(id)?.phase === "frame_choice") patch(id, { frameMoveM: track ? trackSpanM(track) : null });
   },
 
+  /* Queue the WHOLE clip for the engine's cross-frame consensus.
+     NO UI reaches this any more: video ingest is frame-first, and a second
+     button that quietly counted the whole video instead is exactly the hidden
+     path the picker was rewritten to remove. The action is kept because the
+     service capability is unchanged and other callers use it — a clip dropped
+     in bulk still queues here, through `enqueue`, not through a button. */
   chooseFullAnalysis: (id) => {
-    patch(id, { phase: "queued", frames: undefined, framesBusy: false });
+    patch(id, { phase: "queued", frames: undefined, framesBusy: false, frameMoveM: undefined });
     get().runNext();
   },
 
@@ -697,17 +761,7 @@ export const useIngestStore = create<IngestStore>((set, get) => ({
       /* Georeference the INSTANT, not the sortie. The clip's own track (or the
          sidecar's) interpolated at that second; when there is none the item
          falls through to the pin flow like any other locationless still. */
-      let track: TrackPoint[] | null = null;
-      try {
-        const side = await sidecarTrack(it);
-        track = side?.track ?? null;
-      } catch {
-        track = null;
-      }
-      if (!track) {
-        const probe = await parseMP4Metadata(it.file).catch(() => null);
-        track = probe?.track ?? null;
-      }
+      const track = await clipTrack(it);
       const at = track ? trackAt(track, atSeconds) : null;
       patch(id, {
         file: jpg,
@@ -723,6 +777,7 @@ export const useIngestStore = create<IngestStore>((set, get) => ({
         quickCount: { fromVideo: it.fileName, atSeconds },
         frames: undefined,
         framesBusy: false,
+        frameMoveM: undefined,
         phase: "queued",
       });
       get().runNext();

@@ -316,7 +316,16 @@ function Row({ item, queuePos, queueTotal }: { item: IngestItem; queuePos: numbe
                 {item.mediaId ? t("ingest.retryCount") : t("ingest.retryUpload")}
               </Button>
             )}
-            {(item.phase === "failed" || item.phase === "skipped" || item.phase === "cancelled" || item.phase === "done") && (
+            {/* `frame_choice` is in this list because the picker is now the
+                ONLY way a clip is counted: when the browser cannot draw a
+                frame from it there is nothing to choose, and without a way out
+                the row would sit in the panel forever. It is not running and
+                not queued, so the cancel above never covered it. */}
+            {(item.phase === "failed" ||
+              item.phase === "skipped" ||
+              item.phase === "cancelled" ||
+              item.phase === "done" ||
+              item.phase === "frame_choice") && (
               <Button variant="ghost" onClick={() => dismiss(item.id)}>
                 {t("a11y.dismiss")}
               </Button>
