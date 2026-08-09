@@ -582,6 +582,13 @@ def _caveats(quality: dict, band: Optional[dict] = None) -> list[str]:
             "produced detections, so `best` rests on less agreement than was asked for"
         )
 
+    if quality.get("tile_default_unknown_scale"):
+        out.append(
+            f"scale unknown - counted with default {quality.get('tile_px')}px tiles "
+            "rather than a size derived from a measured GSD; set the flight altitude "
+            "and re-count to tile to the animals' true pixel size"
+        )
+
     # min_support=1 accepts a detection no other frame corroborated. That is a
     # union over frames, not agreement between them, and it is the LEAST
     # supported number this pipeline can produce - so it must not be handed to a

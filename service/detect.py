@@ -387,6 +387,9 @@ def detect_image(
 
     quality = {
         "tile_px": tile_px,
+        # True when the tile size is the unknown-scale default, not a measured
+        # choice — _caveats turns this into words next to the count.
+        "tile_default_unknown_scale": bool(tile_px and not gsd_cm_px),
         "tiles": frame.tiles,
         "tiles_failed": len(frame.failed_tiles),
         "tile_failures": frame.failed_tiles,
@@ -792,6 +795,9 @@ def detect_video(
 
     quality = {
         "tile_px": tile_px,
+        # Same honesty flag as the still path: this tile size is a default for
+        # an unknown scale, not a choice derived from a measured GSD.
+        "tile_default_unknown_scale": bool(tile_px and not frame_gsd),
         "tiles_per_frame": next(
             (r["tiles"] for r in frame_quality if r.get("tiles")), None
         ),

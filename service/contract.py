@@ -104,16 +104,29 @@ class Point:
         return {k: v for k, v in asdict(self).items() if v is not None or k in ("lat", "lng")}
 
 
+# Tile size used when the scale is UNKNOWN. The old behaviour ("trust whole
+# frame") was measured to collapse on small targets — the docstring numbers
+# below — and in the field it returned 0 detections on a frame holding a dense
+# colony of ~600 (FIELD_0001 at 22s, drone high, ~12px per animal; frames at
+# 9s with large animals still counted fine, which is exactly the failure shape
+# the measurements predict). 256 is the measured sweet spot at ~25px targets,
+# and a tile larger than any plausible survey animal, so the only cost on
+# close-ups is overlap-merge overhead.
+UNKNOWN_SCALE_TILE_PX = 256
+
+
 def auto_tile_px(gsd_cm_px: float | None, image_long_edge: int | None = None) -> int:
     """Choose tile size from ground sample distance. 0 means whole frame.
 
     Measured on real footage: a target at >=40px is found reliably in one pass
     (389 animals, 2.1s); at ~25px the whole-frame path drops to 525 and once
     collapsed to 218, while 250px tiles gave 656. So the decision is purely a
-    function of how many pixels one animal occupies.
+    function of how many pixels one animal occupies — and when the scale is
+    unknown, that function cannot promise the whole-frame pass is safe, so the
+    default is to tile (an operator can still force `tiling: off`).
     """
     if not gsd_cm_px or gsd_cm_px <= 0:
-        return 0  # unknown scale - trust whole frame, operator can override
+        return UNKNOWN_SCALE_TILE_PX
     target_px = SEAL_LENGTH_CM / gsd_cm_px
     if target_px >= WHOLE_FRAME_MIN_PX:
         return 0
