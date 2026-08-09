@@ -52,9 +52,23 @@ export type ReviewFootageLike = {
  *  seal on a beach. That is a different fact from "the engine counted these
  *  and this build cannot show you the rows", and folding the two together put
  *  a shore count of 41 under the sentence "animals the engine counted with no
- *  individual row to open" — a claim about a pipeline that never ran. */
+ *  individual row to open" — a claim about a pipeline that never ran.
+ *
+ *  A basis of 'manual' alone is no longer enough to say that. Since counts
+ *  became correctable, a drone sortie whose standing number a person fixed by
+ *  hand ALSO stores basis 'manual' — the number is a human's, but the engine's
+ *  animals are all still in the archive and still waiting to be ruled on.
+ *  Reading the basis alone dropped every one of them out of the season's
+ *  review share the moment somebody corrected a count: a few hundred animals
+ *  would silently stop being work anybody owed, which is the opposite of what
+ *  a correction means. So the question asked here is the one the answer is
+ *  actually about — is there a per-animal record behind this number. */
 export function isGroundCount(f: ReviewFootageLike | null | undefined): boolean {
-  return f?.engine === "manual" || f?.band?.basis === "manual";
+  if (f?.engine === "manual") return true;
+  if (f?.band?.basis !== "manual") return false;
+  const unplaced = typeof f?.unplaced === "number" && Number.isFinite(f.unplaced)
+    ? f.unplaced : 0;
+  return !(f?.detections?.length) && unplaced <= 0;
 }
 
 export type ReviewStats = {

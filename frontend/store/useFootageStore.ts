@@ -1112,8 +1112,16 @@ export const useFootageStore = create<Store>((set, get) => ({
            correction row here would print "ground count" over a drone sortie
            and hide its filename. The standing number's own provenance is not
            lost by this: `band.basis` says 'manual' and the correction note
-           below says who changed it, to what and why. */
-        engine: corr?.previous?.engine ?? r.engine ?? null,
+           below says who changed it, to what and why.
+
+           The EVIDENCE run, not the superseded one. They are the same run
+           until a correction is itself corrected; after that `previous` is a
+           manual run, and taking the engine from it retitled the sortie
+           "ground count" on the next reload - the sortie's own filename gone
+           and an aerial frame count presented as somebody's count from the
+           shore. `previous` stays the fallback for a service that does not
+           send `evidence`, where it is the engine run by definition. */
+        engine: corr?.evidence?.engine ?? corr?.previous?.engine ?? r.engine ?? null,
         falsePositiveRisk: r.false_positive_risk ?? null,
         falsePositiveBasis: Array.isArray(r.false_positive_basis) ? r.false_positive_basis : null,
         track: trk,

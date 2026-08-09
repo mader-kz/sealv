@@ -2526,20 +2526,29 @@ async def stats(
 
             latest_runs_total = int(_scalar(conn, total_sql) or 0)
 
-            # One ledger per evidence run, fetched at most once. Only a
-            # corrected survey reaches it, and a page holds at most `runs_limit`
-            # of those.
-            evidence_ledgers: dict[str, Optional[dict]] = {}
+            # One row per evidence run, fetched at most once. Only a corrected
+            # survey reaches it, and a page holds at most `runs_limit` of those.
+            # Two different questions are asked of the same row - what the
+            # engine recorded about the footage, and WHICH engine that was - so
+            # it is read once and both answers come out of the same fetch.
+            evidence_rows: dict[str, Optional[dict]] = {}
 
-            def _evidence_ledger(run_id: str) -> Optional[dict]:
-                if run_id not in evidence_ledgers:
+            def _evidence_row(run_id: str) -> Optional[dict]:
+                if run_id not in evidence_rows:
                     row = conn.execute(
-                        "SELECT quality FROM run WHERE id = ?", (run_id,)
+                        "SELECT quality, engine, basis FROM run WHERE id = ?",
+                        (run_id,),
                     ).fetchone()
-                    evidence_ledgers[run_id] = (
-                        _quality_ledger(row["quality"]) if row is not None else None
+                    evidence_rows[run_id] = (
+                        {
+                            "quality": _quality_ledger(row["quality"]),
+                            "engine": row["engine"],
+                            "basis": row["basis"],
+                        }
+                        if row is not None
+                        else None
                     )
-                return evidence_ledgers[run_id]
+                return evidence_rows[run_id]
 
             latest_runs = []
             for row in conn.execute(runs_sql, (runs_limit, runs_offset)):
@@ -2575,7 +2584,27 @@ async def stats(
                     # would quietly launder away every reason the engine gave to
                     # doubt the footage. The band check still runs against the
                     # STANDING band, which is the corrected one.
-                    quality = _evidence_ledger(correction["evidence_run"]) or quality
+                    evidence = _evidence_row(correction["evidence_run"])
+                    # WHAT PRODUCED THE ANIMALS, resolved through the correction
+                    # chain. `previous` is the run this one replaced and stays
+                    # verbatim - but after a SECOND correction that run is
+                    # itself manual, so a client reading the engine off it
+                    # titles a drone sortie "ground count" and hides its
+                    # filename. The evidence run is the one that actually holds
+                    # the points, so it is the only one that can answer "what
+                    # counted these". Reported separately from `previous`
+                    # because they answer different questions and only
+                    # coincide on a first correction.
+                    correction["evidence"] = (
+                        {
+                            "run_id": correction["evidence_run"],
+                            "engine": evidence["engine"],
+                            "basis": evidence["basis"],
+                        }
+                        if evidence is not None
+                        else None
+                    )
+                    quality = (evidence or {}).get("quality") or quality
 
                 # The band check inside `_caveats` reads no counters, so it still
                 # runs on a ledgerless row - an incoherent band is a service

@@ -145,15 +145,14 @@ export default function RightInspector({ compact }: { compact?: boolean }){
      sortie and a shore count both store basis 'manual' and they are not the
      same thing: one has footage, animals and a review queue behind it. */
   const corrected = corrections[f.id] ?? null;
-  /* Review is a question about the ENGINE's animals, which a correction did
-     not touch — so it is answered against the basis the engine gave. Left as
-     'manual', `reviewStats` reports "ground count" over a drone sortie whose
-     2431 detections are all still there to rule on. */
-  const review = reviewStats(
-    corrected && f.band
-      ? { ...f, band: { ...f.band, basis: corrected.previous?.basis ?? "" } }
-      : f,
-  );
+  /* Straight from the shared helper, on the sortie as it is. It used to be
+     handed a doctored band here — basis swapped back to the engine's — because
+     `isGroundCount` read 'manual' off a corrected drone sortie and reported
+     "nothing to review" over animals that are all still there. That is fixed
+     where it belonged, in `isGroundCount`, so this row, the list row and the
+     dashboard's share now agree without a local patch that only this panel
+     had. */
+  const review = reviewStats(f);
   /* A count a person made rather than the engine. Labelled, never dressed up
      with a range it does not have. */
   const isManual = f.engine === "manual";

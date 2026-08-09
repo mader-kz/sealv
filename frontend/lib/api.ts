@@ -198,6 +198,17 @@ export type RunCorrection = {
     engine?: string | null;
     run_id?: string | null;
   } | null;
+  /* What produced the ANIMALS, read off `evidence_run` rather than off the run
+     this correction replaced. The two differ the moment a correction is itself
+     corrected: `previous` is then a manual run, and a reader taking the engine
+     from it calls a drone sortie a ground count. Optional — a service too old
+     to send it leaves callers on the `previous` fallback, which is right for
+     the single-correction case they were built for. */
+  evidence?: {
+    run_id?: string | null;
+    engine?: string | null;
+    basis?: string | null;
+  } | null;
 };
 
 /* The wire types above keep `location_source` as a plain string on purpose: a
