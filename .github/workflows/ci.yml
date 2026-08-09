@@ -170,9 +170,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      # v7 matches the repo's other actions and runs on a current Node runtime
+      # (v4 was pinned to the deprecated Node 20 and drew a warning on every
+      # run). node-version 22 is what every local build already uses.
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
