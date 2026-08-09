@@ -15,7 +15,7 @@
  * silently discarded files.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   useIngestStore,
   isRunning,
@@ -93,6 +93,16 @@ function Row({ item, queuePos, queueTotal }: { item: IngestItem; queuePos: numbe
   const setPinMode = useFootageStore((s) => s.setPinMode);
   const setPinPoints = useFootageStore((s) => s.setPinPoints);
 
+  /* A card that needs a person scrolls itself into view: in a panel that now
+     scrolls, the frame picker or the pin controls otherwise appear below the
+     fold and the file just looks stuck. */
+  const cardRef = useRef<HTMLDivElement>(null);
+  const needsYou =
+    item.phase === "needs_location" || item.phase === "duplicate_choice" || item.phase === "frame_choice";
+  useEffect(() => {
+    if (needsYou) cardRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [needsYou]);
+
   /* Arm the pin the moment a location-less file needs one — the gesture users
      learned before the queue existed was drop-then-click-the-map, and without
      this the map click silently did nothing until the button was found. Only
@@ -166,7 +176,7 @@ function Row({ item, queuePos, queueTotal }: { item: IngestItem; queuePos: numbe
   const owningPin = pinTarget === item.id;
 
   return (
-    <div className="rounded border border-line bg-surface2 px-2.5 py-2">
+    <div ref={cardRef} className="rounded border border-line bg-surface2 px-2.5 py-2">
       <div className="flex items-start gap-2">
         <Icon
           name={

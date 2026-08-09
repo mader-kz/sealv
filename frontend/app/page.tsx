@@ -267,13 +267,17 @@ export default function Page(){
             </div>
 
             {/* Ingest panel */}
+            {/* Capped to the viewport with its own scroll: the metadata
+                section, the sample row and a queue of cards can outgrow any
+                screen, and overflow-hidden was silently clipping the frame
+                picker and the pin controls out of existence. */}
             {showUpload && (
-              <div className="absolute top-[52px] right-3 z-30 w-[320px] bg-surface border border-line rounded-lg shadow-pop overflow-hidden">
-                <div className="h-9 px-3 pr-1.5 flex items-center justify-between border-b border-line">
+              <div className="absolute top-[52px] right-3 z-30 w-[320px] max-h-[calc(100%-64px)] bg-surface border border-line rounded-lg shadow-pop overflow-hidden flex flex-col">
+                <div className="h-9 shrink-0 px-3 pr-1.5 flex items-center justify-between border-b border-line">
                   <span className="label">{t("page.ingestFootage")}</span>
                   <IconButton name="close" onClick={()=> setShowUpload(false)} title={t("btn.close")} />
                 </div>
-                <div className="p-3">
+                <div className="p-3 overflow-y-auto min-h-0">
                   <Dropzone />
                 </div>
               </div>
