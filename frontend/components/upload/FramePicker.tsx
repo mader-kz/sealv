@@ -138,7 +138,7 @@ function FrameLightbox({
     <Dialog open={index !== null} onOpenChange={(v) => !v && onClose()}>
       <DialogContent
         aria-describedby={undefined}
-        className="max-w-[92vw] w-[min(1000px,92vw)] h-[86vh] p-0 gap-0 flex flex-col overflow-hidden bg-surface border-line rounded"
+        className="max-w-[92vw] w-[min(1000px,92vw)] h-[92vh] p-0 gap-0 flex flex-col overflow-hidden bg-surface border-line rounded"
       >
         <DialogHeader className="flex-row items-baseline gap-3 space-y-0 px-4 py-3 pr-12 border-b border-line shrink-0">
           <DialogTitle className="text-sm font-medium text-ink tracking-normal">
@@ -171,7 +171,7 @@ function FrameLightbox({
             <img
               src={full ?? frame.dataUrl}
               alt=""
-              className="absolute inset-0 w-full h-full object-contain p-3"
+              className="absolute inset-0 w-full h-full object-contain p-1"
             />
           )}
         </div>

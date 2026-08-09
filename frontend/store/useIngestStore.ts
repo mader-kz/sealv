@@ -61,6 +61,11 @@ import {
   type FrameErrorCode,
 } from "@/lib/media/frames";
 
+/* Serializes client-side frame extraction across the whole queue: every video
+   of a drop goes through the picker, and this chain is what keeps a 12-clip
+   drop from opening 12 <video> decoders at once. See wantFrames. */
+let extractChain: Promise<void> = Promise.resolve();
+
 /* ------------------------------------------------------------------ types */
 
 export type IngestPhase =
@@ -711,31 +716,55 @@ export const useIngestStore = create<IngestStore>((set, get) => ({
     const surveyId = it.duplicateAfterUpload ? undefined : (it.duplicateOf?.survey_id ?? undefined);
     patch(id, {
       duplicateAck: true,
-      phase: "queued",
       meta: surveyId ? { ...it.meta, survey_id: surveyId } : it.meta,
     });
-    get().runNext();
+    /* A re-counted VIDEO goes back through the picker, not to the engine
+       whole: "count again" answers the duplicate question, it must not
+       resurrect the removed full-analysis path as a side effect. */
+    if (it.kind === "video") {
+      void get().wantFrames(id);
+    } else {
+      patch(id, { phase: "queued" });
+      get().runNext();
+    }
   },
 
   wantFrames: async (id) => {
     const it = itemOf(id);
     if (!it || it.kind !== "video") return;
     if (isRunning(it.phase)) return;
+    /* Frames already extracted (a duplicate loop, a re-entry): just show the
+       picker again — decoding the same clip twice buys nothing. */
+    if (it.frames && it.frames.length > 0 && !it.frameError) {
+      patch(id, { phase: "frame_choice", framesBusy: false });
+      return;
+    }
     patch(id, { phase: "frame_choice", framesBusy: true, frameError: null, frameMoveM: undefined });
-    const ex = await extractFrames(it.file);
-    patch(id, {
-      frames: ex.frames,
-      frameError: ex.error,
-      framesBusy: false,
-      frameSpread: { duration: ex.duration, evenlySpaced: ex.evenlySpaced },
+    /* One clip decodes at a time. A bulk drop now sends EVERY video through
+       the picker, and twelve concurrent <video> decoders is the browser
+       falling over — so extraction rides a module-scope chain. The card
+       already shows "extracting" from the patch above, which stays honest:
+       the work is queued, then done. */
+    const run = extractChain.then(async () => {
+      if (!itemOf(id)) return; // cancelled while waiting its turn
+      const ex = await extractFrames(it.file);
+      if (!itemOf(id)) return;
+      patch(id, {
+        frames: ex.frames,
+        frameError: ex.error,
+        framesBusy: false,
+        frameSpread: { duration: ex.duration, evenlySpaced: ex.evenlySpaced },
+      });
+      /* Did the aircraft stay over one scene, or fly a strip? Measured here,
+         once, off the same track the chosen frame will be georeferenced against
+         — so the picker's warning and the frame's coordinate cannot disagree.
+         Second, after the strip: the frames are what the operator is waiting
+         for, and a metadata read must not hold them back. */
+      const track = await clipTrack(it);
+      if (itemOf(id)?.phase === "frame_choice") patch(id, { frameMoveM: track ? trackSpanM(track) : null });
     });
-    /* Did the aircraft stay over one scene, or fly a strip? Measured here,
-       once, off the same track the chosen frame will be georeferenced against
-       — so the picker's warning and the frame's coordinate cannot disagree.
-       Second, after the strip: the frames are what the operator is waiting
-       for, and a metadata read must not hold them back. */
-    const track = await clipTrack(it);
-    if (itemOf(id)?.phase === "frame_choice") patch(id, { frameMoveM: track ? trackSpanM(track) : null });
+    extractChain = run.catch(() => {});
+    await run;
   },
 
   /* There is deliberately no `chooseFullAnalysis` next to this. It used to sit

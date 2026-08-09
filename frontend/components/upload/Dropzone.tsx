@@ -114,19 +114,12 @@ export default function Dropzone() {
       const entries: NewIngest[] = [];
       const claimed = new Set<File>();
       let unreadable = 0;
-      /* A drop of exactly one video goes to the picker, because picking the
-         frame IS how a clip is counted now — there is no longer a second
-         button offering the whole video instead.
-         A bulk drop is the one remaining exception, and it is a deliberate
-         one: twelve clips would mean twelve pickers each decoding twelve
-         frames in this browser at once, so they queue and the engine reads
-         them whole. That is a wider claim than one frame, not a narrower one,
-         and every still-queued video row keeps the "pick a frame" button until
-         the worker reaches it. If bulk should become frame-first too, this
-         line is the change — and it needs a story for the decode load. */
-      const videos = arr.filter((f) => kindOf(f.name) === "video");
-      const media = arr.filter((f) => { const k = kindOf(f.name); return k === "video" || k === "image"; });
-      const askFrames = media.length === 1 && videos.length === 1 ? videos[0] : null;
+      /* EVERY video goes to the picker — bulk drops included. Picking the
+         frame IS how a clip is counted now; the whole-clip path is gone from
+         this app. The decode load that used to justify a bulk exception is
+         handled where it belongs: the store serializes extraction, one clip's
+         decoder at a time, and the other cards honestly say "extracting". */
+      const videos = new Set(arr.filter((f) => kindOf(f.name) === "video"));
 
       for (const f of arr) {
         const kind = kindOf(f.name);
@@ -146,7 +139,7 @@ export default function Dropzone() {
            The frame choice is set HERE, before the row is enqueued — the
            worker takes the first `queued` item the instant enqueue returns, so
            asking afterwards would lose the race and count the whole video. */
-        entries.push({ file: f, sidecar, kind, phase: f === askFrames ? "frame_choice" : undefined });
+        entries.push({ file: f, sidecar, kind, phase: videos.has(f) ? "frame_choice" : undefined });
       }
 
       for (const [stem, pool] of sidecarByStem) {
@@ -172,10 +165,9 @@ export default function Dropzone() {
          buries the ones that DID make it in a stack of red. */
       if (unreadable > 0) toast.error(t("ingest.someSkipped", { n: unreadable, total: arr.length }));
 
-      if (askFrames) {
-        const at = entries.findIndex((e) => e.file === askFrames);
-        if (at >= 0) void wantFrames(ids[at]);
-      }
+      entries.forEach((e, i) => {
+        if (videos.has(e.file)) void wantFrames(ids[i]);
+      });
     },
     [enqueue, wantFrames, t],
   );
