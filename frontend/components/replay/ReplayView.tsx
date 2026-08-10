@@ -389,8 +389,12 @@ function ReplayStage({ f }: { f: Footage }) {
       const el = mapWrapRef.current;
       if (disposed || !el) return;
       const maplibregl = mod.default ?? mod;
+      /* Same worker-URL repair as CaspianMap — whichever map is created
+         first spawns the shared pool, so both callers must set it. */
+      (mod.setWorkerUrl ?? maplibregl.setWorkerUrl)?.("/maplibre-gl-worker.js");
       const map = new maplibregl.Map({ container: el, style: SAT_STYLE });
       mapRef.current = map;
+      if (process.env.NODE_ENV === "development") (window as any).__replayMap = map;
       map.on("load", () => {
         if (disposed) return;
         map.addSource("replay", { type: "geojson", data: fc });
@@ -401,7 +405,7 @@ function ReplayStage({ f }: { f: Footage }) {
           filter: ["<", ["get", "seq"], 0],
           paint: {
             "circle-color": ACCENT,
-            "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 2, 12, 3.5, 16, 6],
+            "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 2, 12, 3.5, 16, 7, 18, 10],
             "circle-opacity": 0.85,
             "circle-stroke-color": "#ffffff",
             "circle-stroke-width": 0.8,
@@ -418,7 +422,7 @@ function ReplayStage({ f }: { f: Footage }) {
             filter: ["==", ["get", "seq"], -1],
             paint: {
               "circle-color": ACCENT,
-              "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 7, 16, 16],
+              "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 7, 16, 16, 18, 24],
               "circle-opacity": 0.3,
               "circle-blur": 0.5,
             },
@@ -427,7 +431,7 @@ function ReplayStage({ f }: { f: Footage }) {
         );
         const b = new maplibregl.LngLatBounds();
         for (const m of placedMarks) b.extend([m.lng, m.lat]);
-        map.fitBounds(b, { padding: 70, maxZoom: 15.5, duration: 0 });
+        map.fitBounds(b, { padding: 70, maxZoom: 16, duration: 0 });
         mapReadyRef.current = true;
         mapKRef.current = -1;
         /* The dialog is still animating open when `load` fires, so the first
@@ -437,7 +441,7 @@ function ReplayStage({ f }: { f: Footage }) {
         setTimeout(() => {
           if (disposed) return;
           map.resize();
-          map.fitBounds(b, { padding: 70, maxZoom: 15.5, duration: 0 });
+          map.fitBounds(b, { padding: 70, maxZoom: 16, duration: 0 });
         }, 300);
         sync();
       });

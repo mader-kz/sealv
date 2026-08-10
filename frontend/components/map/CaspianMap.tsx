@@ -187,6 +187,11 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
   const initMap = useCallback(async ()=>{
     if (!containerRef.current || mapRef.current) return;
     const ml = await import("maplibre-gl");
+    /* Before the first Map spawns the worker pool: webpack mangles the
+       library's own worker URL into one that serves index.html, and a map
+       whose worker died renders every GeoJSON source as nothing, silently.
+       The worker file is staged into public/ by tools/copy-maplibre-worker.mjs. */
+    ((ml as any).setWorkerUrl ?? (ml as any).default?.setWorkerUrl)?.("/maplibre-gl-worker.js");
     MarkerCtorRef.current = (ml as any).Marker || (ml as any).default?.Marker;
     if (!containerRef.current || mapRef.current) return; // torn down while importing
     const MapCtor: any = (ml as any).Map || (ml as any).default?.Map;

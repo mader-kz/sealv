@@ -12,6 +12,9 @@
 /out/
 /build
 
+# staged by tools/copy-maplibre-worker.mjs on every dev/build run
+/public/maplibre-gl-worker.js
+
 # misc
 .DS_Store
 *.pem
@@ -46,3 +49,4 @@ Thumbs.db
 
 # samples - keep json/srt but ignore large media if needed
 # keep samples/ as is for now
+/public/maplibre-gl-shared.mjs
