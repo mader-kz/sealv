@@ -187,3 +187,44 @@ CREATE TABLE IF NOT EXISTS edit (
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS ix_edit_run ON edit(run_id, created_at);
+
+-- A durable identity for an inferred seal group. The algorithm may rebuild
+-- its candidate tracks as new surveys arrive; the observations below are the
+-- stable seam that lets an operator's name and verdict survive that rebuild.
+CREATE TABLE IF NOT EXISTS population (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS population_observation (
+    id                TEXT PRIMARY KEY,
+    population_id     TEXT NOT NULL REFERENCES population(id),
+    survey_id          TEXT NOT NULL,
+    observed_at        TEXT NOT NULL,
+    lat                REAL NOT NULL,
+    lng                REAL NOT NULL,
+    size               INTEGER NOT NULL,
+    source             TEXT NOT NULL, -- points | aggregate
+    member_ids         TEXT NOT NULL, -- JSON array; evidence behind the snapshot
+    assignment_status  TEXT NOT NULL DEFAULT 'auto', -- auto | confirmed
+    created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS ix_population_observation_population_time
+    ON population_observation(population_id, observed_at);
+
+-- Append-overwrite verdict per proposed edge. A rejected edge is retained so
+-- the next automatic rebuild cannot quietly suggest it again.
+CREATE TABLE IF NOT EXISTS population_link_review (
+    from_observation_id TEXT NOT NULL,
+    to_observation_id   TEXT NOT NULL,
+    decision            TEXT NOT NULL, -- confirmed | rejected
+    operator            TEXT,
+    created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (from_observation_id, to_observation_id),
+    FOREIGN KEY (from_observation_id) REFERENCES population_observation(id),
+    FOREIGN KEY (to_observation_id) REFERENCES population_observation(id)
+);

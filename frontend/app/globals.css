@@ -481,6 +481,185 @@ a:focus-visible {
   pointer-events: none;
 }
 
+/* A tracked group's snapshots use the same instrument-card language as the
+   current site chips: dark square plates, a coordinate label, and one green
+   count. Their links express inferred chronological adjacency, not a sampled
+   GPS trail. */
+.movement-card-link {
+  stroke: var(--good);
+  stroke-width: 1.5;
+  stroke-opacity: 0.62;
+  stroke-linecap: round;
+}
+.movement-observation-card {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  min-width: 104px;
+  padding: 4px 10px 5px;
+  border: 0;
+  border-left: 1px solid var(--ink-4);
+  border-radius: 0;
+  background: rgb(11 13 16 / 0.93);
+  color: var(--accent);
+  box-shadow: none;
+  cursor: pointer;
+  line-height: 1;
+  transition: transform .12s linear, opacity .12s linear, background .12s linear, border-color .12s linear;
+}
+.movement-observation-card:hover {
+  transform: translate(-50%, -50%) scale(1.04);
+  background: rgb(22 26 32 / 0.96);
+  border-left-color: var(--ink-2);
+}
+.movement-observation-card.dimmed {
+  opacity: 0.2;
+}
+.movement-observation-card.dimmed:hover {
+  opacity: 0.58;
+}
+.movement-observation-card.expanded:not(.latest) {
+  opacity: 0.72;
+}
+.movement-card-location {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--ink-3);
+  font-size: 10.5px;
+  line-height: 1.3;
+  font-weight: 400;
+}
+.movement-card-date {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--ink-4);
+  font-size: 9.5px;
+  line-height: 1.2;
+  font-weight: 400;
+}
+.movement-card-count {
+  color: inherit;
+  font-size: 21px;
+  line-height: 1;
+  font-weight: 500;
+  letter-spacing: -0.025em;
+}
+.movement-observation-card.latest {
+  z-index: 2;
+  transform: translate(-50%, -50%) scale(1.04);
+  border-left: 2px solid var(--accent);
+  background: rgb(22 26 32 / 0.98);
+  opacity: 1;
+}
+.movement-observation-card.latest:hover {
+  transform: translate(-50%, -50%) scale(1.08);
+}
+.movement-observation-card.anomaly,
+.movement-observation-card.latest.anomaly {
+  color: var(--bad);
+  border-left-color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 10%, rgb(11 13 16 / 0.98));
+}
+.movement-observation-card.anomaly:hover,
+.movement-observation-card.latest.anomaly:hover {
+  border-left-color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 16%, rgb(22 26 32 / 0.98));
+}
+.movement-observation-card.carried:not(.selected) {
+  opacity: .56;
+  color: var(--ink-2);
+  border-left-color: var(--ink-3);
+}
+.movement-observation-card.checkpoint-current:not(.selected) {
+  opacity: 1;
+}
+.movement-observation-card.checkpoint-current:not(.selected)::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: var(--accent);
+}
+.movement-observation-card.checkpoint-current.anomaly:not(.selected)::before {
+  background: var(--bad);
+}
+.movement-observation-card.selected,
+.movement-observation-card.expanded.selected,
+.movement-observation-card.latest.selected {
+  z-index: 100;
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1.1);
+  border: 1px solid var(--accent);
+  border-left-width: 3px;
+  background: rgb(22 26 32 / 1);
+  box-shadow:
+    0 0 0 1px rgb(11 13 16 / .95),
+    0 0 0 3px color-mix(in srgb, var(--accent) 82%, white),
+    0 10px 26px rgb(0 0 0 / .48);
+}
+.movement-observation-card.selected::after {
+  content: "";
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  width: 9px;
+  height: 9px;
+  border: 2px solid rgb(11 13 16);
+  border-radius: 50%;
+  background: var(--accent);
+}
+.movement-observation-card.selected:hover,
+.movement-observation-card.expanded.selected:hover,
+.movement-observation-card.latest.selected:hover {
+  transform: translate(-50%, -50%) scale(1.12);
+}
+.movement-observation-card.selected.anomaly {
+  border-color: var(--bad);
+  box-shadow:
+    0 0 0 1px rgb(11 13 16 / .95),
+    0 0 0 3px color-mix(in srgb, var(--bad) 82%, white),
+    0 10px 26px rgb(0 0 0 / .48);
+}
+.movement-observation-card.selected.anomaly::after { background: var(--bad); }
+
+.avoidance-region-label {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  display: grid;
+  min-width: 132px;
+  padding: 7px 10px 8px;
+  border-left: 2px solid var(--bad);
+  background: rgb(11 13 16 / 0.94);
+  color: var(--bad);
+  line-height: 1.1;
+  transition: opacity .14s linear;
+}
+.avoidance-region-label.dimmed { opacity: .2; }
+.avoidance-region-label strong {
+  margin-top: 4px;
+  font-size: 23px;
+  font-weight: 500;
+  letter-spacing: -.025em;
+}
+.avoidance-region-label > span:last-child {
+  margin-top: 2px;
+  color: var(--ink-2);
+  font-size: 10px;
+}
+.avoidance-region-status {
+  color: var(--bad);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
 /* Pin-mode anchor: a DOM marker, deliberately not a WebGL layer. DOM survives
    every GL quirk (software renderers included), can pulse via CSS, and is
    always exactly where MapLibre projects it. Placing a pin is a live state,

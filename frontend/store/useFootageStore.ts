@@ -2,17 +2,22 @@
 import { create } from "zustand";
 import { toast } from "sonner";
 import type { Footage, Detection, TrackPoint, MapLayerState } from "@/lib/types";
-import { mockDetections, generateSeedTrack, KZ_SITES } from "@/lib/mock/detections";
+import { movementDemoFootages } from "@/lib/mock/detections";
 import {
   fetchStats, fetchRunPoints, fetchTrack, pointsToDetections, mediaFileUrl, editPoints,
   patchSurvey, retireSurvey, unretireSurvey, createObservation, correctCount, purgeSurvey,
+  fetchPopulations, syncPopulationTracks, renamePopulation, reviewPopulationLink,
   NOTES_MAX, REASON_MAX,
 } from "@/lib/api";
 import { locationSourceOf } from "@/lib/api";
-import type { ObservationIn, StatsLatestRun, SurveyOut, SurveyPatch } from "@/lib/api";
+import type {
+  ObservationIn, StatsLatestRun, SurveyOut, SurveyPatch,
+  PopulationOut, PopulationLinkReviewOut, PopulationSyncTrack,
+} from "@/lib/api";
 import { getOperator } from "@/lib/identity";
 import { sortieAreaM2 } from "@/lib/analytics/area";
 import { translate, useLangStore } from "@/lib/i18n";
+import { DEFAULT_TRACKING_OPTIONS, type TrackingOptions } from "@/lib/analytics/tracking";
 
 /* Re-exported so a form can name the shape it builds without reaching past the
    store into the HTTP client. One definition either way - these are aliases,
@@ -48,7 +53,18 @@ type Store = {
   footages: Footage[];
   detections: Detection[];
   selectedId: string | null;
+  /** Shared map/dashboard focus for one inferred population route. */
+  selectedPopulationId: string | null;
+  /** A concrete dated sighting inside the focused population route. */
+  selectedObservationId: string | null;
   layerState: MapLayerState;
+  /** One inference contract shared by the dashboard table and the map lines. */
+  trackingOptions: TrackingOptions;
+  populations: PopulationOut[];
+  populationReviews: PopulationLinkReviewOut[];
+  trackPopulationIds: Record<string, string>;
+  populationSyncState: "idle" | "syncing" | "synced" | "error";
+  populationError: string | null;
   pinMode: boolean;
   pinPoints: TrackPoint[];
   timeRange: [number, number];
@@ -85,7 +101,17 @@ type Store = {
   verdictsInFlight: number;
   addFootage: (f: Footage) => void;
   select: (id: string | null) => void;
+  selectPopulation: (id: string | null, observationId?: string | null) => void;
+  selectPopulationObservation: (id: string | null) => void;
   setLayer: (k: keyof MapLayerState, v: boolean) => void;
+  setTrackingOption: <K extends keyof TrackingOptions>(k: K, v: TrackingOptions[K]) => void;
+  syncTrackedPopulations: (tracks: PopulationSyncTrack[]) => Promise<boolean>;
+  renameTrackedPopulation: (populationId: string, name: string) => Promise<boolean>;
+  reviewTrackedLink: (
+    fromObservationId: string,
+    toObservationId: string,
+    decision: "confirmed" | "rejected",
+  ) => Promise<boolean>;
   setPinMode: (v: boolean) => void;
   setPinPoints: (pts: TrackPoint[]) => void;
   setTimeRange: (r: [number, number]) => void;
@@ -344,7 +370,18 @@ export const useFootageStore = create<Store>((set, get) => ({
   footages: [],
   detections: [],
   selectedId: null,
-  layerState: { footprints: true, detections: true },
+  selectedPopulationId: null,
+  selectedObservationId: null,
+  /* Current group positions are the map's baseline. Flight footprints and
+     haul-out overlays are optional context: starting both enabled turns the
+     focused movement view into a web of unrelated survey geometry. */
+  layerState: { footprints: false, detections: false },
+  trackingOptions: { ...DEFAULT_TRACKING_OPTIONS },
+  populations: [],
+  populationReviews: [],
+  trackPopulationIds: {},
+  populationSyncState: "idle",
+  populationError: null,
   pinMode: false,
   pinPoints: [],
   timeRange: [0, 100],
@@ -367,7 +404,63 @@ export const useFootageStore = create<Store>((set, get) => ({
      contribution to the estimate. Retirement is the real operation and the
      only one offered; see `retireFootage`. */
   select: (id) => set({ selectedId: id }),
+  selectPopulation: (id, observationId=null) => set({
+    selectedPopulationId: id,
+    selectedObservationId: id ? observationId : null,
+  }),
+  selectPopulationObservation: (id) => set({ selectedObservationId: id }),
   setLayer: (k,v) => set(s=>({ layerState: {...s.layerState, [k]: v }})),
+  setTrackingOption: (k,v) => set(s=>({ trackingOptions: { ...s.trackingOptions, [k]: v } })),
+  syncTrackedPopulations: async (tracks) => {
+    set({ populationSyncState: "syncing", populationError: null });
+    try {
+      const state = await syncPopulationTracks(tracks);
+      set({
+        populations: state.populations,
+        populationReviews: state.reviews,
+        trackPopulationIds: Object.fromEntries(
+          state.tracks.map((row) => [row.track_id, row.population_id]),
+        ),
+        populationSyncState: "synced",
+      });
+      return true;
+    } catch (error) {
+      set({ populationSyncState: "error", populationError: messageOf(error) });
+      return false;
+    }
+  },
+  renameTrackedPopulation: async (populationId, name) => {
+    try {
+      const population = await renamePopulation(populationId, name);
+      set((s) => ({
+        populations: s.populations.map((item) => item.id === population.id ? population : item),
+        populationError: null,
+      }));
+      return true;
+    } catch (error) {
+      set({ populationError: messageOf(error) });
+      return false;
+    }
+  },
+  reviewTrackedLink: async (fromObservationId, toObservationId, decision) => {
+    try {
+      const state = await reviewPopulationLink({ fromObservationId, toObservationId, decision });
+      set({
+        populations: state.populations,
+        populationReviews: [
+          state.review,
+          ...get().populationReviews.filter((item) =>
+            item.from_observation_id !== fromObservationId
+            || item.to_observation_id !== toObservationId),
+        ],
+        populationError: null,
+      });
+      return true;
+    } catch (error) {
+      set({ populationError: messageOf(error) });
+      return false;
+    }
+  },
   setPinMode: (v) => set({ pinMode: v }),
   setPinPoints: (pts) => set({ pinPoints: pts }),
   setTimeRange: (r) => set({ timeRange: r }),
@@ -895,6 +988,7 @@ export const useFootageStore = create<Store>((set, get) => ({
         size: 0,
         duration: 0,
         uploadedAt: when ?? new Date().toISOString(),
+        ingestedAt: instantFromService(run.created_at) ?? new Date().toISOString(),
         capturedAt: when,
         track: [],
         detections: [],
@@ -939,7 +1033,10 @@ export const useFootageStore = create<Store>((set, get) => ({
   clearAll: () => {
     for (const f of get().footages) releaseBlob(f.videoUrl);
     set({
-      footages: [], detections: [], selectedId: null, pinPoints: [],
+      footages: [], detections: [], selectedId: null,
+      selectedPopulationId: null, selectedObservationId: null, pinPoints: [],
+      populations: [], populationReviews: [], trackPopulationIds: {},
+      populationSyncState: "idle", populationError: null,
       loadedRuns: 0, totalRuns: null, hydrateSkipped: 0, hydrateError: null,
       notesState: {}, retirement: {}, corrections: {}, siteAssign: null, frameGeom: {},
     });
@@ -972,6 +1069,11 @@ export const useFootageStore = create<Store>((set, get) => ({
   hydrate: () => {
     if (inflight) return inflight;
     set({ hydrating: true, hydrateError: null });
+    void fetchPopulations().then((state) => set({
+      populations: state.populations,
+      populationReviews: state.reviews,
+      populationError: null,
+    })).catch((error) => set({ populationError: messageOf(error) }));
 
     const rank = new Map<string, number>();
 
@@ -1088,6 +1190,8 @@ export const useFootageStore = create<Store>((set, get) => ({
         uploadedAt: instantFromService(r.captured_at)
           ?? instantFromService(r.created_at)
           ?? new Date().toISOString(),
+        ingestedAt: instantFromService(r.media_created_at)
+          ?? instantFromService(r.created_at),
         /* Carried SEPARATELY from uploadedAt and null when unrecorded. The
            timeline needs a date for every sortie and falls back to the job
            clock to get one; the inspector must be able to tell the two apart,
@@ -1097,6 +1201,7 @@ export const useFootageStore = create<Store>((set, get) => ({
         surveyId: r.survey_id ?? undefined,
         siteId: r.site_id ?? null,
         siteName: r.site_name ?? null,
+        siteRegion: r.site_region ?? null,
         notes: r.notes ?? null,
         operator: r.operator ?? null,
         /* Narrowed, not cast: a provenance token this build does not know
@@ -1266,42 +1371,7 @@ export const useFootageStore = create<Store>((set, get) => ({
        themselves while hydrating, but the invariant belongs here — a UI
        attribute is not where a store's rules should live. */
     if (get().footages.length > 0 || get().hydrating) return;
-    const demo: Footage[] = KZ_SITES.slice(0,8).map((site, idx)=> {
-      const duration = 90 + Math.random()*80;
-      const track = generateSeedTrack({lat: site.lat, lng: site.lng}, duration, 40);
-      const id = `test-${site.id.toLowerCase()}-${idx}`;
-      const dets = mockDetections(track, id);
-      const center = track[Math.floor(track.length/2)];
-      return {
-        id,
-        filename: `TEST_${String(102+idx).padStart(4,"0")}.MP4`,
-        size: 180000000 + Math.floor(Math.random()*200000000),
-        duration: Math.round(duration),
-        uploadedAt: new Date(Date.now() - idx*86400000*3 - Math.random()*86400000).toISOString(),
-        track,
-        detections: dets,
-        center: { lat: center.lat, lng: center.lng },
-        status: "ready" as const,
-        source: "test" as const,
-      };
-    });
-    const extras = Array.from({length: 8}, (_,i)=>{
-      const lat = 42.5 + Math.random()*3;
-      const lng = 50.0 + Math.random()*2.5;
-      const id = `test-extra-${i}`;
-      const track = generateSeedTrack({lat,lng}, 80+Math.random()*60, 35);
-      const dets = mockDetections(track, id);
-      const center = track[Math.floor(track.length/2)];
-      return {
-        id,
-        filename: `TEST_${String(200+i).padStart(4,"0")}.MP4`,
-        size: 150000000 + Math.floor(Math.random()*150000000),
-        duration: Math.round(80+Math.random()*60),
-        uploadedAt: new Date(Date.now() - (8+i)*86400000).toISOString(),
-        track, detections: dets, center, status: "ready" as const, source: "test" as const
-      } as Footage;
-    });
-    const all = [...demo, ...extras];
+    const all = movementDemoFootages();
     set({ footages: all, detections: all.flatMap(f=>f.detections) });
   }
 }));

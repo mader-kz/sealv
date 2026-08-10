@@ -46,6 +46,8 @@ export type Footage = {
   size: number;
   duration: number; // seconds
   uploadedAt: string;
+  /** Immutable time this system received/created the media or observation. */
+  ingestedAt?: string | null;
   track: TrackPoint[];
   /* EVERY detection the run produced, including the ones a reviewer rejected.
      Rejections are survey evidence and the only recall data this system will
@@ -60,11 +62,9 @@ export type Footage = {
      and stays in the totals. Dropping such a run (which hydrate used to do) is
      how a season's total silently loses a colony. Absent = placed. */
   placed?: boolean;
-  /* No `region`. It was `center.lat > 44.5 ? "KZ-East" : …` — a latitude
-     threshold wearing a toponym's clothes, invented at ingest and then shown,
-     charted, exported and put in sentences as if it were a place. The measured
-     thing is the centre coordinate, and that is what the UI shows. A real
-     region needs the service's `site` table, not an if-else. */
+  /* Region comes only from the service's named site registry. It is never
+     inferred from latitude: an absent value is unknown, not a geographic guess. */
+  siteRegion?: string | null;
   status: "processing" | "ready" | "error";
   /* Where this sortie's positions came from. `frame` is a quick count: a single
      still cut out of a video and ingested as an image, which trades the

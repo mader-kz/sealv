@@ -56,6 +56,48 @@ export type SeasonEstimate = {
   sites: number;
 };
 
+export type StandingContribution<T extends EstimateFootage = EstimateFootage> = {
+  footage: T;
+  count: number;
+  /** Null for a count with no honest coordinate. */
+  center: { lat: number; lng: number } | null;
+};
+
+/**
+ * The exact terms behind the standing estimate. Exposing them lets the map,
+ * regional split and checkpoint ledger consume the same chosen sortie per
+ * site instead of reverse-engineering the headline from site centroids.
+ */
+export function standingContributions<T extends EstimateFootage>(
+  footages: T[] | null | undefined,
+  radiusM = SITE_RADIUS_M,
+): StandingContribution<T>[] {
+  const list = (Array.isArray(footages) ? footages : []).filter(Boolean);
+  const placeable: T[] = [];
+  const out: StandingContribution<T>[] = [];
+
+  for (const footage of list) {
+    if (isPlaced(footage)) placeable.push(footage);
+    else out.push({ footage, count: countOf(footage), center: null });
+  }
+
+  for (const site of groupIntoSites(placeable, radiusM)) {
+    const series = siteSeries(site);
+    for (let index = series.length - 1; index >= 0; index--) {
+      const entry = series[index];
+      if (entry.best == null || !Number.isFinite(entry.best)) continue;
+      out.push({
+        footage: entry.footage,
+        count: entry.best,
+        center: { lat: entry.footage.center.lat, lng: entry.footage.center.lng },
+      });
+      break;
+    }
+  }
+
+  return out;
+}
+
 /**
  * The season's current estimate and the raw observation total it was demoted
  * from. One helper, so the chip, the panel, the dashboard and the report
@@ -76,34 +118,7 @@ export function seasonEstimate<T extends EstimateFootage>(
      one stands as its own single-sortie site. The alternative is silently
      losing measured animals from the headline, which is the same dishonesty
      in the other direction. */
-  const placeable: T[] = [];
-  let strayCount = 0;
-  let strays = 0;
-  for (const f of list) {
-    if (isPlaced(f)) placeable.push(f);
-    else {
-      strays += 1;
-      strayCount += countOf(f);
-    }
-  }
-
-  const sites = groupIntoSites(placeable, radiusM);
-  let current = strayCount;
-  for (const site of sites) {
-    const series = siteSeries(site);
-    /* The latest sortie that actually produced a count. Normally that is the
-       last entry outright; when the most recent visit came back without one
-       (bestCount → null, an unknown and not a zero), the site's last known
-       count is still the honest answer for it — dropping to 0 would report a
-       haul-out as emptied by a flight that measured nothing. */
-    for (let i = series.length - 1; i >= 0; i--) {
-      const best = series[i].best;
-      if (best != null && Number.isFinite(best)) {
-        current += best;
-        break;
-      }
-    }
-  }
-
-  return { current, observed, sorties: list.length, sites: sites.length + strays };
+  const standing = standingContributions(list, radiusM);
+  const current = standing.reduce((sum, contribution) => sum + contribution.count, 0);
+  return { current, observed, sorties: list.length, sites: standing.length };
 }

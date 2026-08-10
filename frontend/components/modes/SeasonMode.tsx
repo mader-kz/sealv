@@ -40,12 +40,13 @@
 import { useMemo, useState } from "react";
 import CaspianMap, { type SiteChip } from "@/components/map/CaspianMap";
 import SiteCard from "@/components/map/SiteCard";
+import PopulationTimeline from "@/components/map/PopulationTimeline";
 import { formatArea, totalAreaM2 } from "@/lib/analytics/area";
 
-import { footagesInRange } from "@/lib/analytics/brush";
 import { countOf } from "@/lib/analytics/count";
 import { seasonEstimate } from "@/lib/analytics/estimate";
 import { seasonReviewStats } from "@/lib/analytics/review";
+import { buildPopulationCheckpoints, populationSnapshot } from "@/lib/analytics/checkpoints";
 import {
   SITE_RADIUS_M,
   groupIntoSites,
@@ -57,6 +58,7 @@ import {
 import { useT } from "@/lib/i18n";
 import { useMode } from "@/lib/modes";
 import { Button } from "@/components/ui/primitives";
+import Icon from "@/components/ui/Icon";
 import type { Footage } from "@/lib/types";
 import { useFootageStore } from "@/store/useFootageStore";
 
@@ -81,8 +83,24 @@ export default function SeasonMode() {
   const { t, tp, lang } = useT();
   const [, setMode] = useMode();
   const footages = useFootageStore((s) => s.footages);
-  const timeRange = useFootageStore((s) => s.timeRange);
   const hydrating = useFootageStore((s) => s.hydrating);
+  const select = useFootageStore((s)=>s.select);
+  const selectPopulation = useFootageStore((s)=>s.selectPopulation);
+  const selectedPopulationId = useFootageStore((s)=>s.selectedPopulationId);
+  const [selectedCheckpointId,setSelectedCheckpointId]=useState<string|null>(null);
+  const [timelineOpen,setTimelineOpen]=useState(false);
+
+  const checkpoints=useMemo(()=>buildPopulationCheckpoints(footages),[footages]);
+  const activeCheckpoint=checkpoints.find(checkpoint=>checkpoint.id===selectedCheckpointId)
+    ?? checkpoints[checkpoints.length-1]
+    ?? null;
+  const checkpointFootageIds=useMemo(()=>activeCheckpoint?.footageIds ?? [],[activeCheckpoint]);
+  const checkpointFootageSet=useMemo(()=>new Set(checkpointFootageIds),[checkpointFootageIds]);
+  const checkpointFootages=useMemo(
+    ()=>footages.filter(footage=>checkpointFootageSet.has(footage.id)),
+    [footages,checkpointFootageSet],
+  );
+  const activeSnapshot=activeCheckpoint?.snapshot ?? populationSnapshot(checkpointFootages);
 
   /* Which site's card is open, held as one of ITS SORTIES rather than as the
      site's key. A key is derived — it is the assigned site id, or the centroid
@@ -101,12 +119,12 @@ export default function SeasonMode() {
      has been withdrawn: in no figure either, but a different claim, and it
      keeps its place in the record. */
   const season = useMemo(() => {
-    const inWindow = footagesInRange(footages, timeRange);
+    const inWindow = checkpointFootages;
     const retired = inWindow.filter((f) => (f.retiredAt ?? "").trim() !== "");
     const live = inWindow.filter((f) => (f.retiredAt ?? "").trim() === "");
     const counted = live.filter(hasResult);
     return { retired, live, counted };
-  }, [footages, timeRange]);
+  }, [checkpointFootages]);
 
   const est = useMemo(() => seasonEstimate(season.counted), [season.counted]);
   const review = useMemo(() => seasonReviewStats(season.counted), [season.counted]);
@@ -232,6 +250,7 @@ export default function SeasonMode() {
   /* The chip hands back a key; the anchor is the first sortie behind it. */
   const openFromChip = (key: string) => {
     const chip = chips.find((c) => c.key === key);
+    setTimelineOpen(false);
     setAnchorId(chip?.footageIds[0] ?? null);
   };
 
@@ -244,6 +263,7 @@ export default function SeasonMode() {
     ].filter(Boolean).join(" · ") || null;
 
   const unplaced = season.counted.filter((f) => !isPlaced(f)).length;
+  const regionalCounts = activeSnapshot;
   const reviewPct = Math.round(review.pct ?? 0);
   /* Sites the estimate could actually take a number from. Every site here has
      one by construction — it was built out of sorties that produced a count —
@@ -273,7 +293,9 @@ export default function SeasonMode() {
             One number in the signal colour; everything beside it is a
             qualification of it and is set as one. */}
         <div className="min-w-[186px] shrink-0">
+          <div className="text-2xs text-ink3 mb-1">{t("region.global")}</div>
           <div
+            data-region-count="global"
             className="tnum text-accent"
             style={{ fontSize: 50, lineHeight: 0.9, fontWeight: 500, letterSpacing: "-0.038em" }}
           >
@@ -288,6 +310,27 @@ export default function SeasonMode() {
           {season.counted.length > 0 && (
             <div className="text-2xs text-ink4 tnum mt-1 leading-relaxed">
               {t("est.observedSub", { n: est.observed, m: season.counted.length })}
+            </div>
+          )}
+        </div>
+
+        {/* The same standing estimate partitioned by the Caspian's
+            conventional geomorphological basins. Sites are assigned by their
+            centroid; counts without a coordinate remain global-only and are
+            stated beneath the three regional figures. */}
+        <div className="shrink-0 border-l border-line pl-5">
+          <div className="text-2xs text-ink3 mb-2">{t("region.title")}</div>
+          <div className="grid grid-cols-3 border-y border-line-soft divide-x divide-line-soft">
+            {(["north","central","south"] as const).map(region=>(
+              <div key={region} className="min-w-[76px] px-3 py-1.5 first:pl-0 last:pr-0">
+                <div className="text-2xs text-ink3">{t(`region.${region}`)}</div>
+                <div data-region-count={region} className="tnum text-xl text-ink mt-0.5 leading-none">{regionalCounts[region]}</div>
+              </div>
+            ))}
+          </div>
+          {regionalCounts.unlocated>0 && (
+            <div className="text-2xs text-ink4 tnum mt-1.5">
+              {t("region.unlocated",{n:regionalCounts.unlocated})}
             </div>
           )}
         </div>
@@ -363,6 +406,13 @@ export default function SeasonMode() {
           siteChips={chips}
           selectedSiteKey={openKey}
           onSiteClick={openFromChip}
+          onMovementFocus={()=>{
+            setTimelineOpen(false);
+            setAnchorId(null);
+          }}
+          historyFootageIds={checkpointFootageIds}
+          standingFootageIds={activeSnapshot.standingFootageIds}
+          checkpointFootageId={activeCheckpoint?.footageId ?? null}
         />
 
         {/* What a chip IS. The unit on this map changed — it used to be one per
@@ -412,6 +462,47 @@ export default function SeasonMode() {
             retired={retiredBySite.get(siteKey(openSite)) ?? []}
             onClose={() => setAnchorId(null)}
           />
+        )}
+
+        {!timelineOpen && !openSite && !selectedPopulationId && checkpoints.length>0 && (
+          <button
+            type="button"
+            data-population-timeline-trigger
+            aria-expanded="false"
+            onClick={()=>{
+              setAnchorId(null);
+              selectPopulation(null);
+              select(null);
+              setTimelineOpen(true);
+            }}
+            className="plate absolute right-3 top-3 z-[19] flex h-9 items-center gap-2 border border-line px-3 text-xs text-ink2 hover:border-ink4 hover:bg-surface2 hover:text-ink"
+          >
+            <Icon name="chart" size={14} />
+            <span>{t("checkpoint.open")}</span>
+            <span className="border-l border-line pl-2 text-2xs text-ink4 tnum">{t("checkpoint.count",{n:checkpoints.length})}</span>
+          </button>
+        )}
+
+        {timelineOpen && (
+          <div className="absolute inset-x-3 bottom-3 z-[30] max-h-[calc(100%-24px)] overflow-auto">
+            <PopulationTimeline
+              checkpoints={checkpoints}
+              selectedId={activeCheckpoint?.id ?? null}
+              onSelect={(checkpoint)=>{
+                setSelectedCheckpointId(checkpoint.id);
+                setAnchorId(null);
+                selectPopulation(null);
+                select(null);
+              }}
+              onOpen={(footageId)=>{
+                setTimelineOpen(false);
+                setAnchorId(null);
+                selectPopulation(null);
+                select(footageId);
+              }}
+              onClose={()=>setTimelineOpen(false)}
+            />
+          </div>
         )}
       </div>
     </div>

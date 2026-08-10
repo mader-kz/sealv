@@ -37,6 +37,7 @@ export type MediaOut = {
   id: string;
   filename: string;
   kind: "image" | "video";
+  created_at?: string | null;
   width: number;
   height: number;
   duration_s?: number | null;
@@ -100,6 +101,7 @@ export function framesUsed(
 export type StatsLatestRun = {
   run_id: string;
   created_at?: string | null;
+  media_created_at?: string | null;
   media_id?: string | null;
   filename?: string | null;
   kind?: "image" | "video" | null;
@@ -129,6 +131,7 @@ export type StatsLatestRun = {
   survey_id?: string | null;
   site_id?: string | null;
   site_name?: string | null;
+  site_region?: string | null;
   site_lat?: number | null;
   site_lng?: number | null;
   survey_lat?: number | null;
@@ -799,6 +802,104 @@ export async function unretireSurvey(id: string): Promise<SurveyOut> {
   return jsonOrThrow(await fetch(`${API}/v1/surveys/${id}/unretire`, { method: "POST" }));
 }
 
+/* ------------------------------------------------ inferred populations */
+
+export type PopulationObservationOut = {
+  id: string;
+  population_id: string;
+  survey_id: string;
+  observed_at: string;
+  lat: number;
+  lng: number;
+  size: number;
+  source: "points" | "aggregate";
+  member_ids: string[];
+  assignment_status: "auto" | "confirmed";
+  created_at: string;
+  updated_at: string;
+};
+
+export type PopulationOut = {
+  id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+  observations: PopulationObservationOut[];
+};
+
+export type PopulationLinkReviewOut = {
+  from_observation_id: string;
+  to_observation_id: string;
+  decision: "confirmed" | "rejected";
+  operator: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PopulationStateOut = {
+  populations: PopulationOut[];
+  reviews: PopulationLinkReviewOut[];
+};
+
+export type PopulationSyncTrack = {
+  id: string;
+  observations: Array<{
+    id: string;
+    surveyId: string;
+    observedAt: string;
+    center: { lat: number; lng: number };
+    size: number;
+    source: "points" | "aggregate";
+    memberIds: string[];
+  }>;
+};
+
+export async function fetchPopulations(): Promise<PopulationStateOut> {
+  return jsonOrThrow(await fetch(`${API}/v1/populations`));
+}
+
+export async function syncPopulationTracks(
+  tracks: PopulationSyncTrack[],
+): Promise<PopulationStateOut & { tracks: Array<{ track_id: string; population_id: string }> }> {
+  return jsonOrThrow(
+    await fetch(`${API}/v1/populations/sync`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tracks }),
+    }),
+  );
+}
+
+export async function renamePopulation(id: string, name: string): Promise<PopulationOut> {
+  return jsonOrThrow(
+    await fetch(`${API}/v1/populations/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    }),
+  );
+}
+
+export async function reviewPopulationLink(input: {
+  fromObservationId: string;
+  toObservationId: string;
+  decision: "confirmed" | "rejected";
+  operator?: string | null;
+}): Promise<PopulationStateOut & { population_id: string; review: PopulationLinkReviewOut }> {
+  return jsonOrThrow(
+    await fetch(`${API}/v1/population-links/review`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        from_observation_id: input.fromObservationId,
+        to_observation_id: input.toObservationId,
+        decision: input.decision,
+        operator: input.operator === undefined ? getOperator() : input.operator,
+      }),
+    }),
+  );
+}
+
 /* ------------------------------------------------- counts of one sortie */
 
 /* One line of a sortie's count history. The engine's run and every human
@@ -938,7 +1039,6 @@ export async function fetchPurgePreview(id: string): Promise<PurgeReceipt> {
 export async function purgeSurvey(id: string): Promise<PurgeReceipt> {
   return jsonOrThrow(await fetch(`${API}/v1/surveys/${id}`, { method: "DELETE" }));
 }
-
 export type SiteOut = {
   id: string;
   name: string;
