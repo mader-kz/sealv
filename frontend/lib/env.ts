@@ -248,28 +248,74 @@ export const formatValue = (v: string, n: number) => n.toFixed(decimalsFor(v));
 /** A slice's own time, printed in UTC. Local time on a map that spans one sea
  *  and three source agencies would be a fourth thing to reconcile; every
  *  measured_at the service sends is UTC and it is shown as UTC. */
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+/** The reader's own zone, named — `UTC+5`, `UTC-3:30`, or plain `UTC`.
+ *
+ * Taken at a given INSTANT rather than at "now", because an offset is a
+ * property of a moment: a slice measured in January and one measured in July
+ * are an hour apart in any country that keeps summer time, and labelling both
+ * with today's offset would be off by that hour for half the year.
+ */
+export function localZoneLabel(at: Date = new Date()): string {
+  const mins = -at.getTimezoneOffset(); // minutes east of UTC
+  if (!Number.isFinite(mins) || mins === 0) return "UTC";
+  const abs = Math.abs(mins);
+  const h = Math.floor(abs / 60);
+  const m = abs % 60;
+  return `UTC${mins > 0 ? "+" : "-"}${h}${m ? `:${pad2(m)}` : ""}`;
+}
+
+/** ISO instant → `дд.мм.гггг чч:мм` in the reader's own zone.
+ *
+ * Day-first because that is what the field team writes, and because the
+ * native `datetime-local` control this replaced rendered `mm/dd/yyyy` for
+ * anyone whose browser is set to US English — a date format that reads as a
+ * DIFFERENT valid date for the first twelve days of every month.
+ */
+export function formatLocalStamp(iso: string): string {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return "";
+  return `${pad2(d.getDate())}.${pad2(d.getMonth() + 1)}.${d.getFullYear()} ${pad2(
+    d.getHours(),
+  )}:${pad2(d.getMinutes())}`;
+}
+
+/** `дд.мм.гггг чч:мм` in the reader's zone → an ISO instant, or null.
+ *
+ * Null rather than a guess: a moment nobody can parse must not silently become
+ * a different moment, because the whole layer answers for the instant asked
+ * for. Separators `.`, `/` and `-` are all accepted (people type what their
+ * keyboard makes easy), the time is optional and defaults to midnight, and a
+ * date that does not exist is rejected instead of rolling over — `31.02.2026`
+ * would otherwise quietly become the 3rd of March.
+ */
+export function parseLocalStamp(v: string): string | null {
+  const m = (v || "").trim().match(
+    /^(\d{1,2})[./-](\d{1,2})[./-](\d{4})(?:[ ,]+(\d{1,2}):(\d{2}))?$/,
+  );
+  if (!m) return null;
+  const day = Number(m[1]);
+  const month = Number(m[2]);
+  const year = Number(m[3]);
+  const hour = m[4] === undefined ? 0 : Number(m[4]);
+  const minute = m[5] === undefined ? 0 : Number(m[5]);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  if (hour > 23 || minute > 59) return null;
+  const d = new Date(year, month - 1, day, hour, minute, 0, 0);
+  if (!Number.isFinite(d.getTime())) return null;
+  // The constructor rolls a nonexistent date forward; catch that here.
+  if (d.getFullYear() !== year || d.getMonth() !== month - 1 || d.getDate() !== day) return null;
+  return d.toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+/** When a slice was measured, in the reader's zone and with the zone named.
+ *  Named because a bare local time cannot be checked against the source's own
+ *  published slice, and this product's rule is that every value says when. */
 export function formatSliceTime(iso: string): string {
   const d = new Date(iso);
   if (!Number.isFinite(d.getTime())) return iso;
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(
-    d.getUTCHours(),
-  )}:${p(d.getUTCMinutes())} UTC`;
-}
-
-/** ISO instant → the `YYYY-MM-DDTHH:mm` a datetime-local input wants, in UTC.
- *  The input is labelled UTC, so no timezone conversion happens in either
- *  direction: what is typed is the instant that is asked for. */
-export function isoToInputUtc(iso: string): string {
-  const d = new Date(iso);
-  if (!Number.isFinite(d.getTime())) return "";
-  return d.toISOString().slice(0, 16);
-}
-
-export function inputUtcToIso(v: string): string | null {
-  if (!v) return null;
-  const d = new Date(`${v}:00Z`);
-  return Number.isFinite(d.getTime()) ? d.toISOString().replace(/\.\d{3}Z$/, "Z") : null;
+  return `${formatLocalStamp(iso)} ${localZoneLabel(d)}`;
 }
 
 /* ---------------------------------------------------------------- colour */
