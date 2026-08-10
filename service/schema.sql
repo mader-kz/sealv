@@ -228,3 +228,56 @@ CREATE TABLE IF NOT EXISTS population_link_review (
     FOREIGN KEY (from_observation_id) REFERENCES population_observation(id),
     FOREIGN KEY (to_observation_id) REFERENCES population_observation(id)
 );
+-- Pollution: sources + incidents (estimated point + radius). Added 2026-08-10.
+-- Encapsulated: new tables only, IF NOT EXISTS, no ALTER of existing tables.
+CREATE TABLE IF NOT EXISTS pollution_source (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    url         TEXT,
+    type        TEXT,
+    poll_method TEXT,
+    update_freq TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS pollution_source_health (
+    source_id           TEXT PRIMARY KEY REFERENCES pollution_source(id),
+    status              TEXT NOT NULL DEFAULT 'never',
+    attempts            INTEGER NOT NULL DEFAULT 0,
+    successes           INTEGER NOT NULL DEFAULT 0,
+    total_items         INTEGER NOT NULL DEFAULT 0,
+    last_attempt_at     TEXT,
+    last_success_at     TEXT,
+    last_item_count     INTEGER,
+    last_error          TEXT,
+    last_duration_ms    INTEGER,
+    next_poll_at        TEXT,
+    lease_owner         TEXT,
+    lease_until         TEXT,
+    updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS ix_pollution_health_due ON pollution_source_health(next_poll_at);
+CREATE TABLE IF NOT EXISTS field (
+    name        TEXT PRIMARY KEY,
+    alias       TEXT,
+    lat         REAL NOT NULL,
+    lng         REAL NOT NULL,
+    radius_m    REAL NOT NULL DEFAULT 5000
+);
+CREATE TABLE IF NOT EXISTS pollution_incident (
+    id                  TEXT PRIMARY KEY,
+    source_id           TEXT NOT NULL REFERENCES pollution_source(id),
+    observed_at         TEXT,
+    lat                 REAL NOT NULL,
+    lng                 REAL NOT NULL,
+    radius_m            REAL NOT NULL DEFAULT 500,
+    geom                TEXT,
+    kind                TEXT,
+    area_km2            REAL,
+    confidence          REAL,
+    location_precision  TEXT,
+    raw                 TEXT,
+    created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS ix_pollution_time ON pollution_incident(observed_at);
+CREATE INDEX IF NOT EXISTS ix_pollution_geo ON pollution_incident(lat, lng);
+CREATE INDEX IF NOT EXISTS ix_pollution_source ON pollution_incident(source_id);

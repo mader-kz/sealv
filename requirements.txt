@@ -17,3 +17,6 @@ huggingface_hub
 fastapi>=0.115
 uvicorn[standard]>=0.32
 python-multipart>=0.0.12
+
+# official environmental bulletin extraction
+pypdf>=5.0,<7

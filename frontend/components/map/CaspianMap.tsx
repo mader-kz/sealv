@@ -15,6 +15,8 @@ import { localeFor, useT } from "@/lib/i18n";
 import { parseLatLng } from "@/lib/parsers/latlng";
 import { Button } from "@/components/ui/primitives";
 import { setMode } from "@/lib/modes";
+import { fetchPollution, pollutionColor, pollutionRadius } from "@/lib/pollution";
+import type { PollutionFC } from "@/lib/pollution";
 
 // Caspian bounds
 const CASPIAN_BOUNDS: [[number, number],[number,number]] = [[46,36],[55,48]];
@@ -449,6 +451,10 @@ export default function CaspianMap({
   /* The live zoom, kept for the pin readout. Updated in the same rAF pass the
      chip overlay already runs, so it costs nothing extra. */
   const [zoomNow, setZoomNow] = useState<number | null>(null);
+  // Pollution — encapsulated additive, no seal logic touched
+  const [pollution, setPollution] = useState<PollutionFC>({ type: "FeatureCollection", features: [] });
+  const [showPollution, setShowPollution] = useState(true);
+  const tipRef = useRef<HTMLDivElement>(null);
   const footagesRaw = useFootageStore(s=>s.footages);
   const detectionsRaw = useFootageStore(s=>s.detections);
   const timeRange = useFootageStore(s=>s.timeRange);
@@ -907,6 +913,66 @@ export default function CaspianMap({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
+  // Pollution fetch: Caspian bbox 46,36,55,48, last 30d
+  useEffect(()=>{
+    const since = new Date(Date.now()-30*86400000).toISOString();
+    fetchPollution({ bbox: "46,36,55,48", since }).then(setPollution).catch(e=>console.warn("[pollution]", e));
+  },[]);
+  // Pollution source/layer (additive, encapsulated)
+  useEffect(()=>{
+    const map:any = mapRef.current; if(!map || !mapLoaded) return;
+    try{
+      const data:any = {
+        type: "FeatureCollection",
+        features: pollution.features.map((f:any)=>({
+          ...f,
+          properties: { ...f.properties, radius_px: pollutionRadius(f.properties), color: pollutionColor(f.properties) }
+        }))
+      };
+      const src:any = map.getSource("pollution");
+      if(src) src.setData(data);
+      else {
+        map.addSource("pollution", { type: "geojson", data });
+        map.addLayer({ id: "pollution-circle", type: "circle", source: "pollution", paint: {
+          "circle-color": ["get","color"],
+          "circle-radius": ["get","radius_px"],
+          "circle-opacity": 0.78,
+          "circle-stroke-color": "#0f1115",
+          "circle-stroke-width": 1
+        }});
+        const tip = tipRef.current;
+        const onMove = (e:any)=>{
+          const feats = map.queryRenderedFeatures(e.point, { layers: ["pollution-circle"] });
+          if(feats.length && tip){
+            const p:any = feats[0].properties;
+            tip.style.display="block";
+            tip.style.left=(e.point.x+12)+"px";
+            tip.style.top=(e.point.y-12)+"px";
+            tip.innerHTML=`${p.kind} · ${p.source_id}<br/>${p.observed_at ?? ""}<br/>r ${p.radius_m}m · ${p.location_precision}`;
+            map.getCanvas().style.cursor="pointer";
+          } else if(tip){ tip.style.display="none"; if(!pinMode) map.getCanvas().style.cursor=""; }
+        };
+        const onLeave = ()=>{ if(tip) tip.style.display="none"; };
+        map.on("mousemove","pollution-circle", onMove);
+        map.on("mouseleave","pollution-circle", onLeave);
+        map.on("mousemove", (e:any)=>{
+          const feats = map.queryRenderedFeatures(e.point, { layers: ["pollution-circle"] });
+          if(feats.length && tip){
+            const p:any = feats[0].properties;
+            tip.style.display="block";
+            tip.style.left=(e.point.x+12)+"px";
+            tip.style.top=(e.point.y-12)+"px";
+            tip.innerHTML=`${p.kind} · ${p.source_id}<br/>${p.observed_at ?? ""}<br/>r ${p.radius_m}m · ${p.location_precision}`;
+          }
+        });
+      }
+    }catch{}
+  },[pollution, mapLoaded, pinMode]);
+  // Pollution visibility toggle
+  useEffect(()=>{
+    const map:any=mapRef.current; if(!map||!mapLoaded) return;
+    try{ if(map.getLayer("pollution-circle")) map.setLayoutProperty("pollution-circle","visibility", showPollution?"visible":"none"); }catch{}
+  },[showPollution, mapLoaded]);
 
   // update cursor when pinMode toggles; in pin mode the data layers step
   // back so the one thing being placed is the loudest thing on the chart
@@ -1549,6 +1615,7 @@ export default function CaspianMap({
   return (
     <div className="relative w-full h-full overflow-hidden bg-bg">
       <div ref={containerRef} className="absolute inset-0" />
+      <div ref={tipRef} className="maptip" style={{ position:"absolute", display:"none", background:"rgba(15,17,21,0.92)", color:"#fff", fontSize:"11px", lineHeight:1.4, padding:"6px 8px", borderRadius:"6px", border:"1px solid rgba(255,255,255,0.15)", pointerEvents:"none", zIndex:12, maxWidth:"220px", whiteSpace:"nowrap" }} />
 
       {/* DOM labels avoid a remote glyph dependency and stay localized even
           when the base map cannot supply Cyrillic/Kazakh font ranges. */}
@@ -1773,6 +1840,8 @@ export default function CaspianMap({
           <span className="w-px h-4 bg-line mx-0.5" />
           <Toggle checked={layerState.footprints} onChange={v=>setLayer("footprints",v)} label={t("map.tracks")} />
           <Toggle checked={layerState.detections} onChange={v=>setLayer("detections",v)} label={t("map.colonies")} />
+          <span className="w-px h-4 bg-line mx-0.5" />
+          <Toggle checked={showPollution} onChange={setShowPollution} label="Pollution" />
         </div>
         {pinMode && (
           <PinReadout

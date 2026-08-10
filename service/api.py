@@ -46,6 +46,25 @@ from la_studio import frames as frames_mod
 
 from . import db, geo, preflight
 from .contract import ConsensusParams, JobParams, Sampling, auto_tile_px
+# Pollution — encapsulated, additive only (service/pollution/*). No existing routes touched.
+# Import is guarded so a broken poller never takes the whole API down.
+try:
+    from service.pollution.api import router as pollution_router  # type: ignore
+    from service.pollution.scheduler import (  # type: ignore
+        start_scheduler as pollution_start_scheduler,
+        stop_scheduler as pollution_stop_scheduler,
+    )
+except Exception:  # pragma: no cover
+    try:
+        from pollution.api import router as pollution_router  # type: ignore
+        from pollution.scheduler import (  # type: ignore
+            start_scheduler as pollution_start_scheduler,
+            stop_scheduler as pollution_stop_scheduler,
+        )
+    except Exception:
+        pollution_router = None  # type: ignore
+        pollution_start_scheduler = None  # type: ignore
+        pollution_stop_scheduler = None  # type: ignore
 
 # Derived from the dataclasses rather than typed out, so a new field in the
 # contract cannot leave this file rejecting something it now supports.
@@ -154,7 +173,19 @@ async def lifespan(_: FastAPI):
             db.init_db(conn)
 
     await asyncio.to_thread(prepare)
-    yield
+    if pollution_start_scheduler is not None:
+        try:
+            await pollution_start_scheduler()
+        except Exception as exc:
+            print(f"[pollution] scheduler startup failed: {exc}")
+    try:
+        yield
+    finally:
+        if pollution_stop_scheduler is not None:
+            try:
+                await pollution_stop_scheduler()
+            except Exception as exc:
+                print(f"[pollution] scheduler shutdown failed: {exc}")
 
 
 app = FastAPI(title="SEALv detection service", lifespan=lifespan)
@@ -168,6 +199,9 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["*"],
 )
+# Pollution router — mount encapsulated API under /v1/pollution. Additive, no existing route touched.
+if pollution_router is not None:  # type: ignore
+    app.include_router(pollution_router)  # type: ignore
 
 
 # ------------------------------------------------------------------ db access

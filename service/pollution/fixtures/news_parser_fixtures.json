@@ -1,0 +1,67 @@
+[
+  {
+    "source_id": "azh_news",
+    "requested_url": "https://azh.kz/ru/news/view/130915?utm_source=fixture",
+    "listing": "<section><a href=\"/ru/news/view/130915\"><h2>Вместо очистных — степь: куда уходят канализационные стоки Кульсары</h2></a><a href=\"?page=2\">»</a></section>",
+    "listing_expected_url": "https://azh.kz/ru/news/view/130915",
+    "html": "<!doctype html><html><head><link rel=\"canonical\" href=\"https://azh.kz/ru/news/view/130915\"><meta property=\"og:title\" content=\"Вместо очистных — степь: куда уходят канализационные стоки Кульсары\"><meta property=\"article:published_time\" content=\"2026-08-10 12:41:00\"></head><body><article><p>Пока в Жылыойском районе годами проектируют канализационные очистные сооружения, сточные воды продолжают разливаться по пастбищам Кульсары.</p></article></body></html>",
+    "expected": {
+      "canonical_url": "https://azh.kz/ru/news/view/130915",
+      "title": "Вместо очистных — степь: куда уходят канализационные стоки Кульсары",
+      "observed_at_prefix": "2026-08-10T12:41:00",
+      "body_contains": "сточные воды"
+    }
+  },
+  {
+    "source_id": "tengrinews_search",
+    "requested_url": "https://tengrinews.kz/kazakhstan_news/kaspiy-ugrozoy-neftyanyie-razlivyi-stali-poyavlyatsya-573791/",
+    "listing": "<article><a href=\"/kazakhstan_news/kaspiy-ugrozoy-neftyanyie-razlivyi-stali-poyavlyatsya-573791/\">Каспий под угрозой? Нефтяные разливы стали появляться каждую неделю</a></article>",
+    "listing_expected_url": "https://tengrinews.kz/kazakhstan_news/kaspiy-ugrozoy-neftyanyie-razlivyi-stali-poyavlyatsya-573791/",
+    "html": "<!doctype html><html><head><link rel=\"canonical\" href=\"https://tengrinews.kz/kazakhstan_news/kaspiy-ugrozoy-neftyanyie-razlivyi-stali-poyavlyatsya-573791/\"><meta property=\"og:title\" content=\"Каспий под угрозой? Нефтяные разливы стали появляться каждую неделю\"><meta property=\"article:published_time\" content=\"2025-06-24T18:12:45+05:00\"></head><body><main><p>Спутники стали фиксировать на Каспии новые пятна нефти каждую неделю.</p></main></body></html>",
+    "expected": {
+      "canonical_url": "https://tengrinews.kz/kazakhstan_news/kaspiy-ugrozoy-neftyanyie-razlivyi-stali-poyavlyatsya-573791/",
+      "title": "Каспий под угрозой? Нефтяные разливы стали появляться каждую неделю",
+      "observed_at_prefix": "2025-06-24T18:12:45+05:00",
+      "body_contains": "пятна нефти"
+    }
+  },
+  {
+    "source_id": "informburo_sitemap",
+    "requested_url": "https://informburo.kz/novosti/utecka-nefti-proizosla-v-kaspiiskom-more",
+    "listing": "<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\"><url><loc>https://informburo.kz/novosti/utecka-nefti-proizosla-v-kaspiiskom-more</loc><lastmod>2026-06-22T11:25:25+05:00</lastmod></url></urlset>",
+    "listing_expected_url": "https://informburo.kz/novosti/utecka-nefti-proizosla-v-kaspiiskom-more",
+    "html": "<!doctype html><html><head><link rel=\"canonical\" href=\"https://informburo.kz/novosti/utecka-nefti-proizosla-v-kaspiiskom-more\"><meta property=\"og:title\" content=\"Утечка нефти произошла в Каспийском море\"><meta property=\"article:published_time\" content=\"2026-06-22T11:05:00+05:00\"></head><body><article><p>В Каспийском море зафиксировали разлив нефти в районе пляжа Дюбенди в Азербайджане.</p></article></body></html>",
+    "expected": {
+      "canonical_url": "https://informburo.kz/novosti/utecka-nefti-proizosla-v-kaspiiskom-more",
+      "title": "Утечка нефти произошла в Каспийском море",
+      "observed_at_prefix": "2026-06-22T11:05:00+05:00",
+      "body_contains": "пляжа Дюбенди"
+    }
+  },
+  {
+    "source_id": "zakon_news",
+    "requested_url": "https://www.zakon.kz/mir/6522130-neftyanoe-pyatno-obnaruzhili-u-beregov-kaspiyskogo-morya.html",
+    "listing": "<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\"><url><loc>https://www.zakon.kz/mir/6522130-neftyanoe-pyatno-obnaruzhili-u-beregov-kaspiyskogo-morya.html</loc><lastmod>2026-06-21T14:13:10+05:00</lastmod></url></urlset>",
+    "listing_expected_url": "https://www.zakon.kz/mir/6522130-neftyanoe-pyatno-obnaruzhili-u-beregov-kaspiyskogo-morya.html",
+    "html": "<!doctype html><html><head><link rel=\"canonical\" href=\"https://www.zakon.kz/mir/6522130-neftyanoe-pyatno-obnaruzhili-u-beregov-kaspiyskogo-morya.html\"><meta property=\"og:title\" content=\"Нефтяное пятно обнаружили у берегов Каспийского моря\"><meta property=\"article:published_time\" content=\"2026-06-21T14:13:10Z\"></head><body><article><p>Между островом Пираллахы и поселком Дюбенди специалисты обнаружили нефтяное пятно.</p></article></body></html>",
+    "expected": {
+      "canonical_url": "https://www.zakon.kz/mir/6522130-neftyanoe-pyatno-obnaruzhili-u-beregov-kaspiyskogo-morya.html",
+      "title": "Нефтяное пятно обнаружили у берегов Каспийского моря",
+      "observed_at_prefix": "2026-06-21T14:13:10+00:00",
+      "body_contains": "Пираллахы"
+    }
+  },
+  {
+    "source_id": "atpress_ecology",
+    "requested_url": "https://atpress.kz/ru/news/ekologiya/za-zagryaznenie-pochvy-v-atyrauskoj-oblasti-kompaniyu-oshtrafovali-na-4-3-mln-tenge",
+    "listing": "<article><a href=\"/ru/news/ekologiya/za-zagryaznenie-pochvy-v-atyrauskoj-oblasti-kompaniyu-oshtrafovali-na-4-3-mln-tenge\">За загрязнение почвы в Атырауской области компанию оштрафовали на 4,3 млн тенге</a></article>",
+    "listing_expected_url": "https://atpress.kz/ru/news/ekologiya/za-zagryaznenie-pochvy-v-atyrauskoj-oblasti-kompaniyu-oshtrafovali-na-4-3-mln-tenge",
+    "html": "<!doctype html><html><head><link rel=\"canonical\" href=\"https://atpress.kz/ru/news/ekologiya/za-zagryaznenie-pochvy-v-atyrauskoj-oblasti-kompaniyu-oshtrafovali-na-4-3-mln-tenge\"><meta property=\"og:title\" content=\"За загрязнение почвы в Атырауской области компанию оштрафовали на 4,3 млн тенге\"><script type=\"application/ld+json\">{\"@type\":\"NewsArticle\",\"datePublished\":\"2026-07-01T10:37:57+05:00\"}</script></head><body><main><p>После аварии на скважине № 56 месторождения Морское установили разлив нефтесодержащей жидкости и загрязнение почвы в Атырауской области.</p></main></body></html>",
+    "expected": {
+      "canonical_url": "https://atpress.kz/ru/news/ekologiya/za-zagryaznenie-pochvy-v-atyrauskoj-oblasti-kompaniyu-oshtrafovali-na-4-3-mln-tenge",
+      "title": "За загрязнение почвы в Атырауской области компанию оштрафовали на 4,3 млн тенге",
+      "observed_at_prefix": "2026-07-01T10:37:57+05:00",
+      "body_contains": "нефтесодержащей жидкости"
+    }
+  }
+]
