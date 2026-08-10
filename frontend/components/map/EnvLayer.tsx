@@ -39,9 +39,10 @@ import {
   formatSliceTime,
   halfCellDegLat,
   formatValue,
+  formatLocalStamp,
   iceClassKeyFor,
-  isoToInputUtc,
-  inputUtcToIso,
+  localZoneLabel,
+  parseLocalStamp,
   latencyKeyFor,
   legibleZoom,
   metresPerDegLng,
@@ -357,6 +358,38 @@ export default function EnvLayer({ map }: { map: any }) {
 
   /* ------------------------------------------------------------ actions */
 
+  /* The instant the layer answers for. Kept above the early return because the
+     text field below is a controlled input and needs hooks of its own. */
+  const requestedAt = useMemo(() => time ?? loadedFor ?? nowIso(), [time, loadedFor]);
+
+  /* The moment as TEXT, while it is being typed. A controlled field driven
+     straight off `requestedAt` would rewrite the box under the cursor after
+     every keystroke; this holds what was typed until it parses. */
+  const [timeText, setTimeText] = useState(() => formatLocalStamp(requestedAt));
+  const [timeBad, setTimeBad] = useState(false);
+  useEffect(() => {
+    setTimeText(formatLocalStamp(requestedAt));
+    setTimeBad(false);
+  }, [requestedAt]);
+
+  /** Apply what was typed, or mark it unparseable and change nothing. An
+   *  emptied field means "now", which is what the Now button does. */
+  const commitTime = useCallback(() => {
+    const raw = timeText.trim();
+    if (!raw) {
+      setTime(null);
+      setTimeBad(false);
+      return;
+    }
+    const iso = parseLocalStamp(raw);
+    if (iso) {
+      setTime(iso);
+      setTimeBad(false);
+    } else {
+      setTimeBad(true);
+    }
+  }, [timeText, setTime]);
+
   const shift = useCallback(
     (ms: number) => {
       const base = time ?? loadedFor ?? nowIso();
@@ -412,7 +445,7 @@ export default function EnvLayer({ map }: { map: any }) {
 
   if (!enabled) return null;
 
-  const requested = time ?? loadedFor ?? nowIso();
+  const requested = requestedAt;
   const isIce = chosen?.var === "ice_class";
   const hoverThickness =
     hover && isIce && thicknessLayer ? nearestValue(thicknessLayer, hover.cell.lat, hover.cell.lng) : null;
@@ -453,11 +486,11 @@ export default function EnvLayer({ map }: { map: any }) {
                 key={i}
                 cx={m.x + m.w / 2}
                 cy={m.y + m.h / 2}
-                r={2.6}
+                r={3}
                 fill={fill}
                 fillOpacity={0.95}
                 stroke={ice3 ? "#eaf7ff" : "rgba(0,0,0,0.55)"}
-                strokeWidth={0.7}
+                strokeWidth={0.75}
               />
             );
           })}
@@ -485,15 +518,34 @@ export default function EnvLayer({ map }: { map: any }) {
         </div>
 
         {/* The moment. The layer answers for this instant and nothing else. */}
-        <label className="block mt-2 text-ink3" htmlFor="env-time">{t("env.map.timeUtc")}</label>
+        <label className="block mt-2 text-ink3" htmlFor="env-time">
+          {t("env.map.timeLocal", { zone: localZoneLabel(new Date(requested)) })}
+        </label>
         <div className="flex items-center gap-1 mt-0.5">
           <input
             id="env-time"
-            type="datetime-local"
+            type="text"
+            inputMode="numeric"
+            autoComplete="off"
+            spellCheck={false}
             data-testid="env-time"
-            value={isoToInputUtc(requested)}
-            onChange={(e) => setTime(inputUtcToIso(e.target.value))}
-            className="flex-1 h-6 bg-surface2 border border-line rounded px-1 text-2xs text-ink font-mono focus:outline-none focus:border-ink3"
+            value={timeText}
+            placeholder={t("env.map.timeFormat")}
+            aria-invalid={timeBad || undefined}
+            onChange={(e) => {
+              setTimeText(e.currentTarget.value);
+              if (timeBad) setTimeBad(false);
+            }}
+            onBlur={commitTime}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                commitTime();
+              }
+            }}
+            className={`flex-1 h-6 bg-surface2 border rounded px-1 text-2xs text-ink font-mono focus:outline-none ${
+              timeBad ? "border-bad" : "border-line focus:border-ink3"
+            }`}
           />
           <button
             onClick={() => setTime(null)}
@@ -502,6 +554,11 @@ export default function EnvLayer({ map }: { map: any }) {
             {t("env.map.now")}
           </button>
         </div>
+        {timeBad && (
+          <div className="mt-0.5 text-bad leading-tight" data-testid="env-time-error">
+            {t("env.map.timeBad", { format: t("env.map.timeFormat") })}
+          </div>
+        )}
         <div className="flex items-center gap-1 mt-1 flex-wrap">
           <StepBtn onClick={() => shift(-24 * HOUR)} label={t("env.map.backDay")} />
           <StepBtn onClick={() => shift(-6 * HOUR)} label={t("env.map.backHours")} />

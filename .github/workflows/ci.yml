@@ -200,6 +200,7 @@ jobs:
       - name: Self-tests
         run: |
           node lib/caspian.selftest.mjs
+          node lib/env.selftest.mjs
           node lib/colony.selftest.mjs
           node lib/analytics/analytics.selftest.mjs
           node lib/analytics/review.selftest.mjs
