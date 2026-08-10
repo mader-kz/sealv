@@ -43,6 +43,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import SiteDynamics from "@/components/dashboard/SiteDynamics";
 import { EvidenceFrame } from "@/components/evidence/EvidenceView";
+import ReplayView from "@/components/replay/ReplayView";
+import Icon from "@/components/ui/Icon";
 import { Button, IconButton } from "@/components/ui/primitives";
 import { createSite, fetchSites, renameSite } from "@/lib/api";
 import { formatDate } from "@/lib/analytics/brush";
@@ -222,8 +224,12 @@ export default function SiteCard({
     () => photoVisits.find((f) => f.id === shownId) ?? photoVisits[0] ?? null,
     [photoVisits, shownId],
   );
+  /* The count replay, launched from the photograph itself. Held as the
+     footage rather than a boolean so the dialog cannot outlive a site switch
+     and replay some other beach's animals. */
+  const [replayFor, setReplayFor] = useState<Footage | null>(null);
   /* Switching sites must not leave the previous site's frame selected. */
-  useEffect(() => { setShownId(null); }, [site.id]);
+  useEffect(() => { setShownId(null); setReplayFor(null); }, [site.id]);
 
   /* ---------------------------------------------------------- the record */
   const events = useMemo(() => {
@@ -417,24 +423,38 @@ export default function SiteCard({
             sortie, where the full evidence view lives. */}
         {photoVisits.length > 0 && shown && (
           <div className="px-4 pb-4">
+            {/* Pressing the photograph replays the count over it — the number
+                this card leads with, earned again in front of the reader. The
+                badge is an affordance label inside the same button, not a
+                second control; the sortie record keeps its own door in the
+                caption row below. */}
             <button
               type="button"
-              onClick={() => open(shown.id)}
-              title={t("site.openSortie")}
-              className="block w-full text-left group"
+              onClick={() => setReplayFor(shown)}
+              title={t("insp.replay")}
+              className="block w-full text-left group relative"
             >
               <div className="aspect-video bg-bg border border-hair overflow-hidden">
                 <EvidenceFrame mediaId={shown.mediaId as string} pixels={shown.pixels ?? []} />
               </div>
-              <div className="flex items-baseline gap-2 mt-1.5">
-                <span className="text-2xs text-ink3 truncate group-hover:text-ink2 transition-colors">
-                  {shown.filename}
-                </span>
-                <span className="text-2xs text-ink3 tnum ml-auto shrink-0">
-                  {formatDate(shown.uploadedAt, lang, { day: "numeric", month: "short" })}
-                </span>
-              </div>
+              <span className="pointer-events-none absolute bottom-2 right-2 plate inline-flex items-center gap-1.5 h-7 px-2.5 text-xs text-ink2 group-hover:text-ink transition-colors">
+                <Icon name="play" size={12} />
+                {t("insp.replay")}
+              </span>
             </button>
+            <div className="flex items-baseline gap-2 mt-1.5">
+              <span className="text-2xs text-ink3 truncate">{shown.filename}</span>
+              <button
+                type="button"
+                onClick={() => open(shown.id)}
+                className="text-2xs text-ink3 hover:text-ink transition-colors shrink-0 underline decoration-line underline-offset-2"
+              >
+                {t("site.openSortie")}
+              </button>
+              <span className="text-2xs text-ink3 tnum ml-auto shrink-0">
+                {formatDate(shown.uploadedAt, lang, { day: "numeric", month: "short" })}
+              </span>
+            </div>
 
             {photoVisits.length > 1 && (
               /* Every other photographed visit of this place, smallest useful
@@ -455,6 +475,14 @@ export default function SiteCard({
                   </button>
                 ))}
               </div>
+            )}
+
+            {replayFor && (
+              <ReplayView
+                open
+                onOpenChange={(o) => { if (!o) setReplayFor(null); }}
+                footage={replayFor}
+              />
             )}
           </div>
         )}
