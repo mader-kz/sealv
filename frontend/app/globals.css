@@ -569,15 +569,21 @@ a:focus-visible {
   border-left-color: var(--bad);
   background: color-mix(in srgb, var(--bad) 16%, rgb(22 26 32 / 0.98));
 }
-.movement-observation-card.carried:not(.selected) {
-  opacity: .56;
-  color: var(--ink-2);
-  border-left-color: var(--ink-3);
+.movement-observation-card.timestamp-context:not(.selected) {
+  opacity: .88;
 }
-.movement-observation-card.checkpoint-current:not(.selected) {
+.movement-observation-card.timestamp-selected:not(.selected) {
+  z-index: 80;
   opacity: 1;
+  border: 1px solid var(--accent);
+  border-left-width: 3px;
+  background: rgb(22 26 32 / 1);
+  box-shadow:
+    0 0 0 1px rgb(11 13 16 / .95),
+    0 0 0 2px color-mix(in srgb, var(--accent) 68%, white),
+    0 8px 20px rgb(0 0 0 / .4);
 }
-.movement-observation-card.checkpoint-current:not(.selected)::before {
+.movement-observation-card.timestamp-selected:not(.selected)::before {
   content: "";
   position: absolute;
   top: 0;
@@ -586,7 +592,14 @@ a:focus-visible {
   height: 1px;
   background: var(--accent);
 }
-.movement-observation-card.checkpoint-current.anomaly:not(.selected)::before {
+.movement-observation-card.timestamp-selected.anomaly:not(.selected) {
+  border-color: var(--bad);
+  box-shadow:
+    0 0 0 1px rgb(11 13 16 / .95),
+    0 0 0 2px color-mix(in srgb, var(--bad) 68%, white),
+    0 8px 20px rgb(0 0 0 / .4);
+}
+.movement-observation-card.timestamp-selected.anomaly:not(.selected)::before {
   background: var(--bad);
 }
 .movement-observation-card.selected,

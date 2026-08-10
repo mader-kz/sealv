@@ -37,6 +37,14 @@ export default function PopulationTimeline({
     const date=new Date(iso);
     return Number.isNaN(date.getTime()) ? iso : date.toLocaleDateString(locale,{day:"2-digit",month:"2-digit",year:"2-digit"});
   };
+  const shortTime=(iso:string)=>{
+    const date=new Date(iso);
+    return Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString(locale,{hour:"2-digit",minute:"2-digit"});
+  };
+  const graphTimestamp=(iso:string)=>{
+    const date=new Date(iso);
+    return Number.isNaN(date.getTime()) ? iso : date.toLocaleString(locale,{day:"2-digit",month:"2-digit",year:"2-digit",hour:"2-digit",minute:"2-digit"});
+  };
   useEffect(()=>{
     const close=(event:KeyboardEvent)=>{ if(event.key==="Escape") onClose(); };
     document.addEventListener("keydown",close);
@@ -112,13 +120,13 @@ export default function PopulationTimeline({
             </div>
           </div>
           <div className="mt-1.5 grid grid-cols-4 gap-3">
-            {SERIES.map(key=><MiniTrend key={key} name={key} points={series} selectedId={selected.id} selectedValue={selected.snapshot[key]} onSelect={onSelect} label={t(`region.${key}`)} />)}
+            {SERIES.map(key=><MiniTrend key={key} name={key} points={series} selectedId={selected.id} selectedValue={selected.snapshot[key]} onSelect={onSelect} label={t(`region.${key}`)} formatTimestamp={graphTimestamp} />)}
           </div>
         </div>
       </div>
 
       <div className="border-t border-line-soft px-4 pt-2 text-[10px] text-ink4">{t("checkpoint.timelineHint")}</div>
-      <div className="flex h-[58px] items-stretch px-3 overflow-x-auto" aria-label={t("checkpoint.timeline")}>
+      <div className="flex h-[62px] items-stretch px-3 overflow-x-auto" aria-label={t("checkpoint.timeline")}>
         {checkpoints.map((checkpoint,index)=>{
           const active=checkpoint.id===selected.id;
           return (
@@ -126,6 +134,7 @@ export default function PopulationTimeline({
               key={checkpoint.id}
               type="button"
               data-checkpoint-id={checkpoint.id}
+              data-timestamp-id={checkpoint.id}
               aria-pressed={active}
               aria-label={`${checkpoint.filename || t("report.noFile")} · ${dateTime(checkpoint.ingestedAt)} · ${checkpoint.snapshot.global}`}
               title={`${checkpoint.filename || t("report.noFile")} · ${dateTime(checkpoint.ingestedAt)} · ${checkpoint.snapshot.global}`}
@@ -137,11 +146,12 @@ export default function PopulationTimeline({
                 onSelect(checkpoints[next]);
                 (event.currentTarget.parentElement?.children[next] as HTMLElement | undefined)?.focus();
               }}
-              className={`group relative min-w-[54px] flex-1 px-1 pt-1.5 text-center outline-none ${active ? "text-accent" : "text-ink4 hover:text-ink2"}`}
+              className={`group relative min-w-[62px] flex-1 px-1 pt-1.5 text-center outline-none ${active ? "text-accent" : "text-ink4 hover:text-ink2"}`}
             >
               <span className={`absolute left-1/2 top-0 h-4 w-px ${active ? "bg-accent" : "bg-line group-hover:bg-ink3"}`} />
               <span className={`absolute left-1/2 top-[13px] h-1.5 w-1.5 -translate-x-1/2 border ${active ? "border-accent bg-accent" : "border-ink4 bg-bg group-hover:border-ink2"}`} />
               <span className="mt-5 block truncate text-[9px] leading-none tnum">{shortDate(checkpoint.ingestedAt)}</span>
+              <span className="mt-1 block truncate text-[8px] leading-none text-ink4 tnum">{shortTime(checkpoint.ingestedAt)}</span>
               <span className={`mt-1 block text-[10px] leading-none tnum ${active ? "text-accent" : "text-ink3"}`}>{checkpoint.snapshot.global}</span>
             </button>
           );
@@ -152,7 +162,7 @@ export default function PopulationTimeline({
 }
 
 function MiniTrend({
-  name,points,selectedId,selectedValue,onSelect,label,
+  name,points,selectedId,selectedValue,onSelect,label,formatTimestamp,
 }: {
   name:SeriesKey;
   points:PopulationCheckpoint[];
@@ -160,7 +170,9 @@ function MiniTrend({
   selectedValue:number;
   onSelect:(checkpoint:PopulationCheckpoint)=>void;
   label:string;
+  formatTimestamp:(iso:string)=>string;
 }) {
+  const [hoveredId,setHoveredId]=useState<string|null>(null);
   const width=210,height=54,pad={l:3,r:3,t:7,b:4};
   const values=points.map(point=>point.snapshot[name]);
   const min=Math.min(...values,0),max=Math.max(...values,1);
@@ -168,6 +180,11 @@ function MiniTrend({
   const x=(index:number)=>points.length<=1 ? width/2 : pad.l+(index/(points.length-1))*(width-pad.l-pad.r);
   const y=(value:number)=>pad.t+(1-(value-min)/span)*(height-pad.t-pad.b);
   const path=points.map((point,index)=>`${index===0?"M":"L"}${x(index)},${y(point.snapshot[name])}`).join(" ");
+  const hoveredIndex=points.findIndex(point=>point.id===hoveredId);
+  const hovered=hoveredIndex>=0 ? points[hoveredIndex] : null;
+  const hoverX=hovered ? Math.max(55,Math.min(width-55,x(hoveredIndex))) : 0;
+  const hoverPointY=hovered ? y(hovered.snapshot[name]) : 0;
+  const hoverY=hovered ? (hoverPointY<34 ? hoverPointY+7 : hoverPointY-37) : 0;
   return (
     <div data-regional-trend data-series={name} className="min-w-0">
       <div className="flex items-baseline justify-between gap-2">
@@ -179,13 +196,39 @@ function MiniTrend({
         <path d={path} fill="none" stroke={name==="global"?"var(--accent)":"var(--ink-3)"} strokeWidth={name==="global"?1.5:1} />
         {points.map((point,index)=>{
           const active=point.id===selectedId;
+          const hoverLabel=`${label}: ${point.snapshot[name]} · ${formatTimestamp(point.ingestedAt)}`;
           return (
-            <g key={point.id} onClick={()=>onSelect(point)} style={{cursor:"pointer"}}>
+            <g
+              key={point.id}
+              data-trend-timestamp-id={point.id}
+              role="button"
+              tabIndex={0}
+              aria-label={hoverLabel}
+              onMouseEnter={()=>setHoveredId(point.id)}
+              onMouseLeave={()=>setHoveredId(current=>current===point.id ? null : current)}
+              onFocus={()=>setHoveredId(point.id)}
+              onBlur={()=>setHoveredId(current=>current===point.id ? null : current)}
+              onClick={()=>onSelect(point)}
+              onKeyDown={event=>{
+                if(event.key!=="Enter" && event.key!==" ") return;
+                event.preventDefault();
+                onSelect(point);
+              }}
+              style={{cursor:"pointer",outline:"none"}}
+            >
+              <title>{hoverLabel}</title>
               <circle cx={x(index)} cy={y(point.snapshot[name])} r={7} fill="transparent" />
               <circle cx={x(index)} cy={y(point.snapshot[name])} r={active?3.2:1.8} fill={active?"var(--accent)":name==="global"?"var(--accent)":"var(--ink-3)"} />
             </g>
           );
         })}
+        {hovered && (
+          <g data-graph-tooltip pointerEvents="none">
+            <rect x={hoverX-53} y={hoverY} width={106} height={31} fill="var(--bg)" stroke="var(--ink-3)" strokeWidth={0.7} />
+            <text x={hoverX} y={hoverY+12} textAnchor="middle" fill="var(--ink)" fontSize={10.5} fontWeight={600}>{hovered.snapshot[name]}</text>
+            <text x={hoverX} y={hoverY+24} textAnchor="middle" fill="var(--ink-3)" fontSize={7.5}>{formatTimestamp(hovered.ingestedAt)}</text>
+          </g>
+        )}
       </svg>
     </div>
   );

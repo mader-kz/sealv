@@ -389,7 +389,7 @@ export default function CaspianMap({
   historyFootageIds?: readonly string[] | null;
   /** Latest-per-site sorties whose groups make up the displayed total. */
   standingFootageIds?: readonly string[] | null;
-  /** The upload that created the selected checkpoint (carried state is dimmer). */
+  /** Upload timestamp whose changed standing card(s) should be highlighted. */
   checkpointFootageId?: string | null;
 }) {
   const { lang, t, tp } = useT();
@@ -1508,9 +1508,11 @@ export default function CaspianMap({
                 }}
                 title={`${new Date(point.observedAt).toLocaleDateString(localeFor(lang))} · ${point.size} ${tp(point.size,"unit.seals")}${point.anomalous ? ` · ${t("track.anomalies",{n:1})}` : ""}`}
                 aria-expanded={point.expanded}
+                aria-current={point.checkpoint ? "time" : undefined}
                 data-track-id={point.trackId}
                 data-observation-index={point.index}
-                className={`movement-observation-card ${point.latest ? "latest" : ""} ${point.selected ? "selected" : ""} ${point.expanded ? "expanded" : "collapsed"} ${point.dimmed ? "dimmed" : ""} ${point.anomalous ? "anomaly" : ""} ${point.checkpoint ? "checkpoint-current" : "carried"}`}
+                data-timestamp-selected={point.checkpoint ? "true" : undefined}
+                className={`movement-observation-card ${point.latest ? "latest" : ""} ${point.selected ? "selected" : ""} ${point.expanded ? "expanded" : "collapsed"} ${point.dimmed ? "dimmed" : ""} ${point.anomalous ? "anomaly" : ""} ${point.checkpoint ? "timestamp-selected" : "timestamp-context"}`}
                 style={{
                   left:point.x,
                   top:point.y,
