@@ -56,6 +56,9 @@ export const MODE_LABEL_KEY: Record<Mode, I18nKey> = {
 const ALIASES: Record<string, Mode> = {
   season: "map",
   karta: "map",
+  analytics: "report",
+  dashboard: "report",
+  statistika: "report",
   proverka: "review",
   field: "ingest",
   zagruzka: "ingest",

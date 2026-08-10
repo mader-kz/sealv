@@ -47,6 +47,7 @@ EDIT_OPS = ("add", "remove", "reinstate")
 _JSON_COLUMNS: dict[str, tuple[str, ...]] = {
     "job": ("params", "progress"),
     "run": ("engine_params", "quality"),
+    "population_observation": ("member_ids",),
 }
 
 # Whitelists for the **fields updaters. Column names cannot be parameterised in
@@ -1517,6 +1518,243 @@ def purge_survey(conn: sqlite3.Connection, survey_id: str, *, dry_run: bool = Fa
         conn.execute(f"DELETE FROM media WHERE id IN {m_sql}", m_args)
         conn.execute("DELETE FROM survey WHERE id = ?", (survey_id,))
     return receipt
+# inferred populations
+# --------------------------------------------------------------------------
+
+POPULATION_DECISIONS = ("confirmed", "rejected")
+
+
+def get_population(conn: sqlite3.Connection, population_id: str) -> Optional[dict]:
+    population = _row(
+        conn.execute("SELECT * FROM population WHERE id = ?", (population_id,)).fetchone(),
+        "population",
+    )
+    if population is None:
+        return None
+    population["observations"] = _rows(
+        conn.execute(
+            """SELECT * FROM population_observation
+                 WHERE population_id = ? ORDER BY observed_at, id""",
+            (population_id,),
+        ),
+        "population_observation",
+    )
+    return population
+
+
+def list_populations(conn: sqlite3.Connection, limit: int = 500) -> list[dict]:
+    rows = _rows(
+        conn.execute(
+            "SELECT * FROM population ORDER BY updated_at DESC, id LIMIT ?", (limit,)
+        ),
+        "population",
+    )
+    for population in rows:
+        population["observations"] = _rows(
+            conn.execute(
+                """SELECT * FROM population_observation
+                     WHERE population_id = ? ORDER BY observed_at, id""",
+                (population["id"],),
+            ),
+            "population_observation",
+        )
+    return rows
+
+
+def list_population_link_reviews(conn: sqlite3.Connection) -> list[dict]:
+    return _rows(
+        conn.execute(
+            """SELECT * FROM population_link_review
+                 ORDER BY updated_at DESC, from_observation_id, to_observation_id"""
+        ),
+        "population_link_review",
+    )
+
+
+def rename_population(conn: sqlite3.Connection, population_id: str, name: str) -> Optional[dict]:
+    clean = str(name).strip()
+    if not clean:
+        raise ValueError("population name cannot be blank")
+    conn.execute(
+        "UPDATE population SET name = ?, updated_at = ? WHERE id = ?",
+        (clean, utcnow(), population_id),
+    )
+    return get_population(conn, population_id)
+
+
+def _new_population(conn: sqlite3.Connection, name: str | None = None) -> dict:
+    population_id = new_id()
+    ordinal = int(conn.execute("SELECT COUNT(*) FROM population").fetchone()[0]) + 1
+    conn.execute(
+        "INSERT INTO population (id, name, updated_at) VALUES (?, ?, ?)",
+        (population_id, (name or f"Group {ordinal}").strip(), utcnow()),
+    )
+    return _row(
+        conn.execute("SELECT * FROM population WHERE id = ?", (population_id,)).fetchone(),
+        "population",
+    )
+
+
+def sync_population_tracks(conn: sqlite3.Connection, tracks: Sequence[dict]) -> dict:
+    """Persist computed snapshots without replacing operator decisions.
+
+    Observation ids are derived from survey id + detection member ids by the
+    client. When a recomputation contains an id already stored, that overlap
+    reconnects the temporary algorithm track to its durable population. A
+    confirmed assignment always wins over a new automatic suggestion.
+    """
+    mapped: list[dict] = []
+    with _tx(conn, "IMMEDIATE"):
+        for raw_track in tracks:
+            observations = list(raw_track.get("observations") or [])
+            if not observations:
+                continue
+            observation_ids = [str(o.get("id") or "").strip() for o in observations]
+            if any(not value for value in observation_ids):
+                raise ValueError("every population observation needs an id")
+
+            placeholders = ",".join("?" for _ in observation_ids)
+            existing = conn.execute(
+                f"""SELECT population_id, assignment_status, COUNT(*) AS n
+                       FROM population_observation WHERE id IN ({placeholders})
+                      GROUP BY population_id, assignment_status
+                      ORDER BY (assignment_status = 'confirmed') DESC, n DESC, population_id""",
+                observation_ids,
+            ).fetchall()
+            if existing:
+                population_id = str(existing[0]["population_id"])
+            else:
+                population_id = str(_new_population(conn)["id"])
+
+            for observation in observations:
+                oid = str(observation["id"])
+                current = conn.execute(
+                    "SELECT population_id, assignment_status FROM population_observation WHERE id = ?",
+                    (oid,),
+                ).fetchone()
+                assigned = (
+                    str(current["population_id"])
+                    if current is not None and current["assignment_status"] == "confirmed"
+                    else population_id
+                )
+                center = observation.get("center") or {}
+                size = _as_int(observation.get("size"), "size")
+                lat = _as_float(center.get("lat"), "lat")
+                lng = _as_float(center.get("lng"), "lng")
+                if size is None or size < 1 or lat is None or lng is None:
+                    raise ValueError("population observation needs positive size and coordinates")
+                source = str(observation.get("source") or "")
+                if source not in ("points", "aggregate"):
+                    raise ValueError("population observation source must be points or aggregate")
+                member_ids = list(observation.get("memberIds") or [])
+                now = utcnow()
+                conn.execute(
+                    """INSERT INTO population_observation
+                           (id, population_id, survey_id, observed_at, lat, lng, size,
+                            source, member_ids, assignment_status, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'auto', ?)
+                       ON CONFLICT(id) DO UPDATE SET
+                           population_id = CASE
+                             WHEN population_observation.assignment_status = 'confirmed'
+                             THEN population_observation.population_id
+                             ELSE excluded.population_id END,
+                           survey_id = excluded.survey_id,
+                           observed_at = excluded.observed_at,
+                           lat = excluded.lat, lng = excluded.lng, size = excluded.size,
+                           source = excluded.source, member_ids = excluded.member_ids,
+                           updated_at = excluded.updated_at""",
+                    (
+                        oid, assigned, str(observation.get("surveyId") or ""),
+                        str(observation.get("observedAt") or ""), lat, lng, size,
+                        source, _json_dump(member_ids), now,
+                    ),
+                )
+            conn.execute(
+                "UPDATE population SET updated_at = ? WHERE id = ?", (utcnow(), population_id)
+            )
+            mapped.append({"track_id": raw_track.get("id"), "population_id": population_id})
+
+    return {
+        "tracks": mapped,
+        "populations": list_populations(conn),
+        "reviews": list_population_link_reviews(conn),
+    }
+
+
+def review_population_link(
+    conn: sqlite3.Connection,
+    from_observation_id: str,
+    to_observation_id: str,
+    decision: str,
+    operator: str | None = None,
+) -> dict:
+    """Confirm or reject an inferred step and apply the identity consequence."""
+    if decision not in POPULATION_DECISIONS:
+        raise ValueError(f"decision must be one of {POPULATION_DECISIONS}")
+    if from_observation_id == to_observation_id:
+        raise ValueError("a population link needs two different observations")
+
+    with _tx(conn, "IMMEDIATE"):
+        before = conn.execute(
+            "SELECT * FROM population_observation WHERE id = ?", (from_observation_id,)
+        ).fetchone()
+        after = conn.execute(
+            "SELECT * FROM population_observation WHERE id = ?", (to_observation_id,)
+        ).fetchone()
+        if before is None or after is None:
+            raise ValueError("both population observations must exist before review")
+
+        now = utcnow()
+        conn.execute(
+            """INSERT INTO population_link_review
+                   (from_observation_id, to_observation_id, decision, operator, updated_at)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(from_observation_id, to_observation_id) DO UPDATE SET
+                   decision = excluded.decision, operator = excluded.operator,
+                   updated_at = excluded.updated_at""",
+            (from_observation_id, to_observation_id, decision, operator, now),
+        )
+
+        if decision == "confirmed":
+            keep = str(before["population_id"])
+            merge = str(after["population_id"])
+            conn.execute(
+                "UPDATE population_observation SET population_id = ?, updated_at = ? WHERE population_id = ?",
+                (keep, now, merge),
+            )
+            conn.execute(
+                "UPDATE population_observation SET assignment_status = 'confirmed', updated_at = ? WHERE id IN (?, ?)",
+                (now, from_observation_id, to_observation_id),
+            )
+            if merge != keep:
+                conn.execute("DELETE FROM population WHERE id = ?", (merge,))
+            population_id = keep
+        else:
+            old = str(after["population_id"])
+            fresh = _new_population(conn)
+            population_id = str(fresh["id"])
+            # Rejecting A -> B means B and subsequent unconfirmed snapshots no
+            # longer inherit A's identity. Earlier evidence remains untouched.
+            conn.execute(
+                """UPDATE population_observation
+                      SET population_id = ?, updated_at = ?
+                    WHERE population_id = ? AND observed_at >= ?
+                      AND assignment_status != 'confirmed'""",
+                (population_id, now, old, after["observed_at"]),
+            )
+
+    return {
+        "review": _row(
+            conn.execute(
+                """SELECT * FROM population_link_review
+                    WHERE from_observation_id = ? AND to_observation_id = ?""",
+                (from_observation_id, to_observation_id),
+            ).fetchone(),
+            "population_link_review",
+        ),
+        "population_id": population_id,
+        "populations": list_populations(conn),
+    }
 
 
 # --------------------------------------------------------------------------
@@ -2411,6 +2649,48 @@ if __name__ == "__main__":
         check("the sortie every earlier check reads is untouched",
               get_survey(conn, survey["id"]) is not None
               and verified_count(conn, run_id) == 5)
+        # --- durable inferred populations ------------------------------
+        snapshots = [
+            {"id": "survey-a:group:alpha", "surveyId": "survey-a",
+             "observedAt": "2026-08-01T09:00:00Z",
+             "center": {"lat": 44.8, "lng": 50.3}, "size": 20,
+             "source": "aggregate", "memberIds": ["det-a"]},
+            {"id": "survey-b:group:bravo", "surveyId": "survey-b",
+             "observedAt": "2026-08-03T09:00:00Z",
+             "center": {"lat": 44.9, "lng": 50.4}, "size": 19,
+             "source": "aggregate", "memberIds": ["det-b"]},
+        ]
+        synced = sync_population_tracks(
+            conn, [{"id": "group-track-1", "observations": snapshots}]
+        )
+        pop_id = synced["tracks"][0]["population_id"]
+        check("population sync creates one durable group",
+              len(synced["populations"]) == 1
+              and len(synced["populations"][0]["observations"]) == 2)
+        renamed = rename_population(conn, pop_id, "Ulan Junior")
+        check("population name persists", renamed["name"] == "Ulan Junior")
+        again = sync_population_tracks(
+            conn, [{"id": "rebuilt-track-99", "observations": snapshots}]
+        )
+        check("observation overlap survives an algorithm track id change",
+              again["tracks"][0]["population_id"] == pop_id
+              and get_population(conn, pop_id)["name"] == "Ulan Junior")
+
+        rejected = review_population_link(
+            conn, snapshots[0]["id"], snapshots[1]["id"], "rejected", "a.n"
+        )
+        check("rejecting a link splits the later observation",
+              rejected["population_id"] != pop_id
+              and len(list_populations(conn)) == 2)
+        confirmed = review_population_link(
+            conn, snapshots[0]["id"], snapshots[1]["id"], "confirmed", "a.n"
+        )
+        check("confirming a link merges and pins both observations",
+              len(list_populations(conn)) == 1
+              and all(o["assignment_status"] == "confirmed"
+                      for o in get_population(conn, pop_id)["observations"]))
+        check("population link verdict is durable",
+              list_population_link_reviews(conn)[0]["decision"] == "confirmed")
 
         conn.close()
 

@@ -53,7 +53,21 @@ export default function Page(){
   // module-scope promise for the run in flight and hands the same one back to
   // a second caller, so React 18's strict-mode double-invoke of this effect
   // joins the first hydrate instead of starting a rival one.
-  useEffect(()=>{ hydrate(); },[hydrate]);
+  useEffect(()=>{
+    let cancelled = false;
+    void hydrate().then(()=>{
+      if(cancelled || new URLSearchParams(window.location.search).get("demo") !== "1") return;
+      const state = useFootageStore.getState();
+      /* `demo=1` is a safe, shareable showcase link. It never replaces a real
+         archive and it never masks a failed restore: synthetic data appears
+         only after a successful hydrate proves the service is reachable and
+         the archive is genuinely empty. */
+      if(!state.hydrating && !state.hydrateError && state.footages.length === 0){
+        state.seedTestData();
+      }
+    });
+    return ()=>{ cancelled = true; };
+  },[hydrate]);
 
   /* What the SERVICE remembers going wrong. A job-stage failure writes no run
      row, so hydrate() cannot rebuild it: without this call an F5 after seven

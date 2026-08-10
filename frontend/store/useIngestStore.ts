@@ -971,6 +971,7 @@ async function runItem(id: string): Promise<void> {
         size: current.bytes,
         duration,
         uploadedAt: geo.capturedAt ?? new Date().toISOString(),
+        ingestedAt: new Date().toISOString(),
         track,
         detections: [],
         center: { lat: centre.lat, lng: centre.lng },

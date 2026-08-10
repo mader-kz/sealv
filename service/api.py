@@ -80,6 +80,9 @@ _LOCATION_SOURCES = ("telemetry", "pinned", "manual")
 NOTES_MAX = 4000
 OPERATOR_MAX = 120
 REASON_MAX = 500
+POPULATION_NAME_MAX = 120
+MAX_POPULATION_TRACKS_SYNC = 500
+MAX_POPULATION_OBSERVATIONS_SYNC = 5000
 
 # SHA-256, lowercase hex. Anything else in the path is a caller error, not a
 # lookup that happens to miss - and saying so beats an empty list that reads
@@ -2130,6 +2133,120 @@ async def correct_survey_count(survey_id: str, body: dict):
     return await asyncio.to_thread(apply)
 
 
+# ------------------------------------------------------ inferred populations
+
+@app.get("/v1/populations")
+async def get_populations():
+    """Durable group names, snapshots and manual edge verdicts."""
+    def load() -> dict:
+        with _conn() as conn:
+            return {
+                "populations": db.list_populations(conn),
+                "reviews": db.list_population_link_reviews(conn),
+            }
+
+    return await asyncio.to_thread(load)
+
+
+@app.post("/v1/populations/sync")
+async def sync_populations(body: dict):
+    """Join freshly computed tracks to durable identities by observation id.
+
+    The client remains responsible for the inference. The service stores its
+    snapshots and protects operator-confirmed assignments from later automatic
+    rebuilds; it does not pretend the matching algorithm ran server-side.
+    """
+    body = body or {}
+    _reject_unknown(body, {"tracks"}, "body")
+    tracks = body.get("tracks")
+    if not isinstance(tracks, list):
+        raise HTTPException(400, "tracks must be an array")
+    if len(tracks) > MAX_POPULATION_TRACKS_SYNC:
+        raise HTTPException(400, f"at most {MAX_POPULATION_TRACKS_SYNC} tracks may be synced")
+    total = 0
+    clean: list[dict] = []
+    for ti, track in enumerate(tracks):
+        if not isinstance(track, dict):
+            raise HTTPException(400, f"tracks[{ti}] must be an object")
+        _reject_unknown(track, {"id", "observations"}, f"tracks[{ti}]")
+        observations = track.get("observations")
+        if not isinstance(observations, list):
+            raise HTTPException(400, f"tracks[{ti}].observations must be an array")
+        total += len(observations)
+        if total > MAX_POPULATION_OBSERVATIONS_SYNC:
+            raise HTTPException(
+                400, f"at most {MAX_POPULATION_OBSERVATIONS_SYNC} observations may be synced"
+            )
+        clean_observations: list[dict] = []
+        for oi, observation in enumerate(observations):
+            if not isinstance(observation, dict):
+                raise HTTPException(400, f"tracks[{ti}].observations[{oi}] must be an object")
+            _reject_unknown(
+                observation,
+                {"id", "surveyId", "observedAt", "center", "size", "source", "memberIds"},
+                f"tracks[{ti}].observations[{oi}]",
+            )
+            clean_observations.append(observation)
+        clean.append({"id": track.get("id"), "observations": clean_observations})
+
+    def apply() -> dict:
+        with _conn() as conn:
+            try:
+                return db.sync_population_tracks(conn, clean)
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(400, str(exc)) from exc
+
+    return await asyncio.to_thread(apply)
+
+
+@app.patch("/v1/populations/{population_id}")
+async def patch_population(population_id: str, body: dict):
+    body = body or {}
+    _reject_unknown(body, {"name"}, "body")
+    name = _capped(body.get("name"), "name", POPULATION_NAME_MAX)
+    if not name:
+        raise HTTPException(400, "name is required")
+
+    def apply() -> dict:
+        with _conn() as conn:
+            try:
+                population = db.rename_population(conn, population_id, name)
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            if population is None:
+                raise HTTPException(404, "population not found")
+            return population
+
+    return await asyncio.to_thread(apply)
+
+
+@app.post("/v1/population-links/review")
+async def review_population_link(body: dict):
+    body = body or {}
+    _reject_unknown(
+        body,
+        {"from_observation_id", "to_observation_id", "decision", "operator"},
+        "body",
+    )
+    before = str(body.get("from_observation_id") or "").strip()
+    after = str(body.get("to_observation_id") or "").strip()
+    decision = str(body.get("decision") or "").strip()
+    operator = _capped(body.get("operator"), "operator", OPERATOR_MAX)
+    if not before or not after:
+        raise HTTPException(400, "from_observation_id and to_observation_id are required")
+
+    def apply() -> dict:
+        with _conn() as conn:
+            try:
+                return db.review_population_link(conn, before, after, decision, operator)
+            except ValueError as exc:
+                message = str(exc)
+                status = 404 if "must exist" in message else 400
+                raise HTTPException(status, message) from exc
+
+    return await asyncio.to_thread(apply)
+
+
 # --------------------------------------------------------------- hard delete
 
 def _remove_media_files(paths: list[str]) -> dict:
@@ -2311,6 +2428,7 @@ _LATEST_RUNS_COLUMNS = """
        r.count_low AS low, r.count_best AS best, r.count_high AS high,
        r.quality,
        m.id AS media_id, m.filename, m.kind, m.width, m.height,
+       m.created_at AS media_created_at,
        sv.id AS survey_id, sv.captured_at, sv.tide_state,
        sv.gsd_cm_px, sv.gsd_source,
        sv.notes, sv.operator, sv.altitude_m,
@@ -2321,7 +2439,7 @@ _LATEST_RUNS_COLUMNS = """
        -- could say a sortie was retired and nothing about the decision - which
        -- is the half that makes a withdrawal defensible a season later.
        sv.retired_at, sv.retired_reason, sv.retired_by,
-       si.id AS site_id, si.name AS site_name,
+       si.id AS site_id, si.name AS site_name, si.region AS site_region,
        si.lat AS site_lat, si.lng AS site_lng
 """
 # LEFT JOIN on media, not JOIN. Every run in the archive today has media and

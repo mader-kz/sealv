@@ -32,6 +32,7 @@ import { toast } from "sonner";
 import { useFootageStore } from "@/store/useFootageStore";
 import { Button, SectionHead } from "@/components/ui/primitives";
 import TrustPanel from "@/components/dashboard/TrustPanel";
+import { MovementAnalytics } from "@/components/dashboard/Dashboard";
 import { formatArea, totalAreaM2 } from "@/lib/analytics/area";
 import { detectionsFor, formatDate, timeExtent } from "@/lib/analytics/brush";
 import { countOf } from "@/lib/analytics/count";
@@ -49,6 +50,7 @@ import {
 import { useOperator } from "@/lib/identity";
 import { useT } from "@/lib/i18n";
 import type { Footage } from "@/lib/types";
+import { setMode } from "@/lib/modes";
 
 const GROUP_RADIUS_M = 5; // animals closer together than this are one group
 const BARS = 20;          // more bars than this cannot be drawn honestly
@@ -344,6 +346,10 @@ export default function ReportMode(){
         <div className="flex items-baseline gap-4 min-w-0">
           <h1 className="text-page text-ink shrink-0">{t("nav.report")}</h1>
           <p className="text-xs text-ink3 min-w-0 leading-relaxed">{t("report.lead")}</p>
+        </div>
+
+        <div className="mt-5">
+          <MovementAnalytics onFocusMap={()=> setMode("map")} />
         </div>
 
         {/* Two steps, as tabs rather than a wizard that locks you forward:

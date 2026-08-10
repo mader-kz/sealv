@@ -37,6 +37,11 @@ export const useLangStore = create<LangState>((set) => ({
  *  then switches, instead of tearing during hydration. */
 export function initLang() {
   try {
+    const requested = new URLSearchParams(window.location.search).get("lang");
+    if (requested && (LANGS as readonly string[]).includes(requested)) {
+      useLangStore.getState().setLang(requested as Lang);
+      return;
+    }
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved && (LANGS as readonly string[]).includes(saved)) {
       useLangStore.setState({ lang: saved as Lang });

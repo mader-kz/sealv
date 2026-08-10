@@ -38,6 +38,11 @@ execFileSync(
     "lib/analytics/area.ts",
     "lib/analytics/groups.ts",
     "lib/analytics/surveys.ts",
+    "lib/analytics/tracking.ts",
+    "lib/analytics/avoidance.ts",
+    "lib/analytics/caspianRegions.ts",
+    "lib/analytics/estimate.ts",
+    "lib/analytics/checkpoints.ts",
     "--outDir",
     outDir,
     "--rootDir",
@@ -66,6 +71,12 @@ const { groupSizes, histogram, clusterIndices } = require(path.join(outDir, "ana
 const { groupIntoSites, siteSeries, bestCount } = require(
   path.join(outDir, "analytics/surveys.js"),
 );
+const { groupsForSurvey, trackSealGroups, applyLinkReviews } = require(
+  path.join(outDir, "analytics/tracking.js"),
+);
+const { detectRegionAvoidance } = require(path.join(outDir, "analytics/avoidance.js"));
+const { caspianRegionFor, countByCaspianRegion } = require(path.join(outDir, "analytics/caspianRegions.js"));
+const { populationSnapshot, buildPopulationCheckpoints, bucketCheckpointSeries } = require(path.join(outDir, "analytics/checkpoints.js"));
 
 /* ---------- helpers ------------------------------------------------------ */
 
@@ -254,6 +265,261 @@ const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   );
 }
 
+/* ---------- case 2b: tracked group observations --------------------------- */
+{
+  const lat0 = 44.6;
+  const lng0 = 50.3;
+  const det = (id, ll, count = 1, status = "auto") => ({ id, ...ll, count, status });
+
+  const clustered = groupsForSurvey({
+    id: "s0",
+    uploadedAt: "2026-01-01T00:00:00Z",
+    detections: [
+      det("a", metersToLL(lat0, lng0, 0, 0)),
+      det("b", metersToLL(lat0, lng0, 3, 0)),
+      det("single", metersToLL(lat0, lng0, 100, 0)),
+      det("rejected", metersToLL(lat0, lng0, 2, 0), 1, "false_positive"),
+    ],
+  });
+  check(
+    "case2b: grouping happens inside one survey and excludes a singleton",
+    clustered.groups.length === 1 && clustered.groups[0].size === 2 && clustered.untrackedAnimals === 1,
+    JSON.stringify(clustered),
+  );
+
+  const stableBase = groupsForSurvey({
+    id: "stable",
+    uploadedAt: "2026-01-01T00:00:00Z",
+    detections: [
+      det("a", metersToLL(lat0, lng0, 100, 0)),
+      det("b", metersToLL(lat0, lng0, 103, 0)),
+    ],
+  });
+  const stableExpanded = groupsForSurvey({
+    id: "stable",
+    uploadedAt: "2026-01-01T00:00:00Z",
+    detections: [
+      det("d", metersToLL(lat0, lng0, -97, 0)),
+      det("b", metersToLL(lat0, lng0, 103, 0)),
+      det("c", metersToLL(lat0, lng0, -100, 0)),
+      det("a", metersToLL(lat0, lng0, 100, 0)),
+    ],
+  });
+  check(
+    "case2b: observation id survives row reordering and insertion of another group",
+    stableBase.groups[0].id === stableExpanded.groups.find((g) => g.memberIds.includes("a"))?.id,
+    `${stableBase.groups[0].id} / ${stableExpanded.groups.map((g) => g.id).join(", ")}`,
+  );
+
+  const surveys = [
+    {
+      id: "day1",
+      uploadedAt: "2026-01-01T00:00:00Z",
+      detections: [
+        det("a1", metersToLL(lat0, lng0, 0, 0), 10),
+        det("b1", metersToLL(lat0, lng0, 100000, 0), 20),
+      ],
+    },
+    {
+      id: "day2",
+      uploadedAt: "2026-01-02T00:00:00Z",
+      detections: [
+        // Listed in reverse geographic order on purpose: matching must use
+        // distance and size, never row position.
+        det("b2", metersToLL(lat0, lng0, 105000, 0), 18),
+        det("a2", metersToLL(lat0, lng0, 10000, 0), 11),
+      ],
+    },
+    {
+      id: "day3",
+      uploadedAt: "2026-01-03T00:00:00Z",
+      // Close to A but much too large: it must start a new track rather than
+      // being forced onto the nearest predecessor.
+      detections: [det("new", metersToLL(lat0, lng0, 12000, 0), 40)],
+    },
+  ];
+  const tracked = trackSealGroups(surveys, {
+    sizeTolerancePct: 40,
+    maxSpeedKmPerDay: 50,
+    baseDistanceKm: 2,
+  });
+  const continued = tracked.tracks.filter((t) => t.observations.length === 2);
+  check("case2b: nearest similarly sized groups form two one-to-one tracks", continued.length === 2);
+  check(
+    "case2b: an implausible size jump starts a separate track",
+    tracked.tracks.length === 3 && tracked.tracks.some((t) => t.observations[0].memberIds[0] === "new" && t.observations.length === 1),
+  );
+  check(
+    "case2b: movement distance and confidence are recorded",
+    continued.every((t) => t.totalDistanceKm > 0 && t.confidence !== null && t.observations[1].match?.distanceKm > 0),
+  );
+
+  const stale = trackSealGroups([surveys[0], { ...surveys[1], uploadedAt: "2026-04-02T00:00:00Z" }], {
+    maxGapDays: 30,
+  });
+  check(
+    "case2b: a track is not revived after the maximum gap",
+    stale.tracks.length === 4 && stale.tracks.every((t) => t.observations.length === 1),
+  );
+
+  const split = trackSealGroups([
+    {
+      id: "split-before",
+      uploadedAt: "2026-02-01T00:00:00Z",
+      detections: [det("whole", metersToLL(lat0, lng0, 0, 0), 100)],
+    },
+    {
+      id: "split-after",
+      uploadedAt: "2026-02-02T00:00:00Z",
+      detections: [
+        det("left", metersToLL(lat0, lng0, -5000, 0), 45),
+        det("right", metersToLL(lat0, lng0, 5000, 0), 55),
+      ],
+    },
+  ]);
+  check(
+    "case2b: one conserved group becoming two is represented as a split",
+    split.events.length === 1 &&
+      split.events[0].type === "split" &&
+      split.events[0].sourceTrackIds.length === 1 &&
+      split.events[0].targetTrackIds.length === 2 &&
+      split.events[0].sizeConservationPct === 0,
+    JSON.stringify(split.events),
+  );
+
+  const merge = trackSealGroups([
+    {
+      id: "merge-before",
+      uploadedAt: "2026-03-01T00:00:00Z",
+      detections: [
+        det("left", metersToLL(lat0, lng0, -5000, 0), 45),
+        det("right", metersToLL(lat0, lng0, 5000, 0), 55),
+      ],
+    },
+    {
+      id: "merge-after",
+      uploadedAt: "2026-03-02T00:00:00Z",
+      detections: [det("whole", metersToLL(lat0, lng0, 0, 0), 100)],
+    },
+  ]);
+  check(
+    "case2b: two conserved groups becoming one is represented as a merge",
+    merge.events.length === 1 &&
+      merge.events[0].type === "merge" &&
+      merge.events[0].sourceTrackIds.length === 2 &&
+      merge.events[0].targetTrackIds.length === 1 &&
+      merge.events[0].sizeConservationPct === 0,
+    JSON.stringify(merge.events),
+  );
+
+  const straightSurveys = [0, 1, 2, 3].map((day) => ({
+    id: `straight-${day}`,
+    uploadedAt: `2026-04-0${day + 1}T00:00:00Z`,
+    detections: [det(`straight-d${day}`, metersToLL(lat0, lng0, day * 10000, 0), 20)],
+  }));
+  const straight = trackSealGroups(straightSurveys);
+  const predicted = straight.tracks[0].prediction;
+  check(
+    "case2b: recent straight movement produces a deterministic seven-day eastward prediction",
+    straight.tracks.length === 1 &&
+      predicted?.horizonDays === 7 &&
+      predicted.basisObservations === 4 &&
+      Math.abs(predicted.bearingDeg - 90) < 0.2 &&
+      Math.abs(predicted.distanceKm - 70) < 0.2,
+    JSON.stringify(predicted),
+  );
+
+  const fast = trackSealGroups([0, 10, 71, 132].map((xKm, day) => ({
+    id: `fast-${day}`,
+    uploadedAt: `2026-05-0${day + 1}T00:00:00Z`,
+    detections: [det(`fast-d${day}`, metersToLL(lat0, lng0, xKm * 1000, 0), 20)],
+  })));
+  check(
+    "case2b: two consecutive unusually fast moves raise a speed anomaly",
+    fast.tracks[0].anomalies?.some((a) => a.kind === "speed" && a.observationId.includes("fast-3:group:")),
+    JSON.stringify(fast.tracks[0].anomalies),
+  );
+
+  const reversed = trackSealGroups([
+    { id: "turn-0", uploadedAt: "2026-06-01T00:00:00Z", detections: [det("t0", metersToLL(lat0, lng0, 0, 0), 20)] },
+    { id: "turn-1", uploadedAt: "2026-06-02T00:00:00Z", detections: [det("t1", metersToLL(lat0, lng0, 10000, 0), 20)] },
+    { id: "turn-2", uploadedAt: "2026-06-03T00:00:00Z", detections: [det("t2", metersToLL(lat0, lng0, 0, 0), 20)] },
+  ]);
+  check(
+    "case2b: a direction reversal is marked as a sharp turn",
+    reversed.tracks[0].anomalies?.some((a) => a.kind === "sharp_turn" && a.value > 179),
+    JSON.stringify(reversed.tracks[0].anomalies),
+  );
+
+  const curved = trackSealGroups([
+    { id: "curve-0", uploadedAt: "2026-06-01T00:00:00Z", detections: [det("c0", metersToLL(lat0, lng0, 0, 0), 20)] },
+    { id: "curve-1", uploadedAt: "2026-06-02T00:00:00Z", detections: [det("c1", metersToLL(lat0, lng0, 10000, 0), 20)] },
+    { id: "curve-2", uploadedAt: "2026-06-03T00:00:00Z", detections: [det("c2", metersToLL(lat0, lng0, 2340, 6430), 20)] },
+  ]);
+  check(
+    "case2b: a 140-degree curve is not mislabeled as a reversal",
+    !curved.tracks[0].anomalies?.some((a) => a.kind === "sharp_turn"),
+    JSON.stringify(curved.tracks[0].anomalies),
+  );
+
+  const delayed = trackSealGroups([
+    { id: "delay-0", uploadedAt: "2026-07-01T00:00:00Z", detections: [det("d0", metersToLL(lat0, lng0, 0, 0), 20)] },
+    { id: "delay-1", uploadedAt: "2026-07-02T00:00:00Z", detections: [det("d1", metersToLL(lat0, lng0, 10000, 0), 20)] },
+    { id: "delay-2", uploadedAt: "2026-07-14T00:00:00Z", detections: [det("d2", metersToLL(lat0, lng0, 20000, 0), 20)] },
+  ]);
+  check(
+    "case2b: an unusually long but still matchable observation interval is flagged",
+    delayed.tracks[0].anomalies?.some((a) => a.kind === "unusual_interval" && a.value === 12),
+    JSON.stringify(delayed.tracks[0].anomalies),
+  );
+
+  const routeOutlier = trackSealGroups([
+    { id: "route-0", uploadedAt: "2026-08-01T00:00:00Z", detections: [det("r0", metersToLL(lat0, lng0, 0, 0), 20)] },
+    { id: "route-1", uploadedAt: "2026-08-02T00:00:00Z", detections: [det("r1", metersToLL(lat0, lng0, 10000, 0), 20)] },
+    { id: "route-2", uploadedAt: "2026-08-16T00:00:00Z", detections: [det("r2", metersToLL(lat0, lng0, -180000, 0), 20)] },
+  ]);
+  check(
+    "case2b: a hard geolocation/route deviation is flagged immediately",
+    routeOutlier.tracks[0].anomalies?.some((a) => a.kind === "route_deviation" && a.value > 300),
+    JSON.stringify(routeOutlier.tracks[0].anomalies),
+  );
+
+  const observations = straight.tracks[0].observations;
+  observations[1].match.confidence = "low";
+  observations[1].match.ambiguous = true;
+  const confirmed = applyLinkReviews(straight, [{
+    from_observation_id: observations[0].id,
+    to_observation_id: observations[1].id,
+    decision: "confirmed",
+  }]);
+  check(
+    "case2b: a confirmed manual link becomes high-confidence and unambiguous",
+    confirmed.tracks[0].observations[1].match?.confidence === "high" &&
+      confirmed.tracks[0].observations[1].match?.ambiguous === false,
+  );
+
+  const rejectedReview = {
+    from_observation_id: observations[1].id,
+    to_observation_id: observations[2].id,
+    decision: "rejected",
+  };
+  const rejected = applyLinkReviews(straight, [
+    { ...rejectedReview, decision: "confirmed" },
+    rejectedReview,
+  ]);
+  const rejectedReversed = applyLinkReviews(straight, [
+    rejectedReview,
+    { ...rejectedReview, decision: "confirmed" },
+  ]);
+  check(
+    "case2b: a rejected link deterministically cuts the track before `to`",
+    eq(rejected.tracks.map((t) => t.observations.map((o) => o.id)), rejectedReversed.tracks.map((t) => t.observations.map((o) => o.id))) &&
+      eq(rejected.tracks.map((t) => t.observations.length), [2, 2]) &&
+      rejected.tracks[1].observations[0].match === undefined,
+    JSON.stringify(rejected.tracks.map((t) => t.observations.map((o) => o.id))),
+  );
+}
+
 /* ---------- case 3: repeat surveys --------------------------------------- */
 {
   const lat0 = 44.5;
@@ -382,6 +648,44 @@ const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   );
 }
 
+/* ---------- case 3c: persistent regional avoidance ----------------------- */
+{
+  const sample = (id, date, best, region = "KZ-East") => ({
+    id,
+    uploadedAt: `${date}T09:00:00Z`,
+    capturedAt: `${date}T09:00:00Z`,
+    siteRegion: region,
+    areaM2: 1_000_000,
+    band: { best },
+  });
+  const baseline = [2020, 2021, 2022, 2023, 2024].flatMap((year) => [
+    sample(`b${year}a`, `${year}-08-01`, 100),
+    sample(`b${year}b`, `${year}-08-08`, 100),
+  ]);
+  const result = detectRegionAvoidance([
+    ...baseline,
+    sample("low-a", "2026-08-01", 10),
+    sample("low-b", "2026-08-08", 12),
+  ]);
+  check(
+    "case3c: two persistent lows after five baseline years raise one review signal",
+    result.alerts.length === 1 && result.alerts[0].region === "KZ-East",
+    JSON.stringify(result.assessments),
+  );
+  check(
+    "case3c: missing surveyed area is excluded, never treated as zero seals",
+    detectRegionAvoidance([{ ...sample("x", "2026-08-01", 0), areaM2: null }]).excludedWithoutEffort === 1,
+  );
+  check(
+    "case3c: fewer than five historical years cannot claim avoidance",
+    detectRegionAvoidance([
+      sample("b1", "2025-08-01", 100),
+      sample("l1", "2026-08-01", 10),
+      sample("l2", "2026-08-08", 10),
+    ]).alerts.length === 0,
+  );
+}
+
 /* ---------- case 4: empty inputs ----------------------------------------- */
 {
   check("case4: totalAreaM2([]) -> zero known, zero unknown", eq(totalAreaM2([]), { m2: 0, known: 0, unknown: 0, assumed: 0 }));
@@ -406,6 +710,61 @@ const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
     ],
   });
   check("case4: a one-sortie site has a count and no delta", one.length === 1 && one[0].best === 9 && one[0].delta === null);
+}
+
+/* ---------- case 5: conventional Caspian sub-basins --------------------- */
+{
+  check("case5: point above Mangyshlak threshold is North Caspian", caspianRegionFor({lat:45,lng:49})==="north");
+  check("case5: point between the two thresholds is Central Caspian", caspianRegionFor({lat:42,lng:50})==="central");
+  check("case5: point below Apsheron threshold is South Caspian", caspianRegionFor({lat:39,lng:51})==="south");
+  check("case5: an unplaceable point has no invented region", caspianRegionFor({lat:NaN,lng:51})===null);
+  check(
+    "case5: regional counts plus unlocated equal the global count",
+    eq(countByCaspianRegion([
+      {lat:45,lng:49,count:100},
+      {lat:42,lng:50,count:60},
+      {lat:39,lng:51,count:40},
+    ],5),{north:100,central:60,south:40,unlocated:5,global:205}),
+  );
+}
+
+/* ---------- case 6: immutable upload checkpoints ----------------------- */
+{
+  const footage = (id, ingestedAt, siteId, lat, lng, count) => ({
+    id,
+    filename: `${id}.MP4`,
+    size: 1,
+    duration: 1,
+    uploadedAt: ingestedAt,
+    ingestedAt,
+    capturedAt: ingestedAt,
+    track: [],
+    center: { lat, lng },
+    status: "ready",
+    source: "test",
+    siteId,
+    detections: [{ id: `${id}-d`, footageId: id, t: 0, lat, lng, count, confidence: 1, status: "validated" }],
+  });
+  const north100 = footage("north-old", "2026-01-01T08:00:00Z", "A", 45.1, 49, 100);
+  const south80 = footage("south", "2026-01-02T08:00:00Z", "B", 39.2, 51, 80);
+  /* Same explicit site, far away: this is a replacement/movement, not a new
+     term to add to the standing total. */
+  const central90 = footage("central-new", "2026-01-03T08:00:00Z", "A", 42.2, 50, 90);
+  const checkpoints = buildPopulationCheckpoints([central90, north100, south80]);
+  const latest = checkpoints[checkpoints.length - 1].snapshot;
+  check("case6: upload checkpoints are chronological", checkpoints.map((c) => c.footageId).join(",") === "north-old,south,central-new");
+  check("case6: a repeated explicit site replaces its old count", latest.global === 170, JSON.stringify(latest));
+  check("case6: regional allocation follows group coordinates, not the old site centroid", latest.north === 0 && latest.central === 90 && latest.south === 80, JSON.stringify(latest));
+  check("case6: every regional snapshot sums exactly to global", checkpoints.every((c) => c.snapshot.north + c.snapshot.central + c.snapshot.south + c.snapshot.unlocated === c.snapshot.global));
+  check("case6: checkpoint prefixes retain the exact knowledge state", checkpoints[1].footageIds.join(",") === "north-old,south");
+  check("case6: daily series uses the last snapshot in each bucket", bucketCheckpointSeries(checkpoints, "day").length === 3);
+
+  const unresolved = {
+    ...footage("unresolved", "2026-01-04T08:00:00Z", "C", 45.2, 49, 80),
+    band: { low: 100, best: 100, high: 100, basis: "engine" },
+  };
+  const unresolvedSnapshot = populationSnapshot([unresolved]);
+  check("case6: a band remainder stays unlocated instead of being assigned to a centroid", unresolvedSnapshot.north === 80 && unresolvedSnapshot.unlocated === 20 && unresolvedSnapshot.global === 100, JSON.stringify(unresolvedSnapshot));
 }
 
 /* ---------- summary ------------------------------------------------------- */
