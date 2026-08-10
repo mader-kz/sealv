@@ -13,6 +13,11 @@
  * carry their own controls. There is no single shared "pending" slot, because
  * a single slot is how three photos dropped together became one row and two
  * silently discarded files.
+ *
+ * The list no longer scrolls inside itself. It sits in the Загрузка screen's
+ * own column, and that screen scrolls: a 46vh window inside a panel meant a
+ * queue of thirty files was read four rows at a time, with the card asking for
+ * a decision as likely as not just below the fold of a box inside a box.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -26,6 +31,7 @@ import { useFootageStore } from "@/store/useFootageStore";
 import FramePicker from "@/components/upload/FramePicker";
 import Icon from "@/components/ui/Icon";
 import { Button } from "@/components/ui/primitives";
+import { setMode } from "@/lib/modes";
 import { stageText, useT } from "@/lib/i18n";
 
 const KB = 1024;
@@ -98,9 +104,9 @@ function Row({ item, queuePos, queueTotal }: { item: IngestItem; queuePos: numbe
   const setPinMode = useFootageStore((s) => s.setPinMode);
   const setPinPoints = useFootageStore((s) => s.setPinPoints);
 
-  /* A card that needs a person scrolls itself into view: in a panel that now
-     scrolls, the frame picker or the pin controls otherwise appear below the
-     fold and the file just looks stuck. */
+  /* A card that needs a person scrolls itself into view: on a screen this
+     long the frame picker or the pin controls otherwise appear below the fold
+     and the file just looks stuck. */
   const cardRef = useRef<HTMLDivElement>(null);
   const needsYou =
     item.phase === "needs_location" || item.phase === "duplicate_choice" || item.phase === "frame_choice";
@@ -191,8 +197,9 @@ function Row({ item, queuePos, queueTotal }: { item: IngestItem; queuePos: numbe
   return (
     /* No card. A hairline above each row and the shared left edge below the
        icon are the whole structure — which is also why the row can now afford
-       a filename at reading size. */
-    <div ref={cardRef} className="border-t border-hair first:border-t-0 py-2.5">
+       a filename at reading size. The vertical rhythm is a screen's, not a
+       panel's: a row that is asking a question needs air around the question. */
+    <div ref={cardRef} className="border-t border-hair first:border-t-0 py-3.5">
       <div className="flex items-start gap-2">
         <Icon
           name={
@@ -285,20 +292,29 @@ function Row({ item, queuePos, queueTotal }: { item: IngestItem; queuePos: numbe
 
           {/* ------------------------------------------- the missing anchor */}
           {item.phase === "needs_location" && (
-            <div className="mt-1.5">
+            <div className="mt-2">
               {item.anchor && (
                 <div className="text-2xs text-ink2 tnum">
                   {t("ingest.anchorAt", { lat: item.anchor.lat.toFixed(3), lng: item.anchor.lng.toFixed(3) })}
                 </div>
               )}
-              <div className="flex flex-wrap gap-1.5 mt-1.5">
+              {/* The map is its own screen now, so the gesture spans two of
+                  them: this says so in one sentence rather than leaving a
+                  person clicking an ingest screen that has no map on it. The
+                  armed pin, the point and this row all survive the trip. */}
+              <div className="text-2xs text-ink3 mt-1 leading-relaxed">{t("ingest.pinOnMap")}</div>
+              <div className="flex flex-wrap gap-1.5 mt-2">
                 <Button
                   variant={owningPin ? "primary" : "default"}
                   icon="pin"
+                  /* Arms the pin AND takes you to where the pin is placed.
+                     Pressing "point at it on the map" and staying on a screen
+                     without a map was the whole complaint. */
                   onClick={() => {
                     claimPin(item.id);
                     setPinMode(true);
                     setPinPoints([]);
+                    setMode("map");
                   }}
                 >
                   {owningPin ? t("ingest.pinning") : t("ingest.pinThis")}
@@ -409,20 +425,21 @@ function FailedJobRow({ job }: { job: FailedJob }) {
   );
 }
 
-/** The failed ingests the SERVICE remembers. Mounted outside the Ingest panel
- *  too: a job-stage failure writes no run row, hydrate() rebuilds only from
- *  the runs, and so every failure used to disappear on F5 with no trace any
- *  screen could reach. Renders nothing when this client cannot list them —
- *  an empty "failed ingests" section reads as "nothing failed", which would be
- *  a claim rather than an absence. */
+/** The failed ingests the SERVICE remembers. A job-stage failure writes no run
+ *  row, hydrate() rebuilds only from the runs, and so every failure used to
+ *  disappear on F5 with no trace any screen could reach. It lives on the
+ *  Загрузка screen now — reachable from anywhere, because the rail carries the
+ *  needs-you count in every mode and sends you here. Renders nothing when this
+ *  client cannot list them — an empty "failed ingests" section reads as
+ *  "nothing failed", which would be a claim rather than an absence. */
 export function FailedIngests({ compact = false }: { compact?: boolean }) {
   const { t } = useT();
   const jobs = useIngestStore((s) => s.failedJobs);
   const supported = useIngestStore((s) => s.failedJobsSupported);
   if (!supported || jobs.length === 0) return null;
   return (
-    <div className={compact ? "" : "pt-1"}>
-      <div className="hd">{t("ingest.failedSection", { n: jobs.length })}</div>
+    <div className={compact ? "" : "pt-6"}>
+      <div className="hd pb-1.5 border-b border-line">{t("ingest.failedSection", { n: jobs.length })}</div>
       {jobs.map((j) => (
         <FailedJobRow key={j.job_id} job={j} />
       ))}
@@ -443,15 +460,26 @@ export default function IngestQueue() {
     [items],
   );
 
-  /* The failed-ingest section is NOT rendered here. It is mounted at page
-     level, above this panel and reachable with the panel shut — a failure
-     nobody can find while the panel is closed is a count the archive is
-     quietly missing. Two copies of it a centimetre apart is just noise. */
-  if (!items.length) return null;
+  /* The failed-ingest section is NOT rendered here — the screen mounts it
+     below this list, once. Two copies of it a centimetre apart is just noise. */
+
+  /* An empty queue says so. The old panel rendered nothing at all, which on a
+     screen of its own would be a blank half-page that reads as broken rather
+     than as "no files yet". */
+  if (!items.length) {
+    return (
+      <div>
+        {/* Same head and same rule as the list it stands in for, so the column
+            keeps its top edge whether or not anything has been dropped. */}
+        <div className="hd pb-1.5 border-b border-line">{t("ingest.queueEmpty")}</div>
+        <div className="text-xs text-ink3 mt-2.5 leading-relaxed">{t("ingest.queueEmptyHint")}</div>
+      </div>
+    );
+  }
 
   return (
-    <div className="pt-3">
-      <div className="flex items-baseline justify-between gap-2 pb-1">
+    <div>
+      <div className="flex items-baseline justify-between gap-2 pb-1.5 border-b border-line">
         <span className="hd">{t("ingest.listTitle", { n: items.length })}</span>
         {finished > 0 && (
           <button onClick={clearFinished} className="text-xs text-ink3 hover:text-ink">
@@ -459,7 +487,9 @@ export default function IngestQueue() {
           </button>
         )}
       </div>
-      <div className="max-h-[46vh] overflow-y-auto pr-0.5">
+      {/* No inner scroller: this list is as tall as it is and the screen
+          scrolls. */}
+      <div>
         {items.map((item) => (
           <Row
             key={item.id}

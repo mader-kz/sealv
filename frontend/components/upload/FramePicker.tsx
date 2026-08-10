@@ -13,8 +13,9 @@
  * Two things this card owes the operator, and both are here because a frame
  * count is a narrower claim than the clip it came from:
  *
- *  · A frame big enough to judge. The panel column is 360 px, so the strip is
- *    two columns of thumbnails and the real look happens in a lightbox — the
+ *  · A frame big enough to judge. The strip fills the width it is given — four
+ *    thumbnails abreast in the Загрузка screen's column, two in anything
+ *    narrower — and the real look happens in a lightbox: the
  *    same Dialog the evidence view uses, arrow keys and all. The lightbox
  *    starts from the strip's own bitmap (nothing is re-extracted to open it)
  *    and upgrades in place to the frame at the video's native resolution: the
@@ -246,9 +247,9 @@ export default function FramePicker({ item }: { item: IngestItem }) {
   return (
     /* A nested box inside a row that is already delimited by a hairline is one
        frame too many. The head and the strip's own alignment carry it. */
-    <div className="mt-2.5">
+    <div className="mt-3">
       <div className="hd">{t("frames.title")}</div>
-      <div className="text-2xs text-ink3 mt-1 leading-relaxed">{t("frames.pickWhy")}</div>
+      <div className="text-xs text-ink3 mt-1 leading-relaxed">{t("frames.pickWhy")}</div>
 
       {busy && frames.length === 0 && (
         <div className="text-2xs text-ink3 mt-1.5">{t("frames.extracting")}</div>
@@ -267,7 +268,11 @@ export default function FramePicker({ item }: { item: IngestItem }) {
               {t("frames.moved", { m: Math.round(moved) })}
             </div>
           )}
-          <div className="grid grid-cols-2 gap-1.5 mt-1.5">
+          {/* Auto-fill, not a fixed column count: the strip is handed a 640 px
+              reading column on the Загрузка screen and lays out four frames
+              abreast, and it still degrades to two in anything narrow without
+              a second breakpoint to keep in step. */}
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(148px,1fr))] gap-2 mt-2">
             {frames.map((f, i) => (
               <div
                 key={f.atSeconds}

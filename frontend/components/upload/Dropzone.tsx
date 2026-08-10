@@ -1,11 +1,16 @@
 "use client";
 /**
- * Dropzone — where files enter the platform.
+ * Dropzone — where files enter the platform, and the body of the Загрузка mode.
  *
  * It does three things and hands everything else to the ingest store: it takes
  * a drop, it decides what each file IS, and it collects the survey metadata the
- * operator can only supply here. The queue below it is a view over the store,
- * so closing this panel mid-count no longer throws the log away.
+ * operator can only supply here. The queue beside it is a view over the store,
+ * so leaving the screen mid-count no longer throws the log away.
+ *
+ * It is laid out as a page now, not as a panel: the drop target is a strip
+ * across the top, the queue is a reading column under it, and the survey
+ * details stand in their own column to the right instead of being folded away
+ * behind a disclosure because 360 px had no room for four fields.
  *
  * The grouping rule changed, and it is the reason this component was rewritten.
  * Files used to be grouped by lowercased basename, one queue entry per group:
@@ -20,8 +25,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   useIngestStore,
-  isRunning,
-  isWaiting,
   kindOf,
   NOTE_MAX,
   SIDECAR_RE,
@@ -30,8 +33,9 @@ import {
 } from "@/store/useIngestStore";
 import { useFootageStore } from "@/store/useFootageStore";
 import { useOperator } from "@/lib/identity";
-import IngestQueue from "@/components/upload/IngestQueue";
+import IngestQueue, { FailedIngests } from "@/components/upload/IngestQueue";
 import Icon from "@/components/ui/Icon";
+import { Button } from "@/components/ui/primitives";
 import { useT } from "@/lib/i18n";
 
 /** Sample footage bundled with the app so the ingest flow can be tried without
@@ -45,11 +49,6 @@ const LOG_RE = /\.(csv|txt|log|gpx|kml|kmz|dat|xml)$/i;
 
 const stemOf = (name: string) => name.replace(/\.[^.]+$/, "").toLowerCase();
 
-/** How long a finished queue stays on screen before the panel shows itself
- *  out. Long enough that the last card is read as "done" rather than as
- *  something that vanished mid-count. */
-const SETTLED_CLOSE_MS = 1500;
-
 /** The honest per-type sentence for a file this platform cannot read. */
 function skipReason(name: string): IngestReason {
   if (RAW_RE.test(name)) return { key: "ingest.skipRaw", vars: { name } };
@@ -57,13 +56,11 @@ function skipReason(name: string): IngestReason {
   return { key: "ingest.skipUnknown", vars: { name } };
 }
 
-export default function Dropzone({
-  /** Called once the queue has finished and nothing in it wants a person.
-   *  The panel that owns this component uses it to close itself. */
-  onSettled,
-}: {
-  onSettled?: () => void;
-}) {
+/* No `onSettled` any more, and the prop is gone rather than merely unused: the
+   screen no longer closes over the queue, it hands back to the map, and the
+   shell owns that hand-back. A second component able to signal the same return
+   is a race whose loser strands somebody on a finished list. */
+export default function Dropzone() {
   const { t } = useT();
   const [drag, setDrag] = useState(false);
   const [loadingSample, setLoadingSample] = useState(false);
@@ -72,8 +69,6 @@ export default function Dropzone({
   const enqueue = useIngestStore((s) => s.enqueue);
   const meta = useIngestStore((s) => s.meta);
   const setMeta = useIngestStore((s) => s.setMeta);
-  const metaOpen = useIngestStore((s) => s.metaOpen);
-  const setMetaOpen = useIngestStore((s) => s.setMetaOpen);
   const pinTarget = useIngestStore((s) => s.pinTarget);
   const claimPin = useIngestStore((s) => s.claimPin);
   const refreshFailed = useIngestStore((s) => s.refreshFailed);
@@ -91,39 +86,6 @@ export default function Dropzone({
   useEffect(() => {
     void refreshFailed();
   }, [refreshFailed]);
-
-  /* --------------------------------------------- showing itself out */
-  /* An ingest panel that stays open over a finished queue is a lid on the map
-     the counts were just drawn onto. It closes itself, but only on a queue
-     that is genuinely done with this person: anything running, anything queued
-     behind it, anything asking a question (a duplicate, a missing location, a
-     frame to pick) and anything that FAILED keeps the panel up — a failure is
-     the one card nobody should have to go looking for.
-     `armed` is why reopening a settled panel does not immediately close it
-     again: the close only fires on a queue this mount watched go busy. */
-  const items = useIngestStore((s) => s.items);
-  const onSettledRef = useRef(onSettled);
-  useEffect(() => {
-    onSettledRef.current = onSettled;
-  });
-  const armedRef = useRef(false);
-  useEffect(() => {
-    const busy = items.some((i) => isRunning(i.phase) || i.phase === "queued");
-    const wantsYou = items.some((i) => isWaiting(i.phase) || i.phase === "failed");
-    if (busy || wantsYou) {
-      armedRef.current = true;
-      return;
-    }
-    if (!armedRef.current) return;
-    // "The last item finished" — a queue of nothing but skipped files never
-    // produced a count, and closing over it would hide the reason it didn't.
-    if (!items.some((i) => i.phase === "done")) return;
-    const timer = setTimeout(() => {
-      armedRef.current = false;
-      onSettledRef.current?.();
-    }, SETTLED_CLOSE_MS);
-    return () => clearTimeout(timer);
-  }, [items]);
 
   /* One pass over the drop. Every file leaves this loop as a row: countable,
      skipped-with-a-reason, or attached to a media file as its sidecar. Nothing
@@ -260,8 +222,8 @@ export default function Dropzone({
   return (
     /* No stack of boxes. Each band is held by a hairline and by the alignment
        of its own left edge — the drop target, the survey metadata, the sample
-       clip and the queue read as one column of an instrument, not as four
-       grey cards floating in a fifth. */
+       clip and the queue read as one instrument, not as four grey cards
+       floating in a fifth. */
     <div>
       <div
         role="button"
@@ -284,16 +246,34 @@ export default function Dropzone({
            in words, and a dashed box around them is the app drawing a picture
            of a box. Dragging over it is a live state, so it is allowed the
            signal colour — the only moment this band is anything but grey. */
-        className={`border-y py-3.5 transition-colors cursor-pointer ${
+        className={`border-y py-4 transition-colors cursor-pointer flex flex-wrap items-center gap-x-6 gap-y-3 ${
           drag ? "border-accent bg-accent-soft" : "border-t-line border-b-hair hover:bg-hover"
         }`}
       >
-        <div className="flex items-baseline gap-2">
-          <Icon name="upload" size={13} className="text-ink4 shrink-0 translate-y-px" />
-          <span className="text-base font-medium text-ink">{t("drop.title")}</span>
+        <div className="min-w-0">
+          <div className="flex items-baseline gap-2">
+            <Icon name="upload" size={13} className="text-ink4 shrink-0 translate-y-px" />
+            <span className="text-base font-medium text-ink">{t("drop.title")}</span>
+          </div>
+          <div className="text-xs text-ink3 mt-1 leading-relaxed">{t("drop.sub")}</div>
+          <div className="text-2xs text-ink3 mt-1">{t("ingest.acceptedTypes")}</div>
         </div>
-        <div className="text-xs text-ink3 mt-1 leading-relaxed">{t("drop.sub")}</div>
-        <div className="text-2xs text-ink3 mt-1">{t("ingest.acceptedTypes")}</div>
+        {/* The whole strip is the target, but a person who has never dropped a
+            file onto a web page needs a control to press, and "click the big
+            area" is not a control. It opens the same picker; the click is
+            stopped here so the strip's own handler does not open a second one
+            on top of it. */}
+        <div className="ml-auto shrink-0">
+          <Button
+            icon="upload"
+            onClick={(e) => {
+              e.stopPropagation();
+              fileRef.current?.click();
+            }}
+          >
+            {t("drop.browse")}
+          </Button>
+        </div>
         <input
           ref={fileRef}
           type="file"
@@ -305,56 +285,83 @@ export default function Dropzone({
         />
       </div>
 
-      {/* --------------------------------------------- the survey metadata */}
-      {/* The service has had these fields since /v1/media was written and no
-          caller has ever filled them. An altitude typed here is what turns an
-          unknown scale into a measured one for every hectare downstream. */}
-      {/* A disclosure, not a card: the hairline under it is the whole frame.
-          Its fields are underlines rather than boxes — an input is a place a
-          value is written on the instrument, and five outlined rectangles in a
-          360 px column are five rectangles competing with the numbers. */}
-      <div className="border-b border-hair">
-        <button
-          onClick={() => setMetaOpen(!metaOpen)}
-          className="w-full flex items-center gap-1.5 py-2 text-left"
-          aria-expanded={metaOpen}
-        >
-          <Icon name={metaOpen ? "chevronLeft" : "chevronRight"} size={12} className="text-ink3" />
-          <span className="text-xs text-ink2 flex-1">{t("ingest.metaTitle")}</span>
-          <span className="text-2xs text-ink3 truncate max-w-[120px]">
-            {[meta.captured_at, meta.altitude_m ? `${meta.altitude_m} ${t("unit.m")}` : "", operator]
-              .filter(Boolean)
-              .join(" · ")}
-          </span>
-        </button>
-        {metaOpen && (
-          <div className="pb-2.5 space-y-2.5">
-            <div className="grid grid-cols-2 gap-3">
-              <label className="block">
-                <span className="label">{t("ingest.metaDate")}</span>
-                <input
-                  type="date"
-                  value={(meta.captured_at ?? "").slice(0, 10)}
-                  onChange={(e) => setMeta({ captured_at: e.target.value || undefined })}
-                  className="w-full h-7 mt-0.5 bg-transparent border-x-0 border-t-0 border-b border-line px-0 text-xs text-ink tnum transition-colors focus:outline-none focus:border-ink2"
-                />
-              </label>
-              <label className="block">
-                <span className="label">{t("ingest.metaAltitude")}</span>
-                <input
-                  type="number"
-                  min={0}
-                  step={1}
-                  inputMode="numeric"
-                  value={meta.altitude_m ?? ""}
-                  onChange={(e) => {
-                    const n = Number(e.target.value);
-                    setMeta({ altitude_m: e.target.value === "" || !Number.isFinite(n) || n <= 0 ? undefined : n });
-                  }}
-                  className="w-full h-7 mt-0.5 bg-transparent border-x-0 border-t-0 border-b border-line px-0 text-xs text-ink tnum transition-colors focus:outline-none focus:border-ink2"
-                />
-              </label>
+      {/* ------------------------------------------------------ two columns */}
+      {/* The queue is the wide half and the survey details stand beside it. On
+          a narrow window the two stack in source order — queue first, because
+          the queue is what a person came here to watch; the survey details are
+          filled once for a drop and then left alone. */}
+      <div className="mt-6 flex flex-col gap-x-10 gap-y-8 lg:flex-row lg:items-start">
+        <div className="flex-1 min-w-0 lg:max-w-[640px]">
+          {/* An aside, marked the way the instrument marks asides: one rule
+              down its left edge. The pin glyph keeps the signal colour — an
+              armed anchor is genuinely live. */}
+          {orphanAnchor && (
+            <div className="mb-4 border-l border-line pl-2.5 flex items-start gap-2">
+              <Icon name="pin" size={13} className="text-accent mt-0.5" />
+              <div className="flex-1 min-w-0 text-2xs text-ink2 leading-relaxed">
+                {t("ingest.anchorNoOwner")}
+              </div>
+              <button
+                onClick={() => {
+                  setPinPoints([]);
+                  setPinMode(false);
+                  claimPin(null);
+                }}
+                className="text-ink3 hover:text-ink"
+                aria-label={t("btn.clear")}
+              >
+                <Icon name="close" size={12} />
+              </button>
             </div>
+          )}
+
+          <IngestQueue />
+
+          {/* The failures the SERVICE remembers. They used to be pinned to the
+              map, visible from everywhere, because the ingest panel could be
+              shut over them. The panel is gone and the rail now carries the
+              needs-you count from every mode, so this is their one home — and
+              it is the screen the count sends you to. */}
+          <FailedIngests />
+        </div>
+
+        {/* ----------------------------------------- the survey metadata */}
+        {/* The service has had these fields since /v1/media was written and no
+            caller has ever filled them — which is unsurprising, since until now
+            they lived folded away behind a disclosure in a 360 px panel. An
+            altitude typed here is what turns an unknown scale into a measured
+            one for every hectare downstream, so it is on screen, always, beside
+            the queue it applies to.
+            The fields are underlines rather than boxes: an input is a place a
+            value is written on the instrument, and four outlined rectangles are
+            four rectangles competing with the numbers. */}
+        <aside className="w-full shrink-0 lg:w-[264px]">
+          <div className="hd pb-1.5 border-b border-line">{t("ingest.metaTitle")}</div>
+          <div className="pt-2.5 space-y-3">
+            <label className="block">
+              <span className="label">{t("ingest.metaDate")}</span>
+              <input
+                type="date"
+                value={(meta.captured_at ?? "").slice(0, 10)}
+                onChange={(e) => setMeta({ captured_at: e.target.value || undefined })}
+                className="w-full h-7 mt-0.5 bg-transparent border-x-0 border-t-0 border-b border-line px-0 text-xs text-ink tnum transition-colors focus:outline-none focus:border-ink2"
+              />
+            </label>
+            <label className="block">
+              <span className="label">{t("ingest.metaAltitude")}</span>
+              <input
+                type="number"
+                min={0}
+                step={1}
+                inputMode="numeric"
+                value={meta.altitude_m ?? ""}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  setMeta({ altitude_m: e.target.value === "" || !Number.isFinite(n) || n <= 0 ? undefined : n });
+                }}
+                className="w-full h-7 mt-0.5 bg-transparent border-x-0 border-t-0 border-b border-line px-0 text-xs text-ink tnum transition-colors focus:outline-none focus:border-ink2"
+              />
+            </label>
             <div>
               <span className="label">{t("ingest.metaOperator")}</span>
               <div className="text-xs text-ink mt-0.5">
@@ -364,7 +371,7 @@ export default function Dropzone({
             <label className="block">
               <span className="label">{t("ingest.metaNote")}</span>
               <textarea
-                rows={2}
+                rows={3}
                 maxLength={NOTE_MAX}
                 value={meta.notes ?? ""}
                 onChange={(e) => setMeta({ notes: e.target.value })}
@@ -373,50 +380,26 @@ export default function Dropzone({
             </label>
             <div className="text-2xs text-ink3 leading-relaxed">{t("ingest.metaWhy")}</div>
           </div>
-        )}
-      </div>
 
-      {/* Nothing to source, nothing to install — a real GPS-tagged clip ships
-          with the app, so the ingest path can be tried on a bare machine. */}
-      <button
-        onClick={loadSampleClip}
-        disabled={loadingSample}
-        aria-label={t("drop.sampleAria")}
-        className="w-full flex items-center gap-2 py-2 border-b border-hair text-left transition-colors hover:bg-hover disabled:opacity-60 disabled:pointer-events-none"
-      >
-        <Icon name={loadingSample ? "download" : "map"} size={13} className="text-ink3" />
-        <span className="flex-1 min-w-0">
-          <span className="block text-xs text-ink">
-            {loadingSample ? t("drop.sampleLoading") : t("drop.sampleUse")}
-          </span>
-          <span className="block text-2xs text-ink3 truncate">{t("drop.sampleDesc")}</span>
-        </span>
-      </button>
-
-      {/* An aside, marked the way the instrument marks asides: one rule down
-          its left edge. The pin glyph keeps the signal colour — an armed
-          anchor is genuinely live. */}
-      {orphanAnchor && (
-        <div className="mt-2.5 border-l border-line pl-2.5 flex items-start gap-2">
-          <Icon name="pin" size={13} className="text-accent mt-0.5" />
-          <div className="flex-1 min-w-0 text-2xs text-ink2 leading-relaxed">
-            {t("ingest.anchorNoOwner")}
-          </div>
+          {/* Nothing to source, nothing to install — a real GPS-tagged clip
+              ships with the app, so the ingest path can be tried on a bare
+              machine. */}
           <button
-            onClick={() => {
-              setPinPoints([]);
-              setPinMode(false);
-              claimPin(null);
-            }}
-            className="text-ink3 hover:text-ink"
-            aria-label={t("btn.clear")}
+            onClick={loadSampleClip}
+            disabled={loadingSample}
+            aria-label={t("drop.sampleAria")}
+            className="mt-5 w-full flex items-start gap-2 py-2 border-t border-hair text-left transition-colors hover:bg-hover disabled:opacity-60 disabled:pointer-events-none"
           >
-            <Icon name="close" size={12} />
+            <Icon name={loadingSample ? "download" : "map"} size={13} className="text-ink3 mt-0.5 shrink-0" />
+            <span className="flex-1 min-w-0">
+              <span className="block text-xs text-ink">
+                {loadingSample ? t("drop.sampleLoading") : t("drop.sampleUse")}
+              </span>
+              <span className="block text-2xs text-ink3 leading-relaxed">{t("drop.sampleDesc")}</span>
+            </span>
           </button>
-        </div>
-      )}
-
-      <IngestQueue />
+        </aside>
+      </div>
     </div>
   );
 }
