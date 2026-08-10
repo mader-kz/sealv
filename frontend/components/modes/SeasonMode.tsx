@@ -491,9 +491,14 @@ export default function SeasonMode() {
             setTimelineOpen(false);
             setAnchorId(null);
           }}
+          onPollutionFocus={()=>{
+            setTimelineOpen(false);
+            setAnchorId(null);
+          }}
           historyFootageIds={checkpointFootageIds}
           standingFootageIds={activeSnapshot.standingFootageIds}
           checkpointFootageId={activeCheckpoint?.footageId ?? null}
+          pollutionReferenceTime={activeCheckpoint?.observedAt ?? null}
         />
 
         {/* Nothing to show yet — said over the chart rather than in place of it,

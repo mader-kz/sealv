@@ -15,8 +15,13 @@ import { localeFor, useT } from "@/lib/i18n";
 import { parseLatLng } from "@/lib/parsers/latlng";
 import { Button } from "@/components/ui/primitives";
 import { setMode } from "@/lib/modes";
-import { fetchPollution, pollutionColor, pollutionRadius } from "@/lib/pollution";
-import type { PollutionFC } from "@/lib/pollution";
+import {
+  fetchPollution,
+  pollutionAgeBucket,
+  pollutionDisplay,
+  pollutionUncertainty,
+} from "@/lib/pollution";
+import type { PollutionFC, PollutionFeature } from "@/lib/pollution";
 
 // Caspian bounds
 const CASPIAN_BOUNDS: [[number, number],[number,number]] = [[46,36],[55,48]];
@@ -424,9 +429,11 @@ export default function CaspianMap({
   selectedSiteKey,
   onSiteClick,
   onMovementFocus,
+  onPollutionFocus,
   historyFootageIds,
   standingFootageIds,
   checkpointFootageId,
+  pollutionReferenceTime,
 }: {
   onMapReady?: (m: any)=>void;
   /** One chip per site, from the mode that owns the season's grouping. */
@@ -436,12 +443,16 @@ export default function CaspianMap({
   /** Movement cards open the group inspector, so any site inspector already
       occupying the same side of the map has to yield first. */
   onMovementFocus?: ()=>void;
+  /** Pollution evidence uses the same exclusive map inspector slot. */
+  onPollutionFocus?: ()=>void;
   /** Knowledge available at the selected immutable checkpoint. */
   historyFootageIds?: readonly string[] | null;
   /** Latest-per-site sorties whose groups make up the displayed total. */
   standingFootageIds?: readonly string[] | null;
   /** Upload timestamp whose changed standing card(s) should be highlighted. */
   checkpointFootageId?: string | null;
+  /** Environmental evidence is filtered and aged at the selected checkpoint. */
+  pollutionReferenceTime?: string | null;
 }) {
   const { lang, t, tp } = useT();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -451,9 +462,10 @@ export default function CaspianMap({
   /* The live zoom, kept for the pin readout. Updated in the same rAF pass the
      chip overlay already runs, so it costs nothing extra. */
   const [zoomNow, setZoomNow] = useState<number | null>(null);
-  // Pollution — encapsulated additive, no seal logic touched
   const [pollution, setPollution] = useState<PollutionFC>({ type: "FeatureCollection", features: [] });
+  const [pollutionError, setPollutionError] = useState(false);
   const [showPollution, setShowPollution] = useState(true);
+  const [selectedPollutionId, setSelectedPollutionId] = useState<string | null>(null);
   const tipRef = useRef<HTMLDivElement>(null);
   const footagesRaw = useFootageStore(s=>s.footages);
   const detectionsRaw = useFootageStore(s=>s.detections);
@@ -913,66 +925,165 @@ export default function CaspianMap({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
-  // Pollution fetch: Caspian bbox 46,36,55,48, last 30d
+  const pollutionDisplayData = useMemo(
+    () => pollutionDisplay(pollution, pollutionReferenceTime, selectedPollutionId),
+    [pollution, pollutionReferenceTime, selectedPollutionId],
+  );
+  const pollutionUncertaintyData = useMemo(
+    () => pollutionUncertainty(pollutionDisplayData),
+    [pollutionDisplayData],
+  );
+  const selectedPollution = useMemo(
+    () => pollution.features.find(feature => feature.properties.id === selectedPollutionId) ?? null,
+    [pollution.features, selectedPollutionId],
+  );
   useEffect(()=>{
-    const since = new Date(Date.now()-30*86400000).toISOString();
-    fetchPollution({ bbox: "46,36,55,48", since }).then(setPollution).catch(e=>console.warn("[pollution]", e));
+    if(selectedSiteKey || selectedMovementId) setSelectedPollutionId(null);
+  },[selectedSiteKey,selectedMovementId]);
+  useEffect(()=>{
+    if(
+      selectedPollutionId
+      && !pollutionDisplayData.features.some(feature => feature.properties.id === selectedPollutionId)
+    ) setSelectedPollutionId(null);
+  },[pollutionDisplayData.features,selectedPollutionId]);
+
+  /* Load the evidence once. The selected population checkpoint filters future
+     reports locally, so moving the crosshair does not turn into network churn. */
+  useEffect(()=>{
+    const controller = new AbortController();
+    setPollutionError(false);
+    fetchPollution({ bbox: "46,36,55,48", limit: 2000, signal: controller.signal })
+      .then(setPollution)
+      .catch(error => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setPollutionError(true);
+      });
+    return () => controller.abort();
   },[]);
-  // Pollution source/layer (additive, encapsulated)
+
+  /* Reported points, analyst polygons, and metre-based uncertainty are three
+     distinct claims. They get separate layers instead of one oversized dot. */
   useEffect(()=>{
-    const map:any = mapRef.current; if(!map || !mapLoaded) return;
-    try{
-      const data:any = {
-        type: "FeatureCollection",
-        features: pollution.features.map((f:any)=>({
-          ...f,
-          properties: { ...f.properties, radius_px: pollutionRadius(f.properties), color: pollutionColor(f.properties) }
-        }))
-      };
-      const src:any = map.getSource("pollution");
-      if(src) src.setData(data);
-      else {
-        map.addSource("pollution", { type: "geojson", data });
-        map.addLayer({ id: "pollution-circle", type: "circle", source: "pollution", paint: {
-          "circle-color": ["get","color"],
-          "circle-radius": ["get","radius_px"],
-          "circle-opacity": 0.78,
-          "circle-stroke-color": "#0f1115",
-          "circle-stroke-width": 1
-        }});
-        const tip = tipRef.current;
-        const onMove = (e:any)=>{
-          const feats = map.queryRenderedFeatures(e.point, { layers: ["pollution-circle"] });
-          if(feats.length && tip){
-            const p:any = feats[0].properties;
-            tip.style.display="block";
-            tip.style.left=(e.point.x+12)+"px";
-            tip.style.top=(e.point.y-12)+"px";
-            tip.innerHTML=`${p.kind} · ${p.source_id}<br/>${p.observed_at ?? ""}<br/>r ${p.radius_m}m · ${p.location_precision}`;
-            map.getCanvas().style.cursor="pointer";
-          } else if(tip){ tip.style.display="none"; if(!pinMode) map.getCanvas().style.cursor=""; }
-        };
-        const onLeave = ()=>{ if(tip) tip.style.display="none"; };
-        map.on("mousemove","pollution-circle", onMove);
-        map.on("mouseleave","pollution-circle", onLeave);
-        map.on("mousemove", (e:any)=>{
-          const feats = map.queryRenderedFeatures(e.point, { layers: ["pollution-circle"] });
-          if(feats.length && tip){
-            const p:any = feats[0].properties;
-            tip.style.display="block";
-            tip.style.left=(e.point.x+12)+"px";
-            tip.style.top=(e.point.y-12)+"px";
-            tip.innerHTML=`${p.kind} · ${p.source_id}<br/>${p.observed_at ?? ""}<br/>r ${p.radius_m}m · ${p.location_precision}`;
-          }
-        });
+    const map:any = mapRef.current;
+    if(!map || !mapLoaded) return;
+    const source = map.getSource("pollution-evidence");
+    if(source) source.setData(pollutionDisplayData);
+    else map.addSource("pollution-evidence", { type:"geojson", data:pollutionDisplayData });
+    const uncertaintySource = map.getSource("pollution-uncertainty");
+    if(uncertaintySource) uncertaintySource.setData(pollutionUncertaintyData);
+    else map.addSource("pollution-uncertainty", { type:"geojson", data:pollutionUncertaintyData });
+
+    if(!map.getLayer("pollution-uncertainty-fill")) map.addLayer({
+      id:"pollution-uncertainty-fill", type:"fill", source:"pollution-uncertainty",
+      paint:{ "fill-color":["get","color"], "fill-opacity":0.045 },
+    });
+    if(!map.getLayer("pollution-uncertainty-line")) map.addLayer({
+      id:"pollution-uncertainty-line", type:"line", source:"pollution-uncertainty",
+      paint:{
+        "line-color":["get","color"],
+        "line-opacity":0.72,
+        "line-width":["case",["boolean",["get","selected"],false],2,1],
+        "line-dasharray":[3,2],
+      },
+    });
+    if(!map.getLayer("pollution-polygon-fill")) map.addLayer({
+      id:"pollution-polygon-fill", type:"fill", source:"pollution-evidence",
+      filter:["==",["geometry-type"],"Polygon"],
+      paint:{
+        "fill-color":["get","color"],
+        "fill-opacity":["case",["boolean",["get","selected"],false],0.32,0.18],
+      },
+    });
+    if(!map.getLayer("pollution-polygon-line")) map.addLayer({
+      id:"pollution-polygon-line", type:"line", source:"pollution-evidence",
+      filter:["==",["geometry-type"],"Polygon"],
+      paint:{
+        "line-color":["get","color"],
+        "line-opacity":0.94,
+        "line-width":["case",["boolean",["get","selected"],false],3,1.5],
+      },
+    });
+    if(!map.getLayer("pollution-point-halo")) map.addLayer({
+      id:"pollution-point-halo", type:"circle", source:"pollution-evidence",
+      filter:["==",["geometry-type"],"Point"],
+      paint:{
+        "circle-color":["get","color"],
+        "circle-radius":["case",["boolean",["get","selected"],false],14,10],
+        "circle-opacity":0.2,
+      },
+    });
+    if(!map.getLayer("pollution-point")) map.addLayer({
+      id:"pollution-point", type:"circle", source:"pollution-evidence",
+      filter:["==",["geometry-type"],"Point"],
+      paint:{
+        "circle-color":["get","color"],
+        "circle-radius":["case",["boolean",["get","selected"],false],7,5],
+        "circle-opacity":0.92,
+        "circle-stroke-color":"#0f1115",
+        "circle-stroke-width":1,
+      },
+    });
+  },[pollutionDisplayData,pollutionUncertaintyData,mapLoaded]);
+
+  useEffect(()=>{
+    const map:any = mapRef.current;
+    const tip = tipRef.current;
+    if(!map || !mapLoaded || !tip) return;
+    const layers = ["pollution-point","pollution-polygon-fill"];
+    const move = (event:any)=>{
+      if(pinMode) return;
+      const properties = event.features?.[0]?.properties ?? {};
+      tip.style.display="block";
+      tip.style.left=`${event.point.x+12}px`;
+      tip.style.top=`${event.point.y-12}px`;
+      tip.textContent=[properties.root_cause || properties.kind, properties.source_name || properties.source_id]
+        .filter(Boolean).join(" · ");
+      map.getCanvas().style.cursor="pointer";
+    };
+    const leave = ()=>{
+      tip.style.display="none";
+      if(!pinMode) map.getCanvas().style.cursor="";
+    };
+    const click = (event:any)=>{
+      if(pinMode) return;
+      const id=String(event.features?.[0]?.properties?.id ?? "");
+      if(!id) return;
+      tip.style.display="none";
+      map.getCanvas().style.cursor="";
+      setSelectedPollutionId(id);
+      select(null);
+      selectPopulation(null);
+      onPollutionFocus?.();
+    };
+    for(const layer of layers){
+      map.on("mousemove",layer,move);
+      map.on("mouseleave",layer,leave);
+      map.on("click",layer,click);
+    }
+    return ()=>{
+      for(const layer of layers){
+        try{
+          map.off("mousemove",layer,move);
+          map.off("mouseleave",layer,leave);
+          map.off("click",layer,click);
+        }catch{}
       }
-    }catch{}
-  },[pollution, mapLoaded, pinMode]);
-  // Pollution visibility toggle
+    };
+  },[mapLoaded,pinMode,onPollutionFocus,select,selectPopulation]);
+
   useEffect(()=>{
-    const map:any=mapRef.current; if(!map||!mapLoaded) return;
-    try{ if(map.getLayer("pollution-circle")) map.setLayoutProperty("pollution-circle","visibility", showPollution?"visible":"none"); }catch{}
-  },[showPollution, mapLoaded]);
+    const map:any=mapRef.current;
+    if(!map||!mapLoaded) return;
+    const visibility=showPollution && !pinMode ? "visible" : "none";
+    for(const layer of [
+      "pollution-uncertainty-fill","pollution-uncertainty-line",
+      "pollution-polygon-fill","pollution-polygon-line",
+      "pollution-point-halo","pollution-point",
+    ]){
+      try{ if(map.getLayer(layer)) map.setLayoutProperty(layer,"visibility",visibility); }catch{}
+    }
+    if(visibility==="none" && tipRef.current) tipRef.current.style.display="none";
+  },[showPollution,pinMode,mapLoaded]);
 
   // update cursor when pinMode toggles; in pin mode the data layers step
   // back so the one thing being placed is the loudest thing on the chart
@@ -1521,6 +1632,7 @@ export default function CaspianMap({
      whole. Store read at event time; closures over store state go stale
      because the map outlives renders. */
   const handleChipClick = useCallback((chip: SiteChip)=>{
+    setSelectedPollutionId(null);
     onSiteClick?.(chip.key);
     const m = mapRef.current; if(!m) return;
     try{ m.stop(); }catch{}
@@ -1615,7 +1727,7 @@ export default function CaspianMap({
   return (
     <div className="relative w-full h-full overflow-hidden bg-bg">
       <div ref={containerRef} className="absolute inset-0" />
-      <div ref={tipRef} className="maptip" style={{ position:"absolute", display:"none", background:"rgba(15,17,21,0.92)", color:"#fff", fontSize:"11px", lineHeight:1.4, padding:"6px 8px", borderRadius:"6px", border:"1px solid rgba(255,255,255,0.15)", pointerEvents:"none", zIndex:12, maxWidth:"220px", whiteSpace:"nowrap" }} />
+      <div ref={tipRef} className="maptip" style={{ position:"absolute", display:"none", background:"rgba(15,17,21,0.94)", color:"#fff", fontSize:"11px", lineHeight:1.4, padding:"6px 8px", border:"1px solid rgba(255,255,255,0.15)", pointerEvents:"none", zIndex:12, maxWidth:"260px", whiteSpace:"nowrap" }} />
 
       {/* DOM labels avoid a remote glyph dependency and stay localized even
           when the base map cannot supply Cyrillic/Kazakh font ranges. */}
@@ -1697,6 +1809,7 @@ export default function CaspianMap({
                   const track=movementTracks.find(candidate=>candidate.id===point.trackId);
                   const observation=track?.observations[point.index];
                   onMovementFocus?.();
+                  setSelectedPollutionId(null);
                   if(!point.expanded){
                     selectPopulation(point.trackId, point.id);
                     return;
@@ -1841,7 +1954,14 @@ export default function CaspianMap({
           <Toggle checked={layerState.footprints} onChange={v=>setLayer("footprints",v)} label={t("map.tracks")} />
           <Toggle checked={layerState.detections} onChange={v=>setLayer("detections",v)} label={t("map.colonies")} />
           <span className="w-px h-4 bg-line mx-0.5" />
-          <Toggle checked={showPollution} onChange={setShowPollution} label="Pollution" />
+          <Toggle
+            checked={showPollution}
+            onChange={value=>{
+              setShowPollution(value);
+              if(!value) setSelectedPollutionId(null);
+            }}
+            label={t("map.pollution")}
+          />
         </div>
         {pinMode && (
           <PinReadout
@@ -1875,6 +1995,39 @@ export default function CaspianMap({
           />
         )}
       </div>
+      {pollutionError && showPollution && !pinMode && (
+        <div className="plate absolute left-3 top-14 z-10 border border-bad px-2.5 py-1.5 text-2xs text-bad">
+          {t("pollution.loadError")}
+        </div>
+      )}
+      {!pollutionError && showPollution && !pinMode && !selectedPollution && (
+        <div data-pollution-legend className="plate absolute left-3 top-14 z-10 max-w-[520px] border border-line px-2.5 py-2">
+          <div className="flex items-center gap-3 text-2xs text-ink3">
+            <span className="tnum text-ink2">{pollutionDisplayData.features.length} · {t("map.pollution")}</span>
+            {[
+              ["#f04e45",t("pollution.ageDay")],
+              ["#e96b3c",t("pollution.ageWeek")],
+              ["#dc8733",t("pollution.ageMonth")],
+              ["#b49a56",t("pollution.ageQuarter")],
+              ["#718094",t("pollution.ageOlder")],
+            ].map(([color,label])=>(
+              <span key={label} className="inline-flex items-center gap-1 whitespace-nowrap">
+                <span className="h-1.5 w-1.5" style={{background:color}} />
+                {label}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {selectedPollution && showPollution && !pinMode && (
+        <PollutionEvidenceCard
+          feature={selectedPollution}
+          referenceAt={pollutionReferenceTime}
+          locale={localeFor(lang)}
+          onClose={()=>setSelectedPollutionId(null)}
+        />
+      )}
 
       {selectedMovementTrack && selectedMovementObservation && !pinMode && (
         <MovementTrackCard
@@ -1902,6 +2055,110 @@ export default function CaspianMap({
           <span className="text-sm text-ink3">{t("map.loading")}</span>
         </div>
       )}
+    </div>
+  );
+}
+
+function PollutionEvidenceCard({
+  feature,
+  referenceAt,
+  locale,
+  onClose,
+}: {
+  feature: PollutionFeature;
+  referenceAt?: string | null;
+  locale: string;
+  onClose: ()=>void;
+}) {
+  const { t } = useT();
+  const p = feature.properties;
+  const date = p.observed_at ? new Date(p.observed_at) : null;
+  const reported = date && !Number.isNaN(date.getTime())
+    ? date.toLocaleString(locale,{day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"})
+    : t("pollution.ageUnknown");
+  const age = pollutionAgeBucket(p.observed_at,referenceAt);
+  const ageLabel = {
+    day:t("pollution.ageDay"),
+    week:t("pollution.ageWeek"),
+    month:t("pollution.ageMonth"),
+    quarter:t("pollution.ageQuarter"),
+    older:t("pollution.ageOlder"),
+    unknown:t("pollution.ageUnknown"),
+  }[age];
+  const kind = {
+    flare:t("pollution.kindFlare"),
+    slick:t("pollution.kindSlick"),
+    spill:t("pollution.kindSpill"),
+    discharge:t("pollution.kindDischarge"),
+  }[p.kind] ?? t("pollution.kindOther");
+  const confidence = typeof p.confidence === "number" && Number.isFinite(p.confidence)
+    ? `${Math.round((p.confidence <= 1 ? p.confidence * 100 : p.confidence))}%`
+    : null;
+  const sourceLink = p.source_link ?? p.source_url ?? null;
+
+  const evidenceTitle = (p.title ?? "")
+    .replace(/^(?:data-[\w-]+\s*=\s*"[^"]*"\s*)+>\s*/i,"")
+    .trim();
+
+  useEffect(()=>{
+    const key=(event:KeyboardEvent)=>{
+      if(event.key==="Escape"){
+        event.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown",key);
+    return ()=>window.removeEventListener("keydown",key);
+  },[onClose]);
+
+  return (
+    <aside data-pollution-card={p.id} className="absolute top-0 right-0 bottom-0 z-20 w-[360px] max-w-[86%] bg-bg border-l border-line flex flex-col">
+      <header className="shrink-0 flex items-start justify-between gap-3 border-b border-line bg-bg px-4 pt-3.5 pb-3">
+        <div className="min-w-0">
+          <h2 className="text-base font-semibold tracking-tight text-ink">{t("pollution.title")}</h2>
+          <p className="mt-1 text-2xs text-ink3">{kind} · {ageLabel}</p>
+        </div>
+        <button onClick={onClose} aria-label={t("btn.close")} className="grid h-6 w-6 place-items-center text-sm text-ink3 hover:bg-surface2 hover:text-ink" title={t("btn.close")}>×</button>
+      </header>
+
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        <section className="px-4 py-4">
+          <span className="hd">{t("pollution.rootCause")}</span>
+          <p className="mt-2 text-base font-semibold leading-snug text-ink">
+            {p.root_cause || t("pollution.causeUnknown")}
+          </p>
+          {evidenceTitle && (
+            <p className="mt-3 border-l border-hair pl-2.5 text-xs leading-relaxed text-ink2">{evidenceTitle}</p>
+          )}
+        </section>
+
+        <dl className="border-t border-hair px-4 py-3 text-xs">
+          <PollutionFact label={t("pollution.reported")} value={reported} />
+          <PollutionFact label={t("pollution.source")} value={p.source_name || p.source_id} />
+          <PollutionFact label={t("row.location")} value={`${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}`} mono />
+          <PollutionFact label={t("pollution.precision")} value={p.location_precision || "—"} />
+          <PollutionFact label={t("pollution.uncertainty")} value={`${Math.round(p.radius_m || 0).toLocaleString(locale)} m`} mono />
+          {confidence && <PollutionFact label={t("pollution.confidence")} value={confidence} mono />}
+        </dl>
+
+        <section className="border-t border-hair px-4 py-4">
+          <p className="text-2xs leading-relaxed text-ink3">{t("pollution.uncertaintyMeaning")}</p>
+          {sourceLink && (
+            <a href={sourceLink} target="_blank" rel="noreferrer" className="mt-3 inline-block text-xs text-accent hover:underline">
+              {t("pollution.openSource")}
+            </a>
+          )}
+        </section>
+      </div>
+    </aside>
+  );
+}
+
+function PollutionFact({label,value,mono=false}:{label:string;value:string;mono?:boolean}){
+  return (
+    <div className="grid grid-cols-[128px_1fr] gap-3 border-b border-hair py-2 last:border-0">
+      <dt className="text-ink3">{label}</dt>
+      <dd className={`min-w-0 break-words text-ink2 ${mono ? "tnum" : ""}`}>{value}</dd>
     </div>
   );
 }

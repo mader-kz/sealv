@@ -97,6 +97,9 @@ jobs:
           python service/db.py
           python service/geo.py
 
+      - name: Pollution contracts
+        run: python -m unittest discover -s service/pollution -p 'test_*.py'
+
       # Just enough to import the service surface. Not the full image pin set:
       # torch is only ever loaded by the CountGD subprocess (or by Modal), and
       # nothing imported here reaches it.

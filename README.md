@@ -59,7 +59,7 @@ NOAA analyst reports, and Sentinel-1 acquisition metadata. It stores only
 source coordinates or verified named-place estimates with an uncertainty
 radius. A raw satellite scene footprint is never stored as an oil spill.
 
-- Map: <http://127.0.0.1:8090/v1/pollution/map>
+- Engineering fallback map: <http://127.0.0.1:8090/v1/pollution/map>
 - Incidents: `GET /v1/pollution`
 - Poller and scheduler state: `GET /v1/pollution/status`
 - Manual run: `POST /v1/pollution/poll`
@@ -75,11 +75,13 @@ Backfill only missing validated root causes (safe to resume):
 python -m service.pollution.enrich_root_causes --db ~/.sealv/sealv.db
 ```
 
-The scheduler starts with the API. Set `POLLUTION_SCHEDULER_ENABLED=0` to turn
-it off. `FIRMS_MAP_KEY` enables NASA FIRMS; local runs also read
-`FIRMS_MAP_KEY_FILE` (default `~/.config/sealv/firms-map-key`). The optional
-second-pass classifier and place extractor use `POLLUTION_CLASSIFIER_*` /
-`POLLUTION_GEOCODER_*`; those explicit settings always win. For local runs,
+The scheduler is disabled by default so merging or deploying the API cannot
+start external polling without an operator decision. Set
+`POLLUTION_SCHEDULER_ENABLED=1` to enable it. `FIRMS_MAP_KEY` enables NASA
+FIRMS; local runs also read `FIRMS_MAP_KEY_FILE` (default
+`~/.config/sealv/firms-map-key`). The optional second-pass classifier and place
+extractor use `POLLUTION_CLASSIFIER_*` / `POLLUTION_GEOCODER_*`; those explicit
+settings always win. For local runs,
 both automatically use the `opencode-go` API credential in
 `${XDG_DATA_HOME:-~/.local/share}/opencode/auth.json` with
 `https://opencode.ai/zen/go/v1` and `deepseek-v4-flash`. Set

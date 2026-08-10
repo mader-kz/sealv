@@ -1,48 +1,160 @@
-/** Pollution helpers — encapsulated, additive. No existing map logic touched. */
+/** Typed client and display geometry for reported pollution evidence. */
+
+export type PollutionProperties = {
+  id: string;
+  source_id: string;
+  source_name?: string | null;
+  source_url?: string | null;
+  source_link?: string | null;
+  title?: string | null;
+  root_cause?: string | null;
+  status?: string | null;
+  observed_at: string | null;
+  lat: number;
+  lng: number;
+  radius_m: number;
+  radius_meaning?: "location_uncertainty";
+  kind: string;
+  area_km2?: number | null;
+  confidence?: number | null;
+  location_precision: string;
+  raw?: Record<string, unknown>;
+};
 
 export type PollutionFeature = {
   type: "Feature";
-  geometry: { type: "Point"; coordinates: [number, number] } | { type: "Polygon"; coordinates: number[][][] };
-  properties: {
-    id: string;
-    source_id: string;
-    observed_at: string | null;
-    lat: number;
-    lng: number;
-    radius_m: number;
-    kind: string;
-    area_km2?: number | null;
-    confidence?: number | null;
-    location_precision: string;
-  };
+  geometry:
+    | { type: "Point"; coordinates: [number, number] }
+    | { type: "Polygon"; coordinates: number[][][] };
+  properties: PollutionProperties;
 };
 
-export type PollutionFC = { type: "FeatureCollection"; features: PollutionFeature[] };
+export type PollutionFC = {
+  type: "FeatureCollection";
+  features: PollutionFeature[];
+  count?: number;
+  generated_at?: string;
+};
+
+export type PollutionAgeBucket =
+  | "day"
+  | "week"
+  | "month"
+  | "quarter"
+  | "older"
+  | "unknown";
 
 const API = process.env.NEXT_PUBLIC_API_BASE ?? "";
 
-export async function fetchPollution(opts?: { bbox?: string; since?: string; kind?: string; limit?: number }): Promise<PollutionFC> {
+export async function fetchPollution(
+  opts?: { bbox?: string; since?: string; kind?: string; limit?: number; signal?: AbortSignal },
+): Promise<PollutionFC> {
   const p = new URLSearchParams();
   if (opts?.bbox) p.set("bbox", opts.bbox);
   if (opts?.since) p.set("since", opts.since);
   if (opts?.kind) p.set("kind", opts.kind);
   if (opts?.limit) p.set("limit", String(opts.limit));
   const url = `${API}/v1/pollution${p.toString() ? `?${p}` : ""}`;
-  const res = await fetch(url);
+  const res = await fetch(url, { signal: opts?.signal });
   if (!res.ok) throw new Error(`pollution fetch ${res.status}`);
   return (await res.json()) as PollutionFC;
 }
 
-export function pollutionColor(p: PollutionFeature["properties"]): string {
-  if (p.kind === "flare") return "#ffaa00";
-  if (p.kind === "slick") return "#ff6b5e";
-  if (p.location_precision === "exact") return "#ff6b5e";
-  if (p.location_precision === "field") return "#f5c451";
-  return "#8b96a5";
+export function pollutionAgeBucket(
+  observedAt: string | null,
+  referenceAt?: string | null,
+): PollutionAgeBucket {
+  const observed = observedAt ? Date.parse(observedAt) : Number.NaN;
+  const reference = referenceAt ? Date.parse(referenceAt) : Date.now();
+  if (!Number.isFinite(observed) || !Number.isFinite(reference)) return "unknown";
+  const days = Math.max(0, reference - observed) / 86_400_000;
+  if (days <= 1) return "day";
+  if (days <= 7) return "week";
+  if (days <= 30) return "month";
+  if (days <= 90) return "quarter";
+  return "older";
 }
 
-export function pollutionRadius(p: PollutionFeature["properties"]): number {
-  // radius_m -> circle radius in pixels approx, clamp
-  const r = p.radius_m ?? 500;
-  return Math.max(6, Math.min(22, Math.round(r / 800)));
+export function pollutionColor(
+  properties: PollutionProperties,
+  referenceAt?: string | null,
+): string {
+  switch (pollutionAgeBucket(properties.observed_at, referenceAt)) {
+    case "day": return "#f04e45";
+    case "week": return "#e96b3c";
+    case "month": return "#dc8733";
+    case "quarter": return "#b49a56";
+    case "older": return "#718094";
+    case "unknown": return "#7c828a";
+  }
+}
+
+type DisplayProperties = PollutionProperties & {
+  color: string;
+  age_bucket: PollutionAgeBucket;
+  selected: boolean;
+};
+
+export type PollutionDisplayFC = {
+  type: "FeatureCollection";
+  features: Array<Omit<PollutionFeature, "properties"> & { properties: DisplayProperties }>;
+};
+
+export function pollutionDisplay(
+  collection: PollutionFC,
+  referenceAt: string | null | undefined,
+  selectedId: string | null,
+): PollutionDisplayFC {
+  const reference = referenceAt ? Date.parse(referenceAt) : Date.now();
+  return {
+    type: "FeatureCollection",
+    features: collection.features
+      .filter((feature) => {
+        const observed = feature.properties.observed_at
+          ? Date.parse(feature.properties.observed_at)
+          : Number.NaN;
+        return !Number.isFinite(reference) || !Number.isFinite(observed) || observed <= reference;
+      })
+      .map((feature) => ({
+        ...feature,
+        properties: {
+          ...feature.properties,
+          color: pollutionColor(feature.properties, referenceAt),
+          age_bucket: pollutionAgeBucket(feature.properties.observed_at, referenceAt),
+          selected: feature.properties.id === selectedId,
+        },
+      })),
+  };
+}
+
+/** Actual metre-based uncertainty rings. Marker size remains a visibility aid. */
+export function pollutionUncertainty(collection: PollutionDisplayFC): PollutionDisplayFC {
+  const earthRadius = 6_371_008.8;
+  return {
+    type: "FeatureCollection",
+    features: collection.features.flatMap((feature) => {
+      const { lat, lng, radius_m: radius } = feature.properties;
+      if (![lat, lng, radius].every(Number.isFinite) || radius <= 0) return [];
+      const angular = radius / earthRadius;
+      const latitude = lat * Math.PI / 180;
+      const longitude = lng * Math.PI / 180;
+      const ring: number[][] = [];
+      for (let step = 0; step <= 48; step += 1) {
+        const bearing = step / 48 * Math.PI * 2;
+        const targetLat = Math.asin(
+          Math.sin(latitude) * Math.cos(angular)
+          + Math.cos(latitude) * Math.sin(angular) * Math.cos(bearing),
+        );
+        const targetLng = longitude + Math.atan2(
+          Math.sin(bearing) * Math.sin(angular) * Math.cos(latitude),
+          Math.cos(angular) - Math.sin(latitude) * Math.sin(targetLat),
+        );
+        ring.push([targetLng * 180 / Math.PI, targetLat * 180 / Math.PI]);
+      }
+      return [{
+        ...feature,
+        geometry: { type: "Polygon" as const, coordinates: [ring] },
+      }];
+    }),
+  };
 }

@@ -88,7 +88,7 @@ def cadence_seconds(value: str, default: int = 3600) -> int:
 
 class PollutionScheduler:
     def __init__(self) -> None:
-        self.enabled = _env_bool("POLLUTION_SCHEDULER_ENABLED", True)
+        self.enabled = _env_bool("POLLUTION_SCHEDULER_ENABLED", False)
         self.concurrency = _env_int("POLLUTION_SCHEDULER_CONCURRENCY", 3, 1, 16)
         self.poll_timeout_s = _env_int("POLLUTION_POLL_TIMEOUT_SECONDS", 180, 10, 1800)
         self.tick_s = _env_int("POLLUTION_SCHEDULER_TICK_SECONDS", 15, 2, 300)

@@ -12,7 +12,18 @@ from service.pollution.opencode_geocoder import (
     geocode_via_opencode,
     snap_to_water,
 )
+from service.pollution.scheduler import PollutionScheduler
 ISOLATED_ENV = {"POLLUTION_LOCAL_OPENCODE_GO": "0"}
+
+
+class SchedulerSafetyTests(unittest.TestCase):
+    def test_scheduler_requires_explicit_opt_in(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertFalse(PollutionScheduler().enabled)
+
+    def test_scheduler_can_be_enabled_explicitly(self) -> None:
+        with patch.dict(os.environ, {"POLLUTION_SCHEDULER_ENABLED": "1"}, clear=True):
+            self.assertTrue(PollutionScheduler().enabled)
 
 
 
