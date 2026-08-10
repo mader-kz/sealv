@@ -239,11 +239,11 @@ it out of the image so the two cannot be confused.
    `available()` triple (interpreter, checkpoint, BERT directory). If the engine
    is unusable it **refuses to boot**. That is the point: a container that never
    starts is the louder, cheaper version of "every job fails".
-5. **Starts the workers first, then uvicorn**, so the queue has consumers before
-   anything can be put in it.
+5. **Starts the workers first, then the environment collector, then uvicorn**,
+   so the queue has consumers before anything can be put in it.
 6. **Supervises.**
 
-### The two things a supervisor cannot get wrong
+### The three things a supervisor cannot get wrong
 
 **A dead worker must take the container down.** An API whose queue has no
 consumer still accepts uploads and still hands back a job id, and every one of
@@ -274,6 +274,24 @@ ladder would never run.
 > Verified on `python:3.12-slim` with two workers plus the API: `docker stop`
 > produced `received SIGTERM - stopping 3 child process(es)`, both workers and
 > the API each logged receiving it, then `all children stopped cleanly`.
+
+**An optional child must NOT take the container down.** The environment
+collector is not on the request path: it writes weather into `env_sample` every
+three hours and nothing waits on it. Applying the rule above to it would mean
+that a bad night at NOAA restarts a container busy counting seals — strictly
+worse than going one cycle without new weather. So a child registered with a
+restart function is restarted (5 s, 10 s, 15 s … capped at 60 s) and logged
+instead of being fatal, and past `SEALV_ENV_COLLECTOR_MAX_RESTARTS` (20) it is
+left down with a line saying so, because restarting forever would hide a
+permanent fault behind a log nobody reads. Everything without a restart function
+stays fatal — that is still the default.
+
+> Verified on `bash:5` with a stub interpreter, four cases: a collector dying
+> every second was restarted twice with 5 s and 10 s backoff and then left down
+> (`leaving it down`) while the API kept running; a *detection worker* exiting
+> with status 3 still took the container down with exit code 3; SIGTERM stopped
+> all three children cleanly with exit 0; and `SEALV_ENV_COLLECTOR=off` booted
+> without it.
 
 ---
 
@@ -415,6 +433,16 @@ Optional tuning, read by `service/worker.py`:
 | `SEALV_JOB_LEASE_S` | `300` | Seconds a claim survives unrefreshed before another worker recovers the job |
 | `SEALV_JOB_MAX_ATTEMPTS` | `3` | Claims allowed per job before recovery gives up and fails it — bounded so a job that OOM-kills its worker cannot crash-loop the queue forever |
 
+The environment collector (§5, `service/env_worker.py`):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SEALV_ENV_COLLECTOR` | `on` | `off` boots without it. The API's `/v1/env/*` endpoints keep serving whatever is already in `env_sample` |
+| `SEALV_ENV_COLLECTOR_MAX_RESTARTS` | `20` | Restarts before it is left down. It is optional by design, so the cap keeps the service up rather than crash-looping the container |
+| `SEALV_ENV_INTERVAL_S` | `10800` | Seconds between cycles. Three hours matches the fastest product collected (ICON-EU publishes 3-hourly); faster only re-reads the same slice |
+| `SEALV_ENV_GRID_STEP` | `0.5` | Grid spacing in degrees. A *spacing*, not a cell size — every value stored is a real product cell and the layer says so |
+| `SEALV_ENV_HOST_DOWN_TTL` | `600` | Seconds a host that failed at the transport level is skipped for. A node that drops packets silently costs a full timeout per request, and a fallback host is only reached *after* the primary finishes timing out |
+
 Escape hatches. None of these should be set on a healthy deployment, and three
 of them will quietly break it if they are — listed so that a container behaving
 strangely can be checked against them:
@@ -432,6 +460,55 @@ strangely can be checked against them:
 Both fall back to their defaults on an unparseable value rather than refusing to
 start, "because a worker that will not start because `SEALV_JOB_LEASE_S=5m` is a
 survey that does not run."
+
+---
+
+## 7a. Getting environment data onto production
+
+**Never through the repository or the image.** The environment archive is a
+stream, not a build artefact: it grows by roughly a megabyte a day, an image is
+immutable, and a copy shipped in a release is stale the moment it is built. The
+volume is where data lives; the image is where code lives.
+
+There are two halves, and only one of them needs doing by hand.
+
+**The future** takes care of itself. The collector runs in the container (§5)
+and writes into the same `/data/sealv.db` over WAL, every three hours, from the
+first boot. Nothing to run, nothing to copy.
+
+**The past** is fetched, not carried. Every source currently wired keeps a real
+archive — CoralTemp back to 1985, ERA5 to 1940, MUR to 2002, VIIRS chlorophyll
+to 2020, IMS as one file per date — so a freshly deployed service can simply ask
+for the history it missed:
+
+```
+railway ssh
+python3 tools/env_grid_backfill.py --days 30 --step-hours 3
+```
+
+It has to run **inside** the container. `railway run` executes the command on
+your own machine with the service's variables injected, and `$SEALV_DB` then
+points at `/data/sealv.db` — a path that exists on the volume, not on a laptop,
+so the backfill would write a database nobody reads. `tools/` is copied into the
+image (§4) for exactly this.
+
+That fills the map's time control with wind and waves. It is cheap because
+Open-Meteo answers a whole day per request and takes a batch of coordinates at
+once: a fortnight of three-hourly slices measured under a hundred requests and
+finished in minutes. Add `--sources sst,ice` for the satellite fields, but note
+the asymmetry — IMS is one download per DATE (~2 MB over the wire, ~2.8 MB
+stored), so a year of ice is ~800 MB of traffic and a couple of GB on the
+volume. Re-running is safe: rows merge on `(source, measured_at, lat, lng)` and
+a second pass reports `new` at zero.
+
+> A caveat worth keeping in view: this is true of the sources wired **today**.
+> Products with a rolling archive — the ones that keep only the last N days and
+> delete the rest — cannot be backfilled at all, and for those the only way to
+> have a history is to have been collecting. None of the nine sources currently
+> collected is one (measured, not assumed: CoralTemp reports coverage from
+> 1985-04-01, VIIRS chlorophyll from 2020-05-05). Candidates in the research doc
+> — ACSPO, Sentinel-3 OLCI — are, so if one of those is ever wired, the day it
+> starts collecting is the earliest day it can ever describe.
 
 ---
 
