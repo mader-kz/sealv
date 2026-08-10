@@ -191,8 +191,32 @@ fi
 
 declare -a CHILD_PIDS=()
 declare -A CHILD_NAME=()
+# pid -> the name of a function that starts a replacement. A child with an entry
+# here is OPTIONAL: its death is restarted and logged instead of taking the
+# container down. Everything without one stays fatal, which is the default and
+# the right answer for anything on the request path.
+declare -A CHILD_RESTART=()
 
-track() { CHILD_PIDS+=("$1"); CHILD_NAME["$1"]="$2"; }
+track() {
+  CHILD_PIDS+=("$1")
+  CHILD_NAME["$1"]="$2"
+  if [[ -n "${3:-}" ]]; then CHILD_RESTART["$1"]="$3"; fi
+}
+
+# Drop a pid from the roster. Without this the corpse-identification loop below
+# would keep finding the SAME dead pid on every pass and never reach the live
+# one - a restart would turn into a spin.
+forget_pid() {
+  local gone="$1" pid
+  local -a keep=()
+  for pid in "${CHILD_PIDS[@]}"; do
+    if [[ "$pid" != "$gone" ]]; then keep+=("$pid"); fi
+  done
+  CHILD_PIDS=("${keep[@]:-}")
+  # `keep` empty leaves one empty string behind under `set -u`; strip it.
+  if [[ "${#CHILD_PIDS[@]}" == 1 && -z "${CHILD_PIDS[0]}" ]]; then CHILD_PIDS=(); fi
+  unset 'CHILD_NAME[$gone]' 'CHILD_RESTART[$gone]' 2>/dev/null || true
+}
 
 # Workers first, so the queue has consumers before the API can put anything in
 # it. --db is passed explicitly even though $SEALV_DB would be picked up anyway:
@@ -203,6 +227,26 @@ for (( i = 1; i <= WORKER_CONCURRENCY; i++ )); do
   track "$!" "worker w$i"
   log "started worker w$i (pid $!)"
 done
+
+# The environment collector: every few hours it writes down what the basin is
+# doing, into the same database over WAL. It is OPTIONAL on purpose - nothing in
+# the request path waits on it, and a bad night at NOAA must not restart a
+# container that is busy counting seals. Set SEALV_ENV_COLLECTOR=off to run
+# without it.
+ENV_COLLECTOR_RESTARTS=0
+ENV_COLLECTOR_MAX_RESTARTS="${SEALV_ENV_COLLECTOR_MAX_RESTARTS:-20}"
+
+start_env_collector() {
+  "$PYTHON" -m service.env_worker --db "$SEALV_DB" &
+  track "$!" "env collector" start_env_collector
+  log "started env collector (pid $!)"
+}
+
+if [[ "${SEALV_ENV_COLLECTOR:-on}" != "off" ]]; then
+  start_env_collector
+else
+  log "env collector disabled (SEALV_ENV_COLLECTOR=off)"
+fi
 
 "$PYTHON" -m uvicorn service.api:app --host 0.0.0.0 --port "$PORT" &
 track "$!" "api"
@@ -298,7 +342,33 @@ while true; do
     dead_name="a child process"
   fi
 
-  # Every exit here is fatal, including status 0. A worker that returns cleanly
+  # An OPTIONAL child is restarted rather than mourned. The collector is not on
+  # the request path: taking the container down for it would stop the API and
+  # kill the detection jobs in flight because a satellite feed had a bad night -
+  # a strictly worse outcome than going a cycle without new weather.
+  if [[ -n "$dead_pid" && -n "${CHILD_RESTART[$dead_pid]:-}" ]]; then
+    restart_fn="${CHILD_RESTART[$dead_pid]}"
+    forget_pid "$dead_pid"
+    ENV_COLLECTOR_RESTARTS=$(( ENV_COLLECTOR_RESTARTS + 1 ))
+    if (( ENV_COLLECTOR_RESTARTS > ENV_COLLECTOR_MAX_RESTARTS )); then
+      # Restarting forever would hide a real, permanent fault behind a log line
+      # nobody reads. Past the cap it stays down and says so; the service keeps
+      # serving, which is the whole point of it being optional.
+      log "$dead_name exited with status $status and has been restarted" \
+          "$ENV_COLLECTOR_MAX_RESTARTS time(s) already - leaving it down"
+      continue
+    fi
+    backoff=$(( ENV_COLLECTOR_RESTARTS * 5 ))
+    (( backoff > 60 )) && backoff=60
+    log "$dead_name (pid $dead_pid) exited with status $status -" \
+        "restarting in ${backoff}s (attempt $ENV_COLLECTOR_RESTARTS)"
+    sleep "$backoff"
+    (( SHUTTING_DOWN )) && break
+    "$restart_fn"
+    continue
+  fi
+
+  # Every other exit is fatal, including status 0. A worker that returns cleanly
   # has still stopped consuming the queue, and an API that returns cleanly has
   # still stopped serving - neither is something to keep the container up for,
   # and "half the service is gone" is worse than "the service is down" because

@@ -206,6 +206,11 @@ COPY vendor/CountGD/ /app/vendor/CountGD/
 COPY la_studio/ /app/la_studio/
 COPY service/ /app/service/
 COPY webapp/ /app/webapp/
+# Operator scripts, run by hand inside the container - the environment grid
+# backfill is the one a fresh deploy needs, because the collector only ever
+# writes `now` and the map's time control has no past until somebody fetches
+# one. Left out of the image, `railway ssh` finds no such file.
+COPY tools/ /app/tools/
 # The platform export lands where api.py's PLATFORM constant expects it; when
 # it is missing the service falls back to the operator webapp at /.
 COPY --from=platform /fe/out/ /app/frontend/out/
