@@ -219,8 +219,15 @@ function Row({ item, queuePos, queueTotal }: { item: IngestItem; queuePos: numbe
             {/* The state, where the instrument keeps states: at the far end of
                 the line it belongs to. Capped at just over half the row and
                 allowed to wrap, so "waiting for the counting engine" in three
-                languages cannot squeeze the filename down to an ellipsis. */}
-            <span className={`shrink-0 max-w-[56%] text-right text-xs ${tone}`}>{label}</span>
+                languages cannot squeeze the filename down to an ellipsis.
+                Tabular figures, because this line counts: `uploading 9%` →
+                `uploading 10%` and `frame 9/24` → `frame 10/24` change width
+                on proportional digits, and a right-aligned label that changes
+                width several times a second drags the truncation point of the
+                filename beside it back and forth. Only the numerals are
+                touched — `tnum` would also retune the letter-spacing of a
+                string that is mostly words. */}
+            <span className={`shrink-0 max-w-[56%] text-right text-xs tabular-nums ${tone}`}>{label}</span>
           </div>
           <Bar value={progress} />
           {/* The honest numbers, in one quiet row. They are facts, so they sit
