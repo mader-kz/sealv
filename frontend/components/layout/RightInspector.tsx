@@ -751,6 +751,10 @@ function MarkerLine({ marks, className = "" }: { marks: React.ReactNode[]; class
           {m}
         </Fragment>
       ))}
+    </div>
+  );
+}
+
 /* --------------------------------------------------- conditions at capture
 
    The weather, the water, the ice and the food base where and when this
