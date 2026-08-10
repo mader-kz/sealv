@@ -101,24 +101,44 @@ VALUE_COLUMNS = (
 #: collection grid and to refuse a point that is obviously not the Caspian.
 CASPIAN_BBOX = {"lat_min": 36.5, "lat_max": 47.5, "lng_min": 46.0, "lng_max": 54.5}
 
-#: Hull around the water, [lng, lat], ported verbatim from the frontend's
+#: Outline of the water, [lng, lat], kept in step with the frontend's
 #: `lib/caspian.ts` so that the grid this module collects and the grid the map
 #: draws agree about what is sea. It is an approximation and is only ever used
 #: to decide where to SAMPLE - never to move a measured coordinate.
+#:
+#: The 20-vertex version this replaces was wrong in BOTH directions and it
+#: showed on the map: it called the Iranian coast at 37.0 N, 48.0 E water (28%
+#: of the collected grid landed on dry ground) and it called Turkmenbashi,
+#: Kara-Bogaz-Gol and the whole north-east shelf land, so the eastern half of
+#: the basin was never sampled at all. This one traces the coast: the Volga
+#: delta, the Ural mouth, Buzachi, the Tyub-Karagan peninsula, Aktau, Kendirli,
+#: the Kara-Bogaz throat, the Turkmen shelf, the Iranian shore and the Caucasus
+#: coast back to the delta. The Kara-Bogaz-Gol lagoon BEHIND that throat is
+#: deliberately outside: it is a hypersaline evaporation basin with no seals in
+#: it, and its temperature is not the sea's. It is still hand-traced, which is why it is now
+#: only the FALLBACK: `ims_water_verdict` below carries a 1 km land mask drawn
+#: by an analyst over exactly this basin, and where it has an opinion, it wins.
 CASPIAN_HULL: tuple[tuple[float, float], ...] = (
-    (47.1, 47.4), (48.2, 47.0), (49.4, 46.1), (50.4, 45.0), (51.0, 44.2),
-    (51.3, 43.4), (51.55, 42.6), (51.7, 41.6), (51.6, 40.3), (51.1, 39.1),
-    (50.3, 38.0), (49.2, 37.1), (48.0, 36.9), (47.1, 37.3), (46.6, 38.2),
-    (46.4, 39.6), (46.45, 41.0), (46.7, 42.6), (47.0, 44.2), (47.1, 47.4),
+    (47.9, 46.30), (48.6, 46.60), (49.5, 46.60), (50.5, 46.80), (51.5, 46.90),
+    (52.3, 45.60), (51.8, 45.20), (51.2, 45.00), (50.6, 44.80), (50.3, 44.50),
+    (51.0, 44.00), (51.2, 43.60), (51.8, 43.00), (52.4, 42.40), (52.7, 41.60),
+    (52.9, 41.20), (53.2, 40.60), (53.3, 40.00), (53.7, 39.20), (53.9, 38.40),
+    (54.0, 37.70), (53.8, 36.90), (53.0, 36.80), (52.3, 36.70), (51.5, 36.65),
+    (50.6, 36.80), (50.0, 37.20), (49.5, 37.50), (49.1, 37.90), (48.9, 38.40),
+    (49.0, 39.00), (49.2, 39.50), (49.4, 40.00), (50.0, 40.20), (50.4, 40.40),
+    (49.9, 40.70), (49.3, 41.20), (48.8, 41.60), (48.5, 41.90), (48.3, 42.20),
+    (47.9, 42.60), (47.6, 43.00), (47.4, 43.60), (47.2, 44.30), (47.2, 45.00),
+    (47.4, 45.60), (47.9, 46.30),
 )
 
 
 def is_caspian_water(lat: float, lng: float) -> bool:
     """Approximately: is this point sea rather than steppe?
 
-    Only used to choose grid cells worth requesting. A false negative costs one
-    unsampled cell; a false positive costs one wasted request that the source
-    will answer with a land NaN, which this module turns into None anyway.
+    Only used to choose grid cells worth requesting, and only when the IMS
+    chart has no answer. A false negative costs one unsampled cell; a false
+    positive costs one wasted request that the source will answer with a land
+    NaN, which this module turns into None anyway.
     """
     if not (CASPIAN_BBOX["lat_min"] <= lat <= CASPIAN_BBOX["lat_max"]):
         return False
@@ -134,22 +154,7 @@ def is_caspian_water(lat: float, lng: float) -> bool:
             if lng < (xj - xi) * (lat - yi) / (yj - yi + 1e-12) + xi:
                 inside = not inside
         j = i
-    if not inside:
-        return False
-    # East coast: everything east of the Kazakh shoreline is land.
-    if lat > 45.2:
-        east = 50.85
-    elif lat > 44.2:
-        east = 51.05
-    elif lat > 42.8:
-        east = 51.00
-    elif lat > 41.8:
-        east = 51.45
-    elif lat > 39.5:
-        east = 51.4
-    else:
-        east = 51.0
-    return lng <= east
+    return inside
 
 
 # --------------------------------------------------------------------------
@@ -281,6 +286,23 @@ USER_AGENT = os.environ.get(
 )
 
 DEFAULT_TIMEOUT = float(os.environ.get("SEALV_ENV_TIMEOUT") or 60.0)
+
+#: Hosts that are not answering at the TRANSPORT level, and when that was
+#: established. A node which refuses a connection fails in milliseconds; one
+#: that silently drops the SYN costs the full timeout, every single time, and a
+#: cycle asks dozens of times. Watched live: coastwatch.pfeg.noaa.gov
+#: black-holed every packet, one cycle sat in SYN_SENT for over an hour, and
+#: the working fallback host never got a turn - because a fallback is only
+#: reached AFTER the primary finishes timing out. So the first host to prove
+#: itself unreachable is skipped outright for a while, and the caller's
+#: fallback runs immediately instead of an hour later.
+#:
+#: Only transport failures count. A 500 or a 429 means the host IS answering,
+#: and that is what `attempts` is for.
+_HOST_DOWN: dict[str, float] = {}
+_HOST_FAILS: dict[str, int] = {}
+_HOST_DOWN_TTL_S = float(os.environ.get("SEALV_ENV_HOST_DOWN_TTL") or 600.0)
+_HOST_DOWN_AFTER = 2
 DEFAULT_ATTEMPTS = int(os.environ.get("SEALV_ENV_ATTEMPTS") or 3)
 
 #: Minimum seconds between two live requests to the same host, per process.
@@ -354,6 +376,14 @@ def fetch(
             return None if body == b"" else body
 
     host = urllib.parse.urlsplit(url).netloc
+    down_at = _HOST_DOWN.get(host)
+    if down_at is not None:
+        if time.monotonic() - down_at < _HOST_DOWN_TTL_S:
+            raise SourceError(
+                f"{url.split('?')[0]}: {host} is not answering at all; skipped for now"
+            )
+        _HOST_DOWN.pop(host, None)
+        _HOST_FAILS.pop(host, None)
     last: Optional[Exception] = None
     for attempt in range(1, max(1, attempts) + 1):
         _space_out(host)
@@ -363,6 +393,7 @@ def fetch(
                 body = resp.read()
             if ttl_s > 0:
                 path.write_bytes(body)
+            _HOST_FAILS.pop(host, None)  # it answered; the count starts over
             return body
         except urllib.error.HTTPError as exc:
             if exc.code == 404 and on_404 != "raise":
@@ -379,6 +410,10 @@ def fetch(
                 break
         except Exception as exc:  # noqa: BLE001 - timeouts, DNS, reset, TLS
             last = exc
+            _HOST_FAILS[host] = _HOST_FAILS.get(host, 0) + 1
+            if _HOST_FAILS[host] >= _HOST_DOWN_AFTER:
+                _HOST_DOWN[host] = time.monotonic()
+                break  # further attempts would each cost another full timeout
         if attempt < attempts:
             time.sleep(min(20.0, 2.0 ** attempt))
     raise SourceError(f"{url.split('?')[0]}: {type(last).__name__}: {last}")
@@ -494,7 +529,13 @@ _ATMO_VARS = (
 _WAVE_VARS = (("wave_height", "wave_m"), ("wave_period", "wave_period_s"))
 
 
-def _openmeteo(base: str, params: dict, *, ttl_s: float) -> dict:
+def _openmeteo_bodies(base: str, params: dict, *, ttl_s: float) -> list[dict]:
+    """One Open-Meteo call, always as a LIST of per-location answers.
+
+    Asked for one coordinate the API replies with an object; asked for several
+    it replies with an array in the order they were sent. Both shapes come
+    through here so the model guard and the error check live in one place.
+    """
     model = params.get("models")
     if model in _BANNED_MODELS:
         # Not a defensive check against a typo: `best_match` on the archive API
@@ -506,9 +547,81 @@ def _openmeteo(base: str, params: dict, *, ttl_s: float) -> dict:
     body = _fetch_json(url, ttl_s=ttl_s)
     if body is None:
         raise SourceError(f"{base}: 404")
-    if body.get("error"):
-        raise SourceError(f"{base}: {body.get('reason')}")
-    return body
+    bodies = body if isinstance(body, list) else [body]
+    for one in bodies:
+        if isinstance(one, dict) and one.get("error"):
+            raise SourceError(f"{base}: {one.get('reason')}")
+    return bodies
+
+
+def _openmeteo(base: str, params: dict, *, ttl_s: float) -> dict:
+    return _openmeteo_bodies(base, params, ttl_s=ttl_s)[0]
+
+
+#: Grid points per Open-Meteo request. The API takes a comma-separated list of
+#: coordinates, which is what turns a basin-wide wind field into three requests
+#: instead of ~180. Kept well under any published cap because a batch that is
+#: rejected costs every point in it.
+OPENMETEO_BATCH = 60
+
+
+def _openmeteo_grid(
+    source: str, base: str, model: str, pairs: tuple, when: datetime,
+    step_deg: float, *, marine: bool = False,
+) -> list[dict]:
+    """The same weather these sources give at a point, over the water grid.
+
+    Wind and waves were the two fields a reader could pick and get four dots
+    for: nothing collected them across the basin, only the point sampler at
+    survey sites did. A wind field of four arrows is not a wind field.
+
+    Every answer keeps the coordinate the MODEL reports rather than the one
+    that was asked for - a 6.5 km cell centre is where the number is true, and
+    moving it onto the request point would be inventing a placement.
+    """
+    coords = caspian_grid(step_deg, when)
+    if not coords:
+        return []
+    day = when.date().isoformat()
+    params = {
+        "hourly": ",".join(n for n, _ in pairs),
+        "models": model,
+        "timezone": "GMT",
+        "start_date": day,
+        "end_date": day,
+    }
+    if not marine:
+        params["wind_speed_unit"] = "ms"
+        params["cell_selection"] = "sea"
+    out: list[dict] = []
+    for start in range(0, len(coords), OPENMETEO_BATCH):
+        chunk = coords[start:start + OPENMETEO_BATCH]
+        batch = dict(params)
+        batch["latitude"] = ",".join(f"{lat:.4f}" for lat, _ in chunk)
+        batch["longitude"] = ",".join(f"{lng:.4f}" for _, lng in chunk)
+        bodies = _openmeteo_bodies(base, batch, ttl_s=SOURCES[source]["ttl_s"])
+        if len(bodies) != len(chunk):
+            # The answers are matched to the requests BY POSITION, so a short
+            # or reordered array must stop the batch rather than shift every
+            # measurement onto the wrong coordinate.
+            raise SourceError(
+                f"{base}: asked for {len(chunk)} locations, got {len(bodies)}"
+            )
+        for (lat, lng), body in zip(chunk, bodies):
+            if marine and _all_zero(body, "wave_height"):
+                raise SourceError(
+                    "wave_height came back as a full series of exact zeros with no "
+                    "nulls - that is the masked-basin fill signature, not a calm "
+                    "day; discarding"
+                )
+            measured_at, values = _pick_hour(body, when, pairs)
+            if not measured_at:
+                continue
+            sample = _sample(source, measured_at,
+                             body.get("latitude", lat), body.get("longitude", lng), values)
+            if sample is not None:
+                out.append(sample)
+    return out
 
 
 def _pick_hour(body: dict, when: datetime, pairs: Iterable[tuple[str, str]]) -> tuple[Optional[str], dict]:
@@ -679,7 +792,17 @@ def openmeteo_waves(lat: float, lng: float, when: Any) -> Optional[dict]:
 # --------------------------------------------------------------------------
 
 ERDDAP_HOSTS = {
-    "mur": ("https://coastwatch.pfeg.noaa.gov/erddap",),
+    # MUR, in host order. Both NOAA nodes serve the identical `jplMURSST41`;
+    # the second is here because the first went down for hours and the whole
+    # temperature layer went stale with it - one host is not a source, it is a
+    # single point of failure, and a fallback that already existed for
+    # CoralTemp was simply never wired for MUR. Verified by asking each node
+    # for the dataset: upwell answers, coastwatch.noaa.gov and polarwatch 404
+    # (they do not carry it), so they are NOT listed on a guess.
+    "mur": (
+        "https://coastwatch.pfeg.noaa.gov/erddap",
+        "https://upwell.pfeg.noaa.gov/erddap",
+    ),
     # CoralTemp, in host order. PacIOOS `dhw_5km` leads because it carries the
     # SST and the ANOMALY in one dataset - the CoastWatch node splits them
     # across `noaacrwsstDaily` and a separate anomaly dataset, so the fallback
@@ -901,22 +1024,31 @@ def mur_sst(lat: float, lng: float, when: Any) -> Optional[dict]:
     IMS and VIIRS both see a metre of it. MUR is never an ice indicator.
     """
     when = _as_utc(when)
-    host = ERDDAP_HOSTS["mur"][0]
-    window = _erddap_window(host, "jplMURSST41", when, SOURCES["mur"]["window_h"])
-    if window is None:
-        return None
-    lo, hi = window
-    rows = _erddap_rows(
-        host, "jplMURSST41",
-        "analysed_sst" + _erddap_cell(host, "jplMURSST41", "analysed_sst", lo, hi, lat, lng),
-        ttl_s=SOURCES["mur"]["ttl_s"],
-    )
-    row = _nearest_row(rows, when, ("analysed_sst",))
-    if row is None:
-        return None
-    return _sample("mur", _iso(_parse_time(row["time"])),
-                   _num(row.get("latitude")) or lat, _num(row.get("longitude")) or lng,
-                   {"sst_c": _num(row.get("analysed_sst"))})
+    last: Optional[SourceError] = None
+    for host in ERDDAP_HOSTS["mur"]:
+        try:
+            window = _erddap_window(host, "jplMURSST41", when, SOURCES["mur"]["window_h"])
+            if window is None:
+                continue
+            lo, hi = window
+            rows = _erddap_rows(
+                host, "jplMURSST41",
+                "analysed_sst"
+                + _erddap_cell(host, "jplMURSST41", "analysed_sst", lo, hi, lat, lng),
+                ttl_s=SOURCES["mur"]["ttl_s"],
+            )
+        except SourceError as exc:
+            last = exc  # this node is down; the next one serves the same data
+            continue
+        row = _nearest_row(rows, when, ("analysed_sst",))
+        if row is None:
+            continue
+        return _sample("mur", _iso(_parse_time(row["time"])),
+                       _num(row.get("latitude")) or lat, _num(row.get("longitude")) or lng,
+                       {"sst_c": _num(row.get("analysed_sst"))})
+    if last is not None:
+        raise last  # every node failed: a real outage, reported as one
+    return None
 
 
 def coraltemp_sst(lat: float, lng: float, when: Any) -> Optional[dict]:
@@ -1210,27 +1342,93 @@ class _BytesReader:
         return out
 
 
+#: The last few days' patches, held in process. The disk cache below already
+#: makes a date cost one download; this makes it cost one READ. A collection
+#: cycle asks about ~160 cells twice over (once for the water mask, once for
+#: the class), and without this each of those is a 700 KB file read.
+_IMS_PATCHES: dict[str, tuple[int, int, int, int, bytes]] = {}
+_IMS_PATCHES_MAX = 6  # the walk-back window is 5 days, plus one
+
+#: Dates NSIDC answered 404 for, and when we asked. The chart for day D is
+#: published a day or two later, so the walk-back asks about days that do not
+#: exist yet - and `fetch` is told not to cache a miss, which is right for a
+#: chart that will appear. Without this memo, though, every grid cell repeats
+#: the same 404: one collection cycle became ~1700 pointless round-trips to
+#: NSIDC and took eight minutes. The TTL is what keeps a chart published later
+#: today from being invisible until the process restarts.
+_IMS_MISSES: dict[str, float] = {}
+_IMS_MISS_TTL_S = 1800.0
+
+
 def _ims_patch(day: datetime) -> Optional[tuple[int, int, int, int, bytes]]:
     """The basin patch for one date, from cache when possible.
 
-    Two layers of cache: the raw download (shared with every other source
-    through `fetch`) and the extracted patch, which is what makes sampling 350
-    grid cells for one date cost one decompression rather than 350.
+    Three layers of cache: the raw download (shared with every other source
+    through `fetch`), the extracted patch on disk, and the patch in memory -
+    which is what makes sampling the whole grid for one date cost one
+    decompression and one read rather than one per cell.
     """
     stamp = f"{day.year}{day.timetuple().tm_yday:03d}"
+    hit = _IMS_PATCHES.get(stamp)
+    if hit is not None:
+        return hit
+    missed_at = _IMS_MISSES.get(stamp)
+    if missed_at is not None and time.monotonic() - missed_at < _IMS_MISS_TTL_S:
+        return None
     patch_file = cache_dir() / f"ims-{stamp}.patch"
     if patch_file.is_file():
         blob = patch_file.read_bytes()
         row0, col0, height, width = struct.unpack("<4i", blob[:16])
-        return row0, col0, height, width, blob[16:]
+        return _ims_remember(stamp, (row0, col0, height, width, blob[16:]))
 
     url = f"{IMS_BASE}/{day.year}/ims{stamp}_1km_GIS_v1.3.tif.gz"
     raw = fetch(url, ttl_s=0, on_404="none", timeout=max(DEFAULT_TIMEOUT, 180.0))
     if raw is None:
+        _IMS_MISSES[stamp] = time.monotonic()
         return None
     row0, col0, height, width, data = _ims_extract(raw)
     patch_file.write_bytes(struct.pack("<4i", row0, col0, height, width) + data)
-    return row0, col0, height, width, data
+    return _ims_remember(stamp, (row0, col0, height, width, data))
+
+
+def _ims_remember(
+    stamp: str, patch: tuple[int, int, int, int, bytes]
+) -> tuple[int, int, int, int, bytes]:
+    """Keep a patch in process, oldest out first. A patch is under a megabyte
+    and the window is a handful of days, so the ceiling is a few MB - bounded
+    on purpose, because a long-running worker walks dates forever."""
+    _IMS_PATCHES[stamp] = patch
+    while len(_IMS_PATCHES) > _IMS_PATCHES_MAX:
+        _IMS_PATCHES.pop(next(iter(_IMS_PATCHES)))
+    return patch
+
+
+#: The IMS chart is a four-class analyst product. Naming the codes is the
+#: difference between a mask that is checked and a `!= 2` nobody can audit.
+IMS_SEA, IMS_LAND, IMS_SEA_ICE, IMS_SNOW_LAND = 1, 2, 3, 4
+IMS_WATER_CLASSES = frozenset({IMS_SEA, IMS_SEA_ICE})
+IMS_LAND_CLASSES = frozenset({IMS_LAND, IMS_SNOW_LAND})
+
+
+def ims_water_verdict(lat: float, lng: float, when: Any) -> Optional[bool]:
+    """Is this point water? The 1 km IMS land mask's answer, or None.
+
+    Where the chart exists this is a far better answer than the hull above: it
+    is drawn at 1 km over exactly this basin and redrawn every day, whereas the
+    hull is a few dozen vertices somebody traced off a basemap. None means the
+    chart had nothing for that day - not that the point is land - and the
+    caller falls back to the hull rather than emptying the map when NSIDC is
+    down.
+    """
+    sample = ims_ice(lat, lng, when)
+    if sample is None:
+        return None
+    klass = int(round(sample["values"]["ice_class"]))
+    if klass in IMS_WATER_CLASSES:
+        return True
+    if klass in IMS_LAND_CLASSES:
+        return False
+    return None
 
 
 def ims_ice(lat: float, lng: float, when: Any) -> Optional[dict]:
@@ -1396,14 +1594,27 @@ def collect_point(
     return samples, problems
 
 
-def caspian_grid(step_deg: float = 0.5) -> list[tuple[float, float]]:
-    """Water cells of the coarse collection grid, south-west corner first."""
+def caspian_grid(step_deg: float = 0.5, when: Any = None) -> list[tuple[float, float]]:
+    """Water cells of the coarse collection grid, south-west corner first.
+
+    Water is decided by the IMS land mask for `when` where that chart has an
+    opinion, and by the hull where it does not. Passing `when` is what keeps
+    sea-variable samples off dry land; without it this falls back to the hull
+    for every cell, which is the old behaviour and is wrong at the coast.
+    """
     out = []
     lat = CASPIAN_BBOX["lat_min"]
     while lat <= CASPIAN_BBOX["lat_max"] + 1e-9:
         lng = CASPIAN_BBOX["lng_min"]
         while lng <= CASPIAN_BBOX["lng_max"] + 1e-9:
-            if is_caspian_water(lat, lng):
+            verdict = None
+            if when is not None:
+                try:
+                    verdict = ims_water_verdict(lat, lng, when)
+                except SourceError:
+                    verdict = None  # chart unreachable; the hull answers instead
+            water = verdict if verdict is not None else is_caspian_water(lat, lng)
+            if water:
                 out.append((round(lat, 4), round(lng, 4)))
             lng += step_deg
         lat += step_deg
@@ -1471,7 +1682,7 @@ def _erddap_grid(
 def collect_grid(
     when: Any, *, step_deg: float = 0.5, sources: Optional[Iterable[str]] = None
 ) -> tuple[list[dict], list[dict]]:
-    """The coarse basin grid: SST and ice, the two fields that make a map.
+    """The coarse basin grid: sea-surface temperature and ice.
 
     Chlorophyll is available on the same mechanism but is left out of the
     default cycle - it is a 9 km product, and drawing it beside a 1 km SST is
@@ -1484,25 +1695,76 @@ def collect_grid(
     problems: list[dict] = []
 
     if "mur" in wanted:
-        try:
-            samples += _erddap_grid("mur", ERDDAP_HOSTS["mur"][0], "jplMURSST41",
-                                    "analysed_sst", "sst_c", when, step_deg)
-        except SourceError as exc:
-            problems.append({"source": "mur", "error": str(exc)})
-
-    if "coraltemp" in wanted:
         ok = False
         errs = []
-        for host, dataset, sst_var, _anom in ERDDAP_HOSTS["coraltemp"]:
+        for host in ERDDAP_HOSTS["mur"]:
             try:
-                samples += _erddap_grid("coraltemp", host, dataset, sst_var,
-                                        "sst_c", when, step_deg)
+                samples += _erddap_grid("mur", host, "jplMURSST41",
+                                        "analysed_sst", "sst_c", when, step_deg)
                 ok = True
                 break
             except SourceError as exc:
                 errs.append(str(exc))
         if not ok:
+            problems.append({"source": "mur", "error": "; ".join(errs)})
+
+    if "coraltemp" in wanted:
+        ok = False
+        errs = []
+        for host, dataset, sst_var, anom_var in ERDDAP_HOSTS["coraltemp"]:
+            try:
+                samples += _erddap_grid("coraltemp", host, dataset, sst_var,
+                                        "sst_c", when, step_deg)
+            except SourceError as exc:
+                errs.append(str(exc))
+                continue
+            ok = True
+            # The anomaly is the REASON this source is carried - "27.4 °C" says
+            # nothing on its own, "+1.6 above normal" is the number a biologist
+            # acts on - and the grid used to drop it, so choosing the anomaly
+            # field drew the three points the SITE sampler happened to store.
+            # Same dataset, same slice, one more variable; the rows merge onto
+            # the SST rows by (source, measured_at, lat, lng).
+            if anom_var:
+                try:
+                    samples += _erddap_grid("coraltemp", host, dataset, anom_var,
+                                            "sst_anomaly_c", when, step_deg)
+                except SourceError as exc:
+                    # The temperature is already in hand; say the anomaly is
+                    # missing rather than throwing away a good field for it.
+                    problems.append({"source": "coraltemp", "var": "sst_anomaly_c",
+                                     "error": str(exc)})
+            break
+        if not ok:
             problems.append({"source": "coraltemp", "error": "; ".join(errs)})
+
+    # Wind and waves across the water. The atmospheric source is chosen by the
+    # SAME rule the point sampler uses, so a date served by ERA5 at a site is
+    # served by ERA5 on the map too - two different models under one label
+    # would put a seam in the field.
+    # Asking for ERA5 on a date ICON-EU serves collects nothing, on purpose:
+    # that is a source correctly standing aside, not a failure. Listing BOTH
+    # (as the default cycle does) always collects the right one.
+    weather_id = weather_source_for(when)
+    if weather_id in wanted:
+        try:
+            samples += _openmeteo_grid(
+                weather_id,
+                OPENMETEO_FORECAST if weather_id == "openmeteo_icon_eu" else OPENMETEO_ARCHIVE,
+                "icon_eu" if weather_id == "openmeteo_icon_eu" else "era5",
+                _ATMO_VARS, when, step_deg,
+            )
+        except SourceError as exc:
+            problems.append({"source": weather_id, "error": str(exc)})
+
+    if "openmeteo_mfwam" in wanted:
+        try:
+            samples += _openmeteo_grid(
+                "openmeteo_mfwam", OPENMETEO_MARINE, "meteofrance_wave",
+                _WAVE_VARS, when, step_deg, marine=True,
+            )
+        except SourceError as exc:
+            problems.append({"source": "openmeteo_mfwam", "error": str(exc)})
 
     if "viirs_chl" in wanted:
         try:
@@ -1517,11 +1779,19 @@ def collect_grid(
         # ERDDAP path, and the reason IMS is cheap to collect densely.
         try:
             hit = False
-            for cell_lat, cell_lng in caspian_grid(step_deg):
+            for cell_lat, cell_lng in caspian_grid(step_deg, when):
                 sample = ims_ice(cell_lat, cell_lng, when)
-                if sample is not None:
-                    samples.append(sample)
-                    hit = True
+                if sample is None:
+                    continue
+                # A land pixel is a true statement about that pixel and the
+                # point probe keeps returning it - a February sortie over the
+                # Tyuleniy spit wants to know the ground under it was snow. On
+                # the BASIN GRID it is only noise: it draws a sample marker over
+                # Iran on a layer whose subject is sea ice.
+                if int(round(sample["values"]["ice_class"])) in IMS_LAND_CLASSES:
+                    continue
+                samples.append(sample)
+                hit = True
             if not hit:
                 problems.append({"source": "ims", "error": "no chart within 5 days of that date"})
         except SourceError as exc:

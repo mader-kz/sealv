@@ -21,9 +21,9 @@ What one cycle collects
   * every SITE with a coordinate, and every distinct SURVEY coordinate, at
     `now` - the full point stack (wind, waves, both SSTs, ice, chlorophyll,
     sea level);
-  * a coarse basin grid for the two fields a map is made of - SST and the ice
-    chart - so the map layer has something to draw for the whole sea rather
-    than a handful of dots around the sorties.
+  * a coarse basin grid for every field a map is made of - both SSTs, the ice
+    chart, wind and waves - so each layer has something to draw for the whole
+    sea rather than a handful of dots around the sorties.
 
 Rate and politeness
 -------------------
@@ -61,17 +61,37 @@ STOP = threading.Event()
 #: slice and only cost somebody else bandwidth.
 DEFAULT_INTERVAL_S = 3 * 3600.0
 
-#: Grid sampling step in degrees. Half a degree over the basin is ~350 water
+#: Grid sampling step in degrees. Half a degree over the basin is ~162 water
 #: cells - a map that reads at basin zoom without pretending to a resolution
 #: nobody sampled. It is a SPACING, not a cell size: every value returned is a
 #: real 1 km product cell, and the layer says so (see db.env_grid).
 DEFAULT_GRID_STEP = 0.5
 
-#: Which fields the basin grid collects. SST and the ice chart make the map;
-#: chlorophyll is available on the same mechanism and left out of the default
-#: cycle because a 9 km field drawn beside a 1 km one invites exactly the
-#: blending this product refuses. Ask for it explicitly with --grid-sources.
-DEFAULT_GRID_SOURCES = ("mur", "ims")
+#: Which fields the basin grid collects: sea-surface temperature from BOTH
+#: products, the ice chart, the atmosphere (wind, gusts, air temperature,
+#: pressure, cloud) and waves. BOTH atmospheric ids are listed so that whichever
+#: one serves the date is the one that runs - ICON-EU inside its window, ERA5
+#: outside it - and the other correctly stands aside.
+#:
+#: Wind and waves are here because they were pickable fields that nothing ever
+#: collected across the basin: choosing wind drew FOUR arrows, the survey sites
+#: the point sampler had visited, and read as a broken layer rather than as the
+#: absence it was.
+#:
+#: CoralTemp is here because the field picker offers it as a basin field, and
+#: it was not collected as one: its only rows came from the point sampler at
+#: survey sites, so choosing it drew three dots hidden under the colony chips
+#: and looked like a broken layer. It is also the whole point of keeping
+#: sources separate - a second, independent reading of the same water, free to
+#: disagree with MUR in public. Each is drawn at its own cell size and named,
+#: never blended.
+#:
+#: Chlorophyll stays out: it is a 9 km field, and beside a 1 km one it invites
+#: exactly the blending this product refuses. Ask for it with --grid-sources.
+DEFAULT_GRID_SOURCES = (
+    "mur", "coraltemp", "ims",
+    "openmeteo_icon_eu", "openmeteo_era5", "openmeteo_mfwam",
+)
 
 
 def log(message: str) -> None:

@@ -1551,11 +1551,20 @@ def env_grid(
 
     layers = []
     for column in wanted:
+        # The ice chart classifies land too (2 = land, 4 = snow-covered land),
+        # and those cells are true but belong to the point probe, not to a
+        # basin layer about sea ice - drawn on the map they put sample markers
+        # over Iran and the Kazakh steppe. The collector no longer stores them;
+        # this keeps the ones already in the archive off the map without
+        # deleting a measurement that was honestly recorded.
+        keep = f"{column} IS NOT NULL"
+        if column == "ice_class":
+            keep += f" AND CAST({column} AS INTEGER) NOT IN (2, 4)"
         pairs = conn.execute(
             f"""SELECT source, measured_at,
                        ABS(julianday(measured_at) - julianday(?)) * 24.0 AS gap_hours
                   FROM env_sample
-                 WHERE {column} IS NOT NULL
+                 WHERE {keep}
               GROUP BY source, measured_at""",
             (when,),
         ).fetchall()
@@ -1573,7 +1582,7 @@ def env_grid(
                     f"""SELECT lat, lng, {column} AS value, dataset, resolution_m,
                                resolution, scope, latency_note
                           FROM env_sample
-                         WHERE source = ? AND measured_at = ? AND {column} IS NOT NULL
+                         WHERE source = ? AND measured_at = ? AND {keep}
                       ORDER BY lat, lng LIMIT ?""",
                     (source, measured_at, max(1, int(limit_per_layer))),
                 )
