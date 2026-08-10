@@ -1,7 +1,8 @@
 "use client";
 import { create } from "zustand";
 import { toast } from "sonner";
-import type { Footage, Detection, TrackPoint, MapLayerState } from "@/lib/types";
+import type { Footage, Detection, TrackPoint, MapLayerState, EnvAt } from "@/lib/types";
+import { conditionsTime } from "@/lib/analytics/season";
 import { movementDemoFootages } from "@/lib/mock/detections";
 import {
   fetchStats, fetchRunPoints, fetchTrack, pointsToDetections, mediaFileUrl, editPoints,
@@ -157,6 +158,42 @@ type Store = {
   seedTestData: () => void;
   hydrate: () => Promise<void>;
   clearAll: () => void;
+
+  /* ------------------------------------------------------- environment
+     What the weather, the water and the ice were doing where and when each
+     sortie was flown, keyed by point-and-moment rather than by sortie: two
+     sorties flown from the same spit within the hour ask the archive the same
+     question, and the answer is the same answer. Never merged onto the
+     Footage — a Footage is what the archive measured about the ANIMALS, and
+     an environmental reading is a different measurement from a different
+     instrument with its own time and its own error. */
+  env: Record<string, EnvCard>;
+  /** Load conditions for one sortie. Cheap and idempotent: a key already
+   *  loaded (or in flight) is a no-op, so a selection change costs nothing.
+   *  `live` goes to the third-party sources and takes 30–120 s; it is only
+   *  ever passed by a person pressing a button over an empty card. */
+  loadEnv: (footage: Footage, live?: boolean) => Promise<void>;
+  /** The same for a set — the season block and the report need every sortie
+   *  in the window. Deduplicated by key and bounded. */
+  loadEnvFor: (footages: readonly Footage[]) => Promise<void>;
+};
+
+/** One point-and-moment's conditions, as this client knows them.
+ *
+ *  The states are distinct claims and the UI must not collapse them: `error`
+ *  is "we could not ask", `ready` with no samples is "we asked and the archive
+ *  holds nothing for this point and time", and `unplaced` is "this sortie has
+ *  no position, so the question cannot be put at all". */
+export type EnvCard = {
+  key: string;
+  lat: number;
+  lng: number;
+  /** The moment asked about: the flight date when it was recorded, otherwise
+   *  the count job's clock — which is a different day and is labelled. */
+  time: string;
+  state: "loading" | "ready" | "error" | "unplaced";
+  data: EnvAt | null;
+  error: string | null;
 };
 
 /* ------------------------------------------------------------- hydrate plumbing */
@@ -366,6 +403,51 @@ function applySurvey(
   };
 }
 
+/* ------------------------------------------------------- environment plumbing
+
+   The API base, mirrored from lib/api.ts rather than imported: that module is
+   the ingest/archive client and belongs to another author's surface. One
+   `const` either way, and the deployment story is identical — same origin by
+   default, because the static export of this app is served by the same FastAPI
+   container that owns /v1. */
+const ENV_API = process.env.NEXT_PUBLIC_API_BASE ?? "";
+
+/** How many point-and-moment questions one season block may ask. A season of
+ *  hundreds of sorties is a real target, but these are archive reads on a
+ *  single-writer SQLite: past this the panel says how many it covered rather
+ *  than quietly queueing four hundred requests behind a scroll. */
+export const ENV_MAX_KEYS = 100;
+/** Concurrent env reads. Same reasoning as HYDRATE_POOL, smaller number:
+ *  these run alongside a hydrate that is already using six. */
+const ENV_POOL = 4;
+
+/**
+ * The archive question a sortie asks: this point, this moment.
+ *
+ * Three decimals is ~100 m — far finer than the finest product here (750 m
+ * VIIRS ice), so two sorties that share a key genuinely share every cell they
+ * would be answered with. The moment is NOT rounded: `gap_hours` in the answer
+ * is measured against exactly what was asked, and rounding the question to the
+ * hour would put a half-hour of invented slack into a number whose whole job
+ * is to say how stale the reading is.
+ *
+ * Null where the sortie has no position. That is not a failure to look up —
+ * there is no coordinate to ask about, and the card says so.
+ */
+export function envKeyOf(f: Footage): string | null {
+  const lat = f.center?.lat;
+  const lng = f.center?.lng;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  return `${lat.toFixed(3)},${lng.toFixed(3)}@${conditionsTime(f)}`;
+}
+
+/** The point and moment behind a key, parsed back out. */
+function envQuestionOf(f: Footage): { key: string; lat: number; lng: number; time: string } | null {
+  const key = envKeyOf(f);
+  if (!key) return null;
+  return { key, lat: f.center.lat, lng: f.center.lng, time: conditionsTime(f) };
+}
+
 export const useFootageStore = create<Store>((set, get) => ({
   footages: [],
   detections: [],
@@ -396,6 +478,7 @@ export const useFootageStore = create<Store>((set, get) => ({
   siteAssign: null,
   frameGeom: {},
   verdictsInFlight: 0,
+  env: {},
   addFootage: (f) => set(s => ({ footages: [...s.footages, f], detections: [...s.detections, ...f.detections] })),
   /* No `removeFootage`. It filtered the sortie out of two arrays and called
      that done, under a confirmation that said "Remove this sortie?" — a
@@ -1039,7 +1122,86 @@ export const useFootageStore = create<Store>((set, get) => ({
       populationSyncState: "idle", populationError: null,
       loadedRuns: 0, totalRuns: null, hydrateSkipped: 0, hydrateError: null,
       notesState: {}, retirement: {}, corrections: {}, siteAssign: null, frameGeom: {},
+      /* Cleared with everything else. The conditions were keyed by the point
+         and moment of sorties that are no longer here; keeping them would let
+         the next hydrate's cards answer out of a previous session's archive. */
+      env: {},
     });
+  },
+
+  /* ------------------------------------------------------------ environment
+
+     One question per point-and-moment, asked once. `loadEnv` is called from
+     the inspector on every selection change and from the season block for
+     every sortie in the window, so the cheap path — key already known — has to
+     be free, and it is: a present key returns before any await.
+
+     Failures are held on the card rather than toasted. A sortie whose
+     conditions could not be read is a sortie whose conditions panel says so,
+     which is the whole point; a toast would put an infrastructure message over
+     a map for something that is visible exactly where it matters. */
+  loadEnv: async (footage, live = false) => {
+    const q = envQuestionOf(footage);
+    if (!q) {
+      /* No coordinate, so no question. Recorded under the sortie's own id
+         (there is no point-and-moment key to file it under) so the panel can
+         say why it is empty instead of spinning. */
+      const key = `unplaced:${footage.id}`;
+      if (get().env[key]) return;
+      set((s) => ({
+        env: { ...s.env, [key]: { key, lat: NaN, lng: NaN, time: conditionsTime(footage), state: "unplaced", data: null, error: null } },
+      }));
+      return;
+    }
+    const held = get().env[q.key];
+    /* A live re-ask over a card that already failed or came back empty is the
+       one case where an existing key is re-fetched: the person pressed the
+       button precisely because the stored answer was nothing. */
+    if (held && !(live && held.state !== "loading")) return;
+
+    set((s) => ({
+      env: { ...s.env, [q.key]: { ...q, state: "loading", data: null, error: null } },
+    }));
+    try {
+      const qs = new URLSearchParams({
+        lat: String(q.lat),
+        lng: String(q.lng),
+        time: q.time,
+      });
+      if (live) qs.set("live", "1");
+      const res = await fetch(`${ENV_API}/v1/env/at?${qs.toString()}`);
+      if (!res.ok) {
+        /* The service's own sentence when it has one — it names the field it
+           refused and is more use than "HTTP 400". */
+        let detail = `HTTP ${res.status}`;
+        try {
+          const body = await res.json();
+          if (body && typeof body.error === "string" && body.error.trim()) detail = body.error;
+        } catch { /* not JSON; the status stands */ }
+        throw new Error(detail);
+      }
+      const data = (await res.json()) as EnvAt;
+      set((s) => ({ env: { ...s.env, [q.key]: { ...q, state: "ready", data, error: null } } }));
+    } catch (e) {
+      set((s) => ({ env: { ...s.env, [q.key]: { ...q, state: "error", data: null, error: messageOf(e) } } }));
+    }
+  },
+
+  loadEnvFor: async (footages) => {
+    /* Deduplicated before anything is asked: a season flown from one spit is
+       twenty sorties and, often, two or three distinct questions. */
+    const seen = new Set<string>();
+    const want: Footage[] = [];
+    for (const f of footages ?? []) {
+      const key = envKeyOf(f) ?? `unplaced:${f.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (get().env[key]) continue;
+      want.push(f);
+      if (want.length >= ENV_MAX_KEYS) break;
+    }
+    if (!want.length) return;
+    await pool(want, ENV_POOL, async (f) => { await get().loadEnv(f); });
   },
   /* Reload the season's counts from the service. The store is browser memory;
      the surveys are not - they live in the backend, and losing the map to an

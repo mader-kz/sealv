@@ -14,12 +14,16 @@
    outside React (no hooks) and is deliberately free of runtime imports from
    lib/i18n, so it stays loadable in a bare node smoke test. Every import below
    is a pure module for the same reason — no React, no DOM, no store. */
-import type { Footage } from "../types";
+import type { EnvAt, EnvSample, Footage } from "../types";
 import { formatArea, totalAreaM2 } from "../analytics/area";
 import { formatDate, localeForLang, timeExtent } from "../analytics/brush";
 import { countOf } from "../analytics/count";
 import { seasonEstimate } from "../analytics/estimate";
 import { reviewStats } from "../analytics/review";
+import {
+  compassOf, conditionsTime, envUnitKey, envVarRank, formatEnvValue,
+  iceClassKey, seasonOf,
+} from "../analytics/season";
 import { SITE_RADIUS_M, isPlaced } from "../analytics/surveys";
 import dict from "../i18n.dict.json";
 
@@ -39,6 +43,13 @@ export type ReportMeta = {
    *  `latest_runs_total` exists precisely so a truncated window can admit it. */
   loadedRuns?: number | null;
   totalRuns?: number | null;
+  /** The conditions each sortie was flown into, by footage id. An акт that
+   *  states the weather is worth more to an ecologist than one that does not —
+   *  a haul-out count swings with wind, ice and water temperature, and a
+   *  number printed without them cannot be weighed a year later. A sortie
+   *  absent from this map, or mapped to null, prints "not recorded"; nothing
+   *  here is ever inferred or defaulted. */
+  env?: Record<string, EnvAt | null> | null;
 };
 
 /** Server-side cap on a note. Re-applied here so a row written before the cap
@@ -171,6 +182,160 @@ function locationText(lang: ReportLang, f: Footage): string | null {
     case "manual": return tr(lang, "rep.locManual");
     default: return null;
   }
+}
+
+/* ------------------------------------------------------- conditions in the акт
+
+   A count is only weighable against the conditions it was made under. Wind
+   moves animals off an exposed spit; ice is the surface a pupping count is
+   made ON; water temperature and chlorophyll are the reason they are there at
+   all. An акт that omits all of that hands the reader a number they cannot
+   argue with — which sounds like strength and is the opposite.
+
+   The block prints ONE LINE PER SOURCE. Every value on a line came out of that
+   source's slice, named at the head of the line with its resolution, the time
+   of the slice and how far that slice is from the sortie's own moment. Nothing
+   is averaged across sources, no source is chosen over another, and a variable
+   nobody measured is listed as missing rather than left to look like calm. */
+
+/** The slice's timestamp with the hour on it: a 09:00 analysis and a 21:00
+ *  forecast are different weather on the same date. */
+const fmtSlice = (lang: ReportLang, iso: string): string =>
+  clean(formatDate(iso, lang, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }));
+
+/** The compact source label ("MUR 1 km"), or the raw id when this build does
+ *  not know the source — an unrecognised feed must stay visible. */
+function srcShort(lang: ReportLang, source: string): string {
+  const key = `env.srcShort.${source}` as Key;
+  const s = tr(lang, key);
+  return s === key ? source : s;
+}
+
+/** A variable's label, falling back to the machine name. */
+function varLabel(lang: ReportLang, variable: string): string {
+  const key = `env.var.${variable}` as Key;
+  const s = tr(lang, key);
+  return s === key ? variable : s;
+}
+
+/** One reading as "label value unit", with the wind's compass point folded
+ *  into the wind row — one measurement, one entry. */
+function readingText(lang: ReportLang, sample: EnvSample, variable: string, value: number): string {
+  const label = varLabel(lang, variable);
+  if (variable === "ice_class") {
+    const k = iceClassKey(value);
+    return `${label} ${k ? tr(lang, k as Key) : String(value)}`;
+  }
+  const unitKey = envUnitKey(variable);
+  const unit = unitKey ? ` ${tr(lang, unitKey as Key)}` : "";
+  let text = `${label} ${formatEnvValue(variable, value)}${unit}`;
+  if (variable === "wind_ms") {
+    const dir = sample.values.wind_dir;
+    const point = compassOf(dir);
+    if (point && typeof dir === "number") {
+      text += ` ${tr(lang, "env.windFrom", {
+        dir: tr(lang, `env.compass.${point}` as Key),
+        deg: formatEnvValue("wind_dir", dir),
+      })}`;
+    }
+  }
+  if (variable === "sea_level_m") text += ` (${tr(lang, "env.seaLevelDatum")})`;
+  return text;
+}
+
+/**
+ * The conditions block for one sortie, as lines ready to wrap and draw.
+ *
+ * Returns the "not recorded" line rather than nothing when the client never
+ * loaded conditions for this sortie: an акт with a silent gap where the
+ * weather should be reads as an акт flown in no weather at all.
+ */
+function conditionLines(lang: ReportLang, f: Footage, at: EnvAt | null | undefined): string[] {
+  const out: string[] = [];
+  const when = conditionsTime(f);
+  const season = seasonOf(when);
+
+  const head: string[] = [];
+  head.push(
+    season
+      ? tr(lang, "rep.season", {
+          name: tr(lang, `season.${season}` as Key),
+          what: tr(lang, `season.${season}.what` as Key),
+        })
+      : tr(lang, "season.unknown"),
+  );
+  head.push(tr(lang, "env.forTime", { time: fmtSlice(lang, when) }));
+  /* The flight date was never recorded, so the conditions above are the ones
+     on the day the COUNT ran. Months apart for a re-processed archive, and
+     never substituted silently. */
+  if (!plain(f.capturedAt, 40)) head.push(tr(lang, "env.dateFallback"));
+
+  const samples = [...(at?.samples ?? [])];
+  if (samples.length === 0) {
+    out.push(`${tr(lang, "rep.conditions")}: ${tr(lang, "rep.conditionsNone")} · ${head.join(" · ")}`);
+    return out;
+  }
+
+  out.push(`${tr(lang, "rep.conditions")}: ${head.join(" · ")}`);
+
+  /* Sources in the order of the first thing they measure, so the air comes
+     before the water and the water before the ice on every sortie in the
+     document. */
+  const rankOf = (s: EnvSample) =>
+    Math.min(...Object.keys(s.values ?? {}).map(envVarRank), Number.MAX_SAFE_INTEGER);
+  samples.sort((a, b) => rankOf(a) - rankOf(b) || a.source.localeCompare(b.source));
+
+  for (const s of samples) {
+    const entries = Object.entries(s.values ?? {})
+      .filter(([v, val]) => typeof val === "number" && Number.isFinite(val))
+      /* Folded into the wind reading; on its own it stays. */
+      .filter(([v]) => !(v === "wind_dir" && typeof s.values.wind_ms === "number"))
+      .sort((a, b) => envVarRank(a[0]) - envVarRank(b[0]));
+    if (entries.length === 0) continue;
+
+    const gap = Math.round(s.gap_hours);
+    const ahead = Date.parse(s.measured_at) > Date.parse(at?.time ?? when);
+    const provenance = [
+      srcShort(lang, s.source),
+      tr(lang, "env.slice", { time: fmtSlice(lang, s.measured_at) }),
+      Number.isFinite(gap) && gap >= 1
+        ? ahead
+          ? tr(lang, "env.aheadHours", { n: gap })
+          : tr(lang, "env.ageHours", { n: gap })
+        : "",
+      s.scope === "basin"
+        ? tr(lang, "env.scope.basin")
+        : tr(lang, "env.distanceKm", { km: s.distance_km.toFixed(1) }),
+    ].filter(Boolean).join(", ");
+
+    const values = entries
+      .map(([v, val]) => readingText(lang, s, v, val as number))
+      .join("; ");
+    out.push(`${provenance}: ${values}`);
+  }
+
+  /* What nobody measured — stated, never omitted, never printed as a zero.
+     Only variables NO source supplied: the two atmospheric feeds cover
+     different eras of the same quantity and exactly one of them answers for a
+     given date, so listing the one that correctly stood aside would print
+     "no data: wind" three lines under a wind speed. */
+  const have = new Set<string>();
+  for (const s of samples) {
+    for (const [v, val] of Object.entries(s.values ?? {})) {
+      if (typeof val === "number" && Number.isFinite(val)) have.add(v);
+    }
+  }
+  const gaps: string[] = [];
+  for (const m of at?.missing ?? []) {
+    for (const v of m.vars) {
+      if (have.has(v)) continue;
+      const label = varLabel(lang, v);
+      if (!gaps.includes(label)) gaps.push(label);
+    }
+  }
+  if (gaps.length > 0) out.push(tr(lang, "rep.envMissing", { vars: gaps.join(", ") }));
+
+  return out;
 }
 
 /** Names recorded against these sorties, deduplicated and in first-seen order. */
@@ -442,6 +607,14 @@ export async function buildReportDoc(footages: Footage[], lang: ReportLang, meta
     doc.setFontSize(6.5);
     const provLines = wrap(parts.join("  ·  "), W - 2);
 
+    /* The conditions this sortie was flown into — one wrapped line per source,
+       each naming its own product and slice. Indented under the row like the
+       provenance, and always present: a sortie whose conditions were never
+       collected says so rather than leaving a blank the reader will read as
+       "nothing notable". */
+    const envLines = conditionLines(lang, f, meta?.env?.[f.id] ?? null)
+      .flatMap((line) => wrap(line, W - 4));
+
     /* The human half of the record. A machine sentence and a person's
        observation never share a block: this one is labelled, attributed, and
        drawn as text — the note is data, and it is never interpreted. */
@@ -455,7 +628,8 @@ export async function buildReportDoc(footages: Footage[], lang: ReportLang, meta
       : "";
 
     const need =
-      5 + provLines.length * 3.4 + (noteLines.length ? noteLines.length * 3.2 + 3.6 : 0) + 2;
+      5 + provLines.length * 3.4 + envLines.length * 3.2 +
+      (noteLines.length ? noteLines.length * 3.2 + 3.6 : 0) + 2;
     if (y + need > 274) { doc.addPage(); y = tableHead(20); }
 
     ink();
@@ -473,6 +647,7 @@ export async function buildReportDoc(footages: Footage[], lang: ReportLang, meta
     soft();
     doc.setFontSize(6.5);
     for (const line of provLines) { put(line, L + 1, y); y += 3.4; }
+    for (const line of envLines) { put(line, L + 3, y); y += 3.2; }
 
     if (noteLines.length > 0) {
       ink();
@@ -515,6 +690,14 @@ export async function buildReportDoc(footages: Footage[], lang: ReportLang, meta
   soft();
   doc.setFontSize(6.5);
   for (const line of wrap(tr(lang, "rep.method"), W)) {
+    put(line, L, y);
+    y += 3.2;
+  }
+  /* How the environmental figures above were arrived at, said once at the
+     bottom rather than repeated under every sortie: named products, named
+     slices, no averaging between sources, and a gap stated as a gap. */
+  y += 1.6;
+  for (const line of wrap(tr(lang, "rep.envMethod"), W)) {
     put(line, L, y);
     y += 3.2;
   }
