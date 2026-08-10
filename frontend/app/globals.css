@@ -526,3 +526,61 @@ a:focus-visible {
   70%  { transform: scale(1.15); opacity: 0; }
   100% { transform: scale(1.15); opacity: 0; }
 }
+
+/* The counting scan. While the engine is looking at a frame, that frame is on
+   screen and a signal-green line sweeps down it — the second thing in this
+   design allowed the accent, because a count in flight genuinely is live.
+   The sweep is not a measurement and never pretends to be one: when the engine
+   reports frames, the honest figures sit under the image; when it reports
+   nothing, the sweep says the machine is awake and nothing more.
+   One transform on one absolutely-positioned band — no canvas, no per-frame
+   JavaScript, and the compositor carries it whatever else the tab is doing. */
+@keyframes scan-sweep {
+  from { transform: translateY(-100%); }
+  to   { transform: translateY(400%); }
+}
+/* The band is a quarter of the frame tall, so -100%…400% of ITSELF is exactly
+   -25%…100% of the image: the line enters above the top edge and leaves below
+   the bottom one, and the gradient trails behind it like an afterglow. */
+.scan-sweep {
+  height: 25%;
+  background: linear-gradient(to bottom, rgb(63 216 163 / 0), rgb(63 216 163 / 0.13));
+  animation: scan-sweep 2.4s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+.scan-sweep::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: var(--accent);
+  box-shadow: 0 0 7px 1px rgb(63 216 163 / 0.5);
+}
+/* The scale the sweep is read against: tick marks down one edge, at decoration
+   weight, drawn by a gradient rather than by a stack of elements. */
+.scan-ticks {
+  background-image: repeating-linear-gradient(
+    to bottom,
+    var(--ink-4) 0,
+    var(--ink-4) 1px,
+    transparent 1px,
+    transparent 11px
+  );
+  opacity: 0.45;
+}
+/* The count landing. One short rise, once — a plate settling onto the frame,
+   not something that keeps moving after it has been read. */
+@keyframes scan-land {
+  from { opacity: 0; transform: translateY(3px); }
+  to   { opacity: 1; transform: none; }
+}
+.scan-land { animation: scan-land 0.22s ease-out both; }
+
+/* Motion refused. The sweep holds still at mid-frame rather than disappearing:
+   the frame is still under the instrument, and the figures below it — which
+   were always the real report — carry the state on their own. */
+@media (prefers-reduced-motion: reduce) {
+  .scan-sweep { animation: none; transform: translateY(150%); }
+  .scan-land { animation: none; }
+}

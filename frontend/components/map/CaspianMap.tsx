@@ -7,6 +7,8 @@ import { footagesInRange, detectionsFor } from "@/lib/analytics/brush";
 import type { Detection } from "@/lib/types";
 import { useT } from "@/lib/i18n";
 import { parseLatLng } from "@/lib/parsers/latlng";
+import { Button } from "@/components/ui/primitives";
+import { setMode } from "@/lib/modes";
 
 // Caspian bounds
 const CASPIAN_BOUNDS: [[number, number],[number,number]] = [[46,36],[55,48]];
@@ -291,6 +293,9 @@ export default function CaspianMap({
      readout states a different precision for each, because the store
      rounds one of them and keeps the other verbatim. */
   const pinEntry = useIngestStore(s=>s.pinEntry);
+  /* Which file is waiting for this point, if any. The card's Confirm exists
+     only when there is one to apply it to. */
+  const pinTarget = useIngestStore(s=>s.pinTarget);
   const setPinPoints = useFootageStore(s=>s.setPinPoints);
   /* Depend on the two booleans, not on the layerState object: setLayer hands
      back a fresh object every toggle, so an effect keyed on the object re-ran
@@ -1056,6 +1061,17 @@ export default function CaspianMap({
               const m = mapRef.current;
               if(m){ try{ m.easeTo({ center:[p.lng, p.lat], duration: 250 }); }catch{} }
             }}
+            /* Only when a file is actually waiting for this point. An anchor
+               with no owner has nothing to confirm INTO, so the card offers no
+               Confirm and does not promise one — Загрузка says what to do with
+               it (ingest.anchorNoOwner). */
+            onConfirm={pinTarget ? () => {
+              /* The same store action the queue row's Confirm runs, and then
+                 the trip back: the point was placed here, the file it belongs
+                 to is over there, and leaving somebody on the map wondering
+                 whether it took was the whole complaint. */
+              if (useIngestStore.getState().applyPin()) setMode("ingest");
+            } : undefined}
           />
         )}
       </div>
@@ -1120,6 +1136,7 @@ export function PinReadout({
   zoom,
   entry,
   onChange,
+  onConfirm,
 }: {
   value: { lat: number; lng: number } | null;
   zoom: number | null;
@@ -1129,6 +1146,10 @@ export function PinReadout({
    *  and the label used to claim the click's for both. */
   entry?: "click" | "typed" | null;
   onChange: (p: { lat: number; lng: number }) => void;
+  /** Accept the point and hand it to whatever is waiting for it. Absent when
+   *  nothing is: then this card only reports and sets a coordinate, and it
+   *  promises no Confirm it does not have. */
+  onConfirm?: () => void;
 }) {
   const { t } = useT();
   const [text, setText] = useState("");
@@ -1136,11 +1157,21 @@ export function PinReadout({
   const typed = entry === "typed";
 
   const apply = () => {
+    const raw = text.trim();
+    /* An empty box over a point that is already on the map is not a mistake:
+       the operator clicked the map and then pressed the only button on the
+       card. Answering that with the red parse error read as "your click was
+       refused, type it instead" — so it accepts the click instead. */
+    if (!raw && value && onConfirm) {
+      setBad(false);
+      onConfirm();
+      return;
+    }
     /* One shared parser, and a pure one. Inline here it rejected the most
        common paste in the world — "43.65,51.18", straight out of Google Maps —
        because it normalised decimal commas before it split on the separator.
        lib/parsers/latlng.ts has that case in its selftest now. */
-    const p = parseLatLng(text);
+    const p = parseLatLng(raw);
     if (!p) {
       setBad(true);
       return;
@@ -1148,11 +1179,17 @@ export function PinReadout({
     setBad(false);
     setText("");
     onChange(p);
+    /* Typed, set, done — the same one gesture the Confirm button is. Without
+       this the coordinate landed and the operator was left on the map with no
+       sign that anything had been accepted. */
+    onConfirm?.();
   };
 
   return (
     <div className="plate px-2.5 py-2 max-w-[260px]">
-      <div className="text-2xs text-ink3">{value ? t("map.anchorSet") : t("map.clickCentre")}</div>
+      <div className="text-2xs text-ink3">
+        {value ? (onConfirm ? t("map.anchorSet") : t("map.anchorSetOrphan")) : t("map.clickCentre")}
+      </div>
       {value && (
         /* The coordinate is the readout's figure, so it is set like one:
            Inter at reading size with tabular, slashed-zero digits. It used to
@@ -1199,6 +1236,16 @@ export function PinReadout({
         </button>
       </div>
       {bad && <div className="text-2xs text-bad mt-0.5">{t("map.coordBad")}</div>}
+      {/* The promise the card has been making, kept: the point is accepted
+          HERE, where it was placed, and the file that asked for it is taken
+          back up on its own screen. */}
+      {onConfirm && (
+        <div className="mt-2">
+          <Button variant="primary" full disabled={!value} onClick={apply}>
+            {t("btn.confirm")}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

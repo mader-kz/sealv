@@ -64,16 +64,17 @@ export default function IngestMode() {
        of content, centred, with the queue as the wide half — a queue that runs
        the full width of a 27" display is a line of text 200 characters long. */
     <div className="flex-1 min-h-0 overflow-y-auto">
-      {/* 944 = the 640 px queue column + the 40 px gutter + the 264 px survey
-          column, exactly. A wider wrapper would leave the two columns floating
-          apart inside a box neither of them reaches the edge of. */}
-      <div className="mx-auto w-full max-w-[944px] px-6 pt-5 pb-16">
-        <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
-          <h1 className="text-[22px] font-semibold tracking-[-0.028em] text-ink">
-            {t(MODE_LABEL_KEY.ingest)}
-          </h1>
-          <p className="text-xs text-ink3 min-w-0">{t("ingest.pageSub")}</p>
-        </div>
+      {/* One column now, and it is the queue's: the survey details fold behind
+          a disclosure instead of standing permanently to the right, so there is
+          no second column for the wrapper to be wide enough for. 680 px is a
+          filename, a state and a scanned frame — not a 200-character line. */}
+      <div className="mx-auto w-full max-w-[680px] px-6 pt-5 pb-16">
+        {/* The title, and nothing under it. The subtitle sentence explained the
+            mode to somebody who had already chosen it, above a screen whose
+            drop card says the same thing in the imperative. */}
+        <h1 className="text-[22px] font-semibold tracking-[-0.028em] text-ink">
+          {t(MODE_LABEL_KEY.ingest)}
+        </h1>
 
         {/* No countdown. The wait is a second and a half; a ticking number on
             it would be a widget measuring nothing. */}

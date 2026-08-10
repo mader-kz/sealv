@@ -29,6 +29,7 @@ import {
 } from "@/store/useIngestStore";
 import { useFootageStore } from "@/store/useFootageStore";
 import FramePicker from "@/components/upload/FramePicker";
+import ScanStage, { hasScanStage } from "@/components/upload/ScanStage";
 import Icon from "@/components/ui/Icon";
 import { Button } from "@/components/ui/primitives";
 import { setMode } from "@/lib/modes";
@@ -89,10 +90,8 @@ function Row({ item, queuePos, queueTotal }: { item: IngestItem; queuePos: numbe
      to all of it re-renders thirty times a second for a file that is not
      even its own. */
   const pinTarget = useIngestStore((s) => s.pinTarget);
-  const pinEntry = useIngestStore((s) => s.pinEntry);
   const claimPin = useIngestStore((s) => s.claimPin);
-  const setAnchor = useIngestStore((s) => s.setAnchor);
-  const resume = useIngestStore((s) => s.resume);
+  const applyPin = useIngestStore((s) => s.applyPin);
   const dismiss = useIngestStore((s) => s.dismiss);
   const cancel = useIngestStore((s) => s.cancel);
   const retry = useIngestStore((s) => s.retry);
@@ -236,7 +235,12 @@ function Row({ item, queuePos, queueTotal }: { item: IngestItem; queuePos: numbe
                 string that is mostly words. */}
             <span className={`shrink-0 max-w-[56%] text-right text-xs tabular-nums ${tone}`}>{label}</span>
           </div>
-          <Bar value={progress} />
+          {/* While a file is under the engine it is shown, being scanned, at a
+              size a person can actually look at — and the stage carries its own
+              hairline, so the row's bar stands down rather than running a
+              second copy of the same fraction a centimetre away. */}
+          <ScanStage item={item} />
+          {!hasScanStage(item) && <Bar value={progress} />}
           {/* The honest numbers, in one quiet row. They are facts, so they sit
               at the readable floor rather than on the decoration step. */}
           <div className="flex flex-wrap items-baseline gap-x-3 text-2xs text-ink3 tnum mt-1.5">
@@ -323,18 +327,13 @@ function Row({ item, queuePos, queueTotal }: { item: IngestItem; queuePos: numbe
                     video path: the old image branch consumed whatever anchor
                     happened to be armed, with no confirmation, and published a
                     coordinate the photo had no relationship to. */}
+                {/* Same action the map card's Confirm runs — `applyPin` is the
+                    single definition of what confirming a pin does, so the two
+                    buttons cannot come to mean different things. */}
                 <Button
                   variant="primary"
                   disabled={!owningPin || !pinMode || pinPoints.length < 1}
-                  onClick={() => {
-                    const p = pinPoints[0];
-                    if (!p) return;
-                    setAnchor(item.id, { lat: p.lat, lng: p.lng }, pinEntry === "typed" ? "typed" : "pinned");
-                    claimPin(null);
-                    setPinMode(false);
-                    setPinPoints([]);
-                    resume(item.id);
-                  }}
+                  onClick={() => { applyPin(); }}
                 >
                   {t("btn.confirm")}
                 </Button>
@@ -463,19 +462,12 @@ export default function IngestQueue() {
   /* The failed-ingest section is NOT rendered here — the screen mounts it
      below this list, once. Two copies of it a centimetre apart is just noise. */
 
-  /* An empty queue says so. The old panel rendered nothing at all, which on a
-     screen of its own would be a blank half-page that reads as broken rather
-     than as "no files yet". */
-  if (!items.length) {
-    return (
-      <div>
-        {/* Same head and same rule as the list it stands in for, so the column
-            keeps its top edge whether or not anything has been dropped. */}
-        <div className="hd pb-1.5 border-b border-line">{t("ingest.queueEmpty")}</div>
-        <div className="text-xs text-ink3 mt-2.5 leading-relaxed">{t("ingest.queueEmptyHint")}</div>
-      </div>
-    );
-  }
+  /* An empty queue renders NOTHING now. It used to state its own emptiness
+     under its own rule — an honest line, but on an empty screen it stood next
+     to the drop card saying the same thing twice, and two headings over two
+     empty regions is most of what made this mode feel padded. The drop card
+     owns the empty state; this list appears when there is a list. */
+  if (!items.length) return null;
 
   return (
     <div>

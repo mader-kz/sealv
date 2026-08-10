@@ -111,7 +111,11 @@ export default function ReplayView({
   );
 }
 
-function ReplayStage({ f }: { f: Footage }) {
+/* Exported for the ingest scan stage: the moment a count lands is the moment
+   the reader most wants to see it earned, and mounting THIS component inline
+   is what keeps "the replay in the dialog" and "the replay in the row" the
+   same replay forever. */
+export function ReplayStage({ f }: { f: Footage }) {
   const { t, tp } = useT();
 
   /* ------------------------------------------------------------- the marks */

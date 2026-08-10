@@ -127,6 +127,14 @@ export default function Page(){
     // "The last item finished" — a queue of nothing but skipped files never
     // produced a count, and leaving over it would hide the reason it didn't.
     if(!ingestItems.some(i=> i.phase==="done")) return;
+    /* Done is a stage now: a finished count with marks REPLAYS itself in the
+       row, and yanking the reader to the map mid-replay undoes the whole
+       point of showing it. While a replay is on stage the reader leaves when
+       they choose to — the map is one keystroke away. */
+    if(ingestItems.some(i=> i.phase==="done" && (i.pixels?.length ?? 0) > 0)){
+      armed.current = false;
+      return;
+    }
     const timer = window.setTimeout(()=>{
       armed.current = false;
       if(currentMode()==="ingest") setMode("map");
