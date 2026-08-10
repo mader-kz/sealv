@@ -778,14 +778,34 @@ export default function EnvLayer({ map }: { map: any }) {
           <div className="text-ink3 font-mono">
             {hover.cell.lat.toFixed(3)}, {hover.cell.lng.toFixed(3)}
           </div>
+          <div className="text-ink3">
+            {t(sourceKeyFor(chosen.source))} ·{" "}
+            {t("env.slice", { time: formatSliceTime(chosen.measured_at) })}
+          </div>
           {isIce && (
-            <div className="text-ink3">
-              {hoverThickness != null
-                ? `${t(varKeyFor("ice_thickness_m"))}: ${readValue("ice_thickness_m", hoverThickness)}`
-                : t("env.map.noThickness")}
+            /* Thickness is a DIFFERENT product from the ice chart under the
+               cursor — VIIRS 750 m, a four-day composite — so it carries its
+               own source and its own slice, for the same reason the wind
+               arrows do: one provenance line cannot stand for two
+               measurements, and this one used to print a VIIRS thickness
+               under the name of the IMS chart. */
+            <div className="text-ink3 mt-0.5 border-t border-line pt-0.5">
+              {hoverThickness != null && thicknessLayer ? (
+                <>
+                  <div>
+                    {t(varKeyFor("ice_thickness_m"))}:{" "}
+                    {readValue("ice_thickness_m", hoverThickness)}
+                  </div>
+                  <div>
+                    {t(sourceKeyFor(thicknessLayer.source))} ·{" "}
+                    {t("env.slice", { time: formatSliceTime(thicknessLayer.measured_at) })}
+                  </div>
+                </>
+              ) : (
+                t("env.map.noThickness")
+              )}
             </div>
           )}
-          <div className="text-ink3">{t(sourceKeyFor(chosen.source))}</div>
         </div>
       )}
     </>
