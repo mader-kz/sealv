@@ -51,7 +51,7 @@ import { isWater } from "@/lib/caspian";
 import { useFootageStore } from "@/store/useFootageStore";
 import { getOperator } from "@/lib/identity";
 import { translate, plural, useLangStore, type I18nKey } from "@/lib/i18n";
-import type { Footage, TrackPoint } from "@/lib/types";
+import type { DetectionPixel, Footage, TrackPoint } from "@/lib/types";
 import {
   extractFrames,
   exportFrame,
@@ -180,6 +180,12 @@ export type IngestItem = {
     kind: string | null;
   };
   result?: { best: number | null; low: number | null; high: number | null; unplaced: number };
+  /** Where the engine put its marks on this file, in the frame's own pixels.
+   *  Kept on the row so the finished ingest can show the marks ON the frame it
+   *  just scanned, without a round trip to the archive for a run the operator
+   *  is still watching. The footage store owns the same list for everything
+   *  downstream; this copy is the queue's own, and dies with the row. */
+  pixels?: DetectionPixel[];
   startedAt: number;
 };
 
@@ -474,6 +480,13 @@ type IngestStore = {
   clearAnchor: (id: string) => void;
   claimPin: (id: string | null) => void;
   notePin: (entry: "click" | "typed", zoom: number | null) => void;
+  /** Give the map's current pin to the file that claimed it, and let that file
+   *  carry on. The ONE definition of what confirming a pin means — the queue
+   *  row and the map card both call it, so the two gestures cannot drift into
+   *  applying different things. False when there was nothing to apply (no file
+   *  owns the pin, or no point has been placed), which is the caller's cue to
+   *  do nothing at all rather than to report a success. */
+  applyPin: (p?: { lat: number; lng: number }) => boolean;
   setMeta: (patch: Partial<IngestMeta>) => void;
   setMetaOpen: (v: boolean) => void;
   dismiss: (id: string) => void;
@@ -565,6 +578,27 @@ export const useIngestStore = create<IngestStore>((set, get) => ({
   clearAnchor: (id) => patch(id, { anchor: null, anchorSource: undefined, anchorZoom: null }),
   claimPin: (id) => set({ pinTarget: id }),
   notePin: (entry, zoom) => set({ pinEntry: entry, pinZoom: zoom }),
+
+  /* Confirming a pin, once, for both buttons that offer it. An anchor with no
+     owner is never consumed: a coordinate applied to whichever file happened
+     to be next is exactly the inheritance this store was rewritten to stop. */
+  applyPin: (p) => {
+    const id = get().pinTarget;
+    if (!id) return false;
+    const fs = useFootageStore.getState();
+    const point = p ?? fs.pinPoints[0] ?? null;
+    if (!point) return false;
+    if (!itemOf(id)) return false;
+    get().setAnchor(id, point, get().pinEntry === "typed" ? "typed" : "pinned");
+    /* The pin is spent: released from the store and taken off the map, so the
+       next locationless row can claim it and start from an empty map rather
+       than from the last file's point. */
+    set({ pinTarget: null, pinEntry: null });
+    fs.setPinPoints([]);
+    fs.setPinMode(false);
+    get().resume(id);
+    return true;
+  },
 
   setMeta: (p) => {
     const next: IngestMeta = { ...get().meta, ...p };
@@ -1139,6 +1173,8 @@ async function runItem(id: string): Promise<void> {
         high: result.count?.high ?? null,
         unplaced,
       },
+      /* The marks, for the row that is about to draw them on the frame. */
+      pixels,
     });
     const bandTxt =
       result.count && result.count.low != null && result.count.high != null && result.count.low !== result.count.high

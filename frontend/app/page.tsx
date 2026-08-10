@@ -8,6 +8,7 @@ import ReviewMode from "@/components/modes/ReviewMode";
 import IngestMode from "@/components/modes/IngestMode";
 import ArchiveMode from "@/components/modes/ArchiveMode";
 import ReportMode from "@/components/modes/ReportMode";
+import ManageMode from "@/components/modes/ManageMode";
 import { useFootageStore } from "@/store/useFootageStore";
 import { isRunning, isWaiting, useIngestStore } from "@/store/useIngestStore";
 import { IconButton } from "@/components/ui/primitives";
@@ -141,6 +142,14 @@ export default function Page(){
     // "The last item finished" — a queue of nothing but skipped files never
     // produced a count, and leaving over it would hide the reason it didn't.
     if(!ingestItems.some(i=> i.phase==="done")) return;
+    /* Done is a stage now: a finished count with marks REPLAYS itself in the
+       row, and yanking the reader to the map mid-replay undoes the whole
+       point of showing it. While a replay is on stage the reader leaves when
+       they choose to — the map is one keystroke away. */
+    if(ingestItems.some(i=> i.phase==="done" && (i.pixels?.length ?? 0) > 0)){
+      armed.current = false;
+      return;
+    }
     const timer = window.setTimeout(()=>{
       armed.current = false;
       if(currentMode()==="ingest") setMode("map");
@@ -185,6 +194,7 @@ export default function Page(){
           {mode==="ingest"  && <IngestMode />}
           {mode==="archive" && <ArchiveMode />}
           {mode==="report"  && <ReportMode />}
+          {mode==="manage"  && <ManageMode />}
         </div>
 
         {showInspector && (

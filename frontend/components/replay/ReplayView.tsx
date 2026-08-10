@@ -1,12 +1,14 @@
 "use client";
 /* Count replay: the number, replayed as it was earned. Left — the counted
    frame, every animal appearing dot by dot with the tally ticking up. Right —
-   the same animals landing on their measured coordinates on satellite imagery.
+   the same animals landing on their measured coordinates on satellite imagery,
+   with the media GPS track still shown when scale is missing.
    One clock drives both, so scrubbing the strip scrubs the map.
 
    This is presentation over the archive, not a second pipeline: the dots are
    the run's own points in the reference frame's pixel space, the positions are
-   the georeferenced lat/lng the worker wrote, and the tally ends on the same
+   the georeferenced lat/lng the worker wrote, and the media track is the
+   location source when individual projection is unavailable. The tally ends on the same
    mark count the Evidence view's header states. Nothing here is animated that
    was not measured.
 
@@ -44,14 +46,17 @@ type Mark = {
    the basemap is the subject's habitat rather than context, and dots landing on
    real shoreline read as evidence in a way dots on grey water do not. GL cannot
    read CSS vars, so --accent is baked in — same note as CaspianMap. */
-const ACCENT = "#e0a13c";
+const ACCENT = "#3fd8a3";
 const SAT_STYLE: any = {
   version: 8,
   sources: {
     esri: {
       type: "raster",
       tiles: [
-        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        /* blankTile=false: missing imagery 404s instead of serving a grey
+           placeholder plate, and MapLibre keeps the overzoomed parent
+           imagery on screen — same note as CaspianMap. */
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}?blankTile=false",
       ],
       tileSize: 256,
       attribution: "Esri",
@@ -90,7 +95,7 @@ export default function ReplayView({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         aria-describedby={undefined}
-        className="max-w-[94vw] w-[94vw] h-[88vh] p-0 gap-0 flex flex-col overflow-hidden bg-surface border-line rounded"
+        className="max-w-[94vw] w-[94vw] h-[88vh] p-0 gap-0 flex flex-col overflow-hidden bg-surface border-line"
       >
         <DialogHeader className="flex-row items-baseline gap-3 space-y-0 px-4 py-3 pr-12 border-b border-line shrink-0">
           <DialogTitle className="text-sm font-medium text-ink tracking-normal">
@@ -106,7 +111,11 @@ export default function ReplayView({
   );
 }
 
-function ReplayStage({ f }: { f: Footage }) {
+/* Exported for the ingest scan stage: the moment a count lands is the moment
+   the reader most wants to see it earned, and mounting THIS component inline
+   is what keeps "the replay in the dialog" and "the replay in the row" the
+   same replay forever. */
+export function ReplayStage({ f }: { f: Footage }) {
   const { t, tp } = useT();
 
   /* ------------------------------------------------------------- the marks */
@@ -134,6 +143,17 @@ function ReplayStage({ f }: { f: Footage }) {
   }, [f]);
   const n = marks.length;
   const placedMarks = useMemo(() => marks.filter((m) => m.placed), [marks]);
+  const trackPoints = useMemo(
+    () => f.track.filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng)),
+    [f.track],
+  );
+  const mapTrackPoints = useMemo(() => {
+    if (trackPoints.length > 0) return trackPoints;
+    return Number.isFinite(f.center.lat) && Number.isFinite(f.center.lng)
+      ? [{ t: 0, lat: f.center.lat, lng: f.center.lng }]
+      : [];
+  }, [f.center, trackPoints]);
+  const hasMapPosition = placedMarks.length > 0 || mapTrackPoints.length > 0;
   const durationMs = Math.min(MAX_MS, Math.max(MIN_MS, n * MS_PER_MARK));
 
   /* -------------------------------------------------------------- the frame */
@@ -231,33 +251,77 @@ function ReplayStage({ f }: { f: Footage }) {
     const fit = Math.min(box.w / d.w, box.h / d.h);
     const ox = (box.w - d.w * fit) / 2;
     const oy = (box.h - d.h * fit) / 2;
-    /* 0.35% of the displayed frame width — the Evidence view's radius rule. */
-    const r = Math.max(1.75, Math.min(5, d.w * fit * 0.0035));
-    ctx.beginPath();
+    /* Half a percent of the displayed frame width — deliberately larger than
+       the Evidence view's 0.35% rule. There a mark must stay out of the way
+       of a verdict; here the marks ARE the show, and they have to read from
+       across a room on a demo screen. */
+    const r = Math.max(3, Math.min(9, d.w * fit * 0.006));
+    /* A surveyor's mark, not a signal-green ring: green rings vanish on pale
+       turquoise water, so legibility is carried by a WHITE reticle over a dark
+       halo (that pair survives green water, grey sand and dark rock alike) and
+       the accent survives only as the small centre dot. Still a ring, not a
+       filled dot, so the animal stays visible inside its own mark (the Evidence
+       view's reasoning). Three Path2Ds built once per frame and stroked/filled
+       in five calls, so the marks stay a constant cost at any count. */
+    const ring = new Path2D();
+    const ticks = new Path2D();
+    const cores = new Path2D();
+    const tIn = r * 1.35;
+    const tOut = tIn + r * 0.5;
+    const cr = r * 0.35;
     for (let i = 0; i < kNow; i++) {
       const m = marks[i];
       const x = ox + m.px * fit;
       const y = oy + m.py * fit;
-      ctx.moveTo(x + r, y);
-      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ring.moveTo(x + r, y);
+      ring.arc(x, y, r, 0, Math.PI * 2);
+      ticks.moveTo(x, y - tIn);
+      ticks.lineTo(x, y - tOut);
+      ticks.moveTo(x, y + tIn);
+      ticks.lineTo(x, y + tOut);
+      ticks.moveTo(x - tIn, y);
+      ticks.lineTo(x - tOut, y);
+      ticks.moveTo(x + tIn, y);
+      ticks.lineTo(x + tOut, y);
+      cores.moveTo(x + cr, y);
+      cores.arc(x, y, cr, 0, Math.PI * 2);
     }
+    const ringW = Math.max(1.2, r * 0.34);
+    const tickW = Math.max(1, ringW * 0.7);
+    ctx.lineCap = "butt";
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = "rgba(0,0,0,0.5)";
+    ctx.lineWidth = ringW + 2.5;
+    ctx.stroke(ring);
+    ctx.lineWidth = tickW + 2;
+    ctx.stroke(ticks);
+    ctx.strokeStyle = "rgba(255,255,255,0.95)";
+    ctx.lineWidth = ringW;
+    ctx.stroke(ring);
+    ctx.lineWidth = tickW;
+    ctx.stroke(ticks);
     ctx.fillStyle = ACCENT;
-    ctx.globalAlpha = 0.7;
-    ctx.fill();
-    ctx.strokeStyle = "rgba(255,255,255,0.85)";
-    ctx.lineWidth = Math.max(0.5, r * 0.3);
-    ctx.globalAlpha = 0.9;
-    ctx.stroke();
-    /* The newest arrivals pop — an expanding, fading ring over the dot. */
+    ctx.fill(cores);
+    /* The newest arrivals pop — an expanding, fading ACCENT ring (a live state,
+       so it keeps the signal colour) with a brief white core flash under it. */
     for (let i = Math.max(0, kNow - 14); i < kNow; i++) {
       const age = tRef.current - (i + 1) * per;
       if (age < 0 || age > POP_MS) continue;
       const p = age / POP_MS;
       const m = marks[i];
+      const x = ox + m.px * fit;
+      const y = oy + m.py * fit;
+      if (p < 0.34) {
+        ctx.beginPath();
+        ctx.arc(x, y, r * 0.55, 0, Math.PI * 2);
+        ctx.fillStyle = "#ffffff";
+        ctx.globalAlpha = (1 - p * 3) * 0.9;
+        ctx.fill();
+      }
       ctx.beginPath();
-      ctx.arc(ox + m.px * fit, oy + m.py * fit, r * (1 + 2.6 * p), 0, Math.PI * 2);
+      ctx.arc(x, y, r * (1 + 2.6 * p), 0, Math.PI * 2);
       ctx.strokeStyle = ACCENT;
-      ctx.lineWidth = Math.max(1, r * 0.5);
+      ctx.lineWidth = Math.max(1, r * 0.45);
       ctx.globalAlpha = (1 - p) * 0.9;
       ctx.stroke();
     }
@@ -377,9 +441,32 @@ function ReplayStage({ f }: { f: Footage }) {
     }),
     [placedMarks],
   );
+  const trackFc = useMemo(
+    () => ({
+      type: "FeatureCollection" as const,
+      features: [
+        ...(mapTrackPoints.length > 1
+          ? [{
+              type: "Feature" as const,
+              geometry: {
+                type: "LineString" as const,
+                coordinates: mapTrackPoints.map((p) => [p.lng, p.lat]),
+              },
+              properties: {},
+            }]
+          : []),
+        ...mapTrackPoints.map((p) => ({
+          type: "Feature" as const,
+          geometry: { type: "Point" as const, coordinates: [p.lng, p.lat] },
+          properties: {},
+        })),
+      ],
+    }),
+    [mapTrackPoints],
+  );
 
   useEffect(() => {
-    if (placedMarks.length === 0) return;
+    if (!hasMapPosition) return;
     let disposed = false;
     (async () => {
       /* Imported here, not at module top: this component sits in the static
@@ -397,6 +484,36 @@ function ReplayStage({ f }: { f: Footage }) {
       if (process.env.NODE_ENV === "development") (window as any).__replayMap = map;
       map.on("load", () => {
         if (disposed) return;
+        map.addSource("replay-track", { type: "geojson", data: trackFc });
+        if (mapTrackPoints.length > 1) {
+          map.addLayer({
+            id: "replay-track-line",
+            type: "line",
+            source: "replay-track",
+            filter: ["==", ["geometry-type"], "LineString"],
+            paint: {
+              "line-color": ACCENT,
+              "line-width": 2,
+              "line-opacity": 0.72,
+              "line-dasharray": [2, 2],
+            },
+          });
+        }
+        if (mapTrackPoints.length > 0) {
+          map.addLayer({
+            id: "replay-track-points",
+            type: "circle",
+            source: "replay-track",
+            filter: ["==", ["geometry-type"], "Point"],
+            paint: {
+              "circle-color": "#0d0f11",
+              "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 4, 16, 7, 18, 9],
+              "circle-stroke-color": ACCENT,
+              "circle-stroke-width": 2,
+              "circle-opacity": 0.95,
+            },
+          });
+        }
         map.addSource("replay", { type: "geojson", data: fc });
         map.addLayer({
           id: "replay-dots",
@@ -408,8 +525,8 @@ function ReplayStage({ f }: { f: Footage }) {
             "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 2, 12, 3.5, 16, 7, 18, 10],
             "circle-opacity": 0.85,
             "circle-stroke-color": "#ffffff",
-            "circle-stroke-width": 0.8,
-            "circle-stroke-opacity": 0.85,
+            "circle-stroke-width": 1.5,
+            "circle-stroke-opacity": 0.9,
           },
         });
         /* The landing flash: the single newest dot, big and soft under the
@@ -430,8 +547,17 @@ function ReplayStage({ f }: { f: Footage }) {
           "replay-dots",
         );
         const b = new maplibregl.LngLatBounds();
+        for (const p of mapTrackPoints) b.extend([p.lng, p.lat]);
         for (const m of placedMarks) b.extend([m.lng, m.lat]);
-        map.fitBounds(b, { padding: 70, maxZoom: 16, duration: 0 });
+        /* How deep the camera may go depends on what the position IS. Placed
+           animals are a measured colony on a shoreline — imagery there runs
+           deep, and the cluster deserves a close look. A track fix or a
+           hand-dropped pin is one point of rough provenance: fitting z16 onto
+           it fakes precision the pin does not have, and over open water the
+           imagery bottoms out around z11 — deeper tiles are served as grey
+           "map data not yet available" plates. */
+        const camMax = placedMarks.length > 0 ? 15 : 11;
+        map.fitBounds(b, { padding: 70, maxZoom: camMax, duration: 0 });
         mapReadyRef.current = true;
         mapKRef.current = -1;
         /* The dialog is still animating open when `load` fires, so the first
@@ -441,7 +567,7 @@ function ReplayStage({ f }: { f: Footage }) {
         setTimeout(() => {
           if (disposed) return;
           map.resize();
-          map.fitBounds(b, { padding: 70, maxZoom: 16, duration: 0 });
+          map.fitBounds(b, { padding: 70, maxZoom: camMax, duration: 0 });
         }, 300);
         sync();
       });
@@ -456,7 +582,7 @@ function ReplayStage({ f }: { f: Footage }) {
        throttle state, and tearing the GL map down over that would restart the
        basemap mid-replay. The ref pattern above is what it actually needs. */
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [placedMarks, fc]);
+  }, [fc, hasMapPosition, mapTrackPoints, placedMarks, trackFc]);
 
   const low = f.band?.low ?? null;
   const best = f.band?.best ?? null;
@@ -465,11 +591,15 @@ function ReplayStage({ f }: { f: Footage }) {
 
   return (
     <>
-      <div className="flex-1 grid grid-cols-1 md:grid-cols-2 min-h-0">
-        {/* ------------------------------------------------------ the frame */}
+      {/* One pane: the frame IS the stage. The replay opens from the map,
+          so the place is already on screen behind this dialog — a second map
+          in here split the reader's attention with a pane of open water. The
+          GL map code below stays but never mounts (mapWrapRef never renders),
+          so restoring the split is a layout change, not an excavation. */}
+      <div className="flex-1 flex min-h-0">
         <div
           ref={wrapRef}
-          className="relative bg-bg min-h-0 overflow-hidden border-b md:border-b-0 md:border-r border-line"
+          className="relative bg-bg flex-1 min-h-0 overflow-hidden"
         >
           {frame === "loading" && (
             <div className="absolute inset-0 grid place-items-center">
@@ -501,7 +631,7 @@ function ReplayStage({ f }: { f: Footage }) {
           )}
           {/* The tally. The digits are ref-written every tick; the label and
               the end-state range are the throttled React half. */}
-          <div className="absolute top-3 left-3 rounded border border-line bg-bg/75 backdrop-blur px-3.5 py-2.5">
+          <div className="absolute top-3 left-3 plate px-3.5 py-2.5">
             <div className="flex items-baseline gap-2">
               <span ref={counterRef} className="text-hero tnum font-medium leading-none">
                 0
@@ -515,21 +645,8 @@ function ReplayStage({ f }: { f: Footage }) {
               </div>
             )}
           </div>
-        </div>
-
-        {/* -------------------------------------------------------- the map */}
-        <div className="relative min-h-0 bg-bg">
-          {placedMarks.length > 0 ? (
-            <div ref={mapWrapRef} className="absolute inset-0" />
-          ) : (
-            <div className="absolute inset-0 grid place-items-center p-6 text-center">
-              <span className="text-xs text-ink3 max-w-[240px] leading-relaxed">
-                {t("misc.notPlaced")}
-              </span>
-            </div>
-          )}
           {!!f.unplaced && placedMarks.length > 0 && (
-            <span className="absolute bottom-2 left-2.5 text-2xs text-ink3 bg-bg/75 backdrop-blur rounded px-1.5 py-0.5">
+            <span className="absolute bottom-2 left-2.5 plate text-2xs text-ink3 px-1.5 py-0.5">
               {t("insp.withoutCoords", { n: f.unplaced })}
             </span>
           )}
@@ -554,7 +671,7 @@ function ReplayStage({ f }: { f: Footage }) {
           defaultValue={0}
           aria-label={t("replay.title")}
           onInput={(e) => seek(Number(e.currentTarget.value) / 1000)}
-          className="flex-1 h-1 accent-[#e0a13c] cursor-pointer"
+          className="flex-1 h-1 accent-accent cursor-pointer"
         />
         <span className="text-2xs tnum text-ink3 shrink-0">
           {n} · {Math.round(durationMs / 1000)}

@@ -20,12 +20,15 @@ export type IconName =
   | "target"
   | "chevronLeft"
   | "chevronRight"
+  | "chevronUp"
+  | "chevronDown"
   | "check"
   | "alert"
   | "copy"
   | "trash"
   | "play"
-  | "pause";
+  | "pause"
+  | "settings";
 
 const paths: Record<IconName, React.ReactNode> = {
   map: <><path d="M2 4.5 6 3l4 1.5L14 3v8.5L10 13 6 11.5 2 13z" /><path d="M6 3v8.5M10 4.5V13" /></>,
@@ -42,12 +45,15 @@ const paths: Record<IconName, React.ReactNode> = {
   target: <><circle cx="8" cy="8" r="5.5" /><circle cx="8" cy="8" r="1.5" /></>,
   chevronLeft: <><path d="m9.5 3.5-5 4.5 5 4.5" /></>,
   chevronRight: <><path d="m6.5 3.5 5 4.5-5 4.5" /></>,
+  chevronUp: <><path d="m3.5 9.5 4.5-5 4.5 5" /></>,
+  chevronDown: <><path d="m3.5 6.5 4.5 5 4.5-5" /></>,
   check: <><path d="m3 8.5 3.2 3L13 4.5" /></>,
   alert: <><path d="M8 2.5 14.5 13.5h-13z" /><path d="M8 6.5v3M8 11.6v.01" /></>,
   copy: <><rect x="5.5" y="5.5" width="8" height="8" rx="1" /><path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2" /></>,
   trash: <><path d="M3 4.5h10M6.5 4.5v-1a1 1 0 0 1 1-1h1a1 1 0 0 1 1 1v1" /><path d="M4.5 4.5 5 13a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1l.5-8.5" /></>,
   play: <path d="M5.5 3.5v9l7.5-4.5z" />,
   pause: <path d="M5.5 3.5v9M10.5 3.5v9" />,
+  settings: <><circle cx="8" cy="8" r="2.2" /><path d="M8 2.2v1.3M8 12.5v1.3M2.2 8h1.3M12.5 8h1.3M3.9 3.9l.9.9M11.2 11.2l.9.9M12.1 3.9l-.9.9M4.8 11.2l-.9.9" /></>,
 };
 
 export default function Icon({

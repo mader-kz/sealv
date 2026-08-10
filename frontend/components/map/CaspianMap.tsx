@@ -13,6 +13,8 @@ import { EvidenceFrame } from "@/components/evidence/EvidenceView";
 import type { Detection, Footage } from "@/lib/types";
 import { localeFor, useT } from "@/lib/i18n";
 import { parseLatLng } from "@/lib/parsers/latlng";
+import { Button } from "@/components/ui/primitives";
+import { setMode } from "@/lib/modes";
 
 // Caspian bounds
 const CASPIAN_BOUNDS: [[number, number],[number,number]] = [[46,36],[55,48]];
@@ -171,7 +173,11 @@ const DARK_STYLE: any = {
     },
     esri: {
       type: "raster",
-      tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
+      // blankTile=false: where imagery runs out, the server answers 404
+      // instead of a grey "map data not yet available" plate — and a raster
+      // tile that errors leaves the overzoomed parent imagery on screen,
+      // which is the honest rendering of "this is as sharp as it gets".
+      tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}?blankTile=false"],
       tileSize: 256,
       attribution: "Esri",
     }
@@ -254,6 +260,17 @@ type ColonyChip = SiteChip & { x: number; y: number; ay: number };
    roughness only costs a few extra pixels of separation, never a swallowed
    click. `ay` keeps the true anchor so a displaced chip can draw a stalk back
    to the coordinate it actually claims. */
+/* How far past the canvas edge a chip may still be worth rendering. Inside
+   this margin a chip is partly on screen (the layer clips the rest, which is
+   the correct reading — the count is sliding off the edge); beyond it there
+   is nothing to see, so the node is dropped rather than kept alive off-frame.
+   A little wider than the tallest chip so one never pops out of existence
+   while a sliver of it is still legible. */
+const CHIP_CULL_MARGIN = 160;
+const offCanvas = (x: number, y: number, rect: { width: number; height: number }) =>
+  x < -CHIP_CULL_MARGIN || x > rect.width + CHIP_CULL_MARGIN ||
+  y < -CHIP_CULL_MARGIN || y > rect.height + CHIP_CULL_MARGIN;
+
 function separateChips(chips: ColonyChip[]) {
   const H = (c: ColonyChip) =>
     52 + (c.low != null && c.high != null && c.low !== c.high ? 14 : 0) +
@@ -367,6 +384,38 @@ function pointsSignature(pts: Detection[]): string {
   return pts.length + ":" + h;
 }
 
+/* The presence disc — what a site draws when its animals could not be placed.
+   A sortie with no ground-sample-distance yields a count and no coordinates,
+   so at close zoom its chip used to float over empty water while every
+   georeferenced neighbour showed dots and a hull. The disc is the honest mark
+   for that state: it says "this many animals, somewhere in here" and nothing
+   more. It is dashed for exactly that reason — the extent was never measured —
+   and it is drawn ONLY where there are no placed detections, so a measured
+   position is never faked or approximated away. */
+const PRESENCE_VERTICES = 48;
+/* The same equirectangular metre used by lib/colony.ts, restated rather than
+   imported: one circle needs the constant, not the projection machinery. */
+const METERS_PER_DEG = 111320;
+/* Magnitude at a glance, not a confidence radius: 25 seals ≈ 425 m,
+   575 ≈ 900 m, and the clamp keeps it between "visible" and "not a claim
+   about the whole bay". */
+const presenceRadius = (count: number) =>
+  Math.min(1500, Math.max(350, 300 + 25 * Math.sqrt(count)));
+
+function presenceRing(lat: number, lng: number, radiusM: number): number[][] {
+  const cosLat = Math.max(Math.cos((lat * Math.PI) / 180), 0.01);
+  const ring: number[][] = [];
+  for (let i = 0; i < PRESENCE_VERTICES; i++) {
+    const th = (i / PRESENCE_VERTICES) * Math.PI * 2;
+    ring.push([
+      lng + (Math.cos(th) * radiusM) / (cosLat * METERS_PER_DEG),
+      lat + (Math.sin(th) * radiusM) / METERS_PER_DEG,
+    ]);
+  }
+  ring.push(ring[0]); // GeoJSON rings close explicitly
+  return ring;
+}
+
 export default function CaspianMap({
   onMapReady,
   siteChips,
@@ -435,6 +484,9 @@ export default function CaspianMap({
      readout states a different precision for each, because the store
      rounds one of them and keeps the other verbatim. */
   const pinEntry = useIngestStore(s=>s.pinEntry);
+  /* Which file is waiting for this point, if any. The card's Confirm exists
+     only when there is one to apply it to. */
+  const pinTarget = useIngestStore(s=>s.pinTarget);
   const setPinPoints = useFootageStore(s=>s.setPinPoints);
   /* Depend on the individual booleans, not on the layerState object: setLayer hands
      back a fresh object every toggle, so an effect keyed on the object re-ran
@@ -608,6 +660,10 @@ export default function CaspianMap({
       center: AKTAU,
       zoom: 6.8,
       maxBounds: [[42.5,34],[59,50.5]],
+      // Past ~z18 even the deepest coastal imagery is pure overzoom mush and
+      // the wheel only manufactures blur; the survey has nothing to say at
+      // per-stone scale anyway.
+      maxZoom: 18,
       attributionControl: false,
       dragPan: true,
       scrollZoom: true,
@@ -659,6 +715,9 @@ export default function CaspianMap({
         "fill-opacity":["match",["get","region"],"north",0.04,"central",0.018,0.028],
         "fill-antialias":false,
       }});
+      // Sites whose animals were counted but never georeferenced — see the
+      // presence-disc note above the component.
+      map.addSource("presence", { type: "geojson", data: { type:"FeatureCollection", features: [] } });
       // GL cannot read CSS vars, so the ramp is baked in: #e9edf2 is --ink.
       map.addLayer({ id: "footprints-line", type:"line", source:"footprints", paint:{ "line-color":"#e9edf2", "line-width":1, "line-opacity":0.3 } });
       map.addLayer({ id:"footprints-fill", type:"fill", source:"footprints", paint:{ "fill-color":"#e9edf2", "fill-opacity":0.04 } });
@@ -740,6 +799,22 @@ export default function CaspianMap({
         "line-width": ["case",["==",["get","selected"],true], 2, 1],
         "line-opacity": ["case",["==",["get","selected"],true], 1, 0.55],
       }});
+      /* The presence disc. It carries the signal colour because it stands in
+         for a count — but at a seventh of the fill opacity a hull gets, and
+         with a DASHED edge: a solid line would claim a surveyed boundary. GL
+         cannot read CSS vars, so #3fd8a3 is --accent baked in. minzoom 7: at
+         basin zoom the disc is sub-pixel noise under its own chip; it fades in
+         as you approach and is plainly there by ZOOM_COLONY. */
+      map.addLayer({ id:"presence-fill", type:"fill", source:"presence", minzoom: 7, paint:{
+        "fill-color":"#3fd8a3",
+        "fill-opacity":0.07,
+      }});
+      map.addLayer({ id:"presence-line", type:"line", source:"presence", minzoom: 7, paint:{
+        "line-color":"#3fd8a3",
+        "line-width":1.5,
+        "line-opacity":0.55,
+        "line-dasharray":[2,2],
+      }});
       // Individual animals only at close zoom, bare dots, no labels. A verdict
       // is semantic and keeps its colour: validated is --good (#3fd8a3), and
       // an unreviewed dot is plain ink.
@@ -788,6 +863,8 @@ export default function CaspianMap({
       map.on("mouseleave","animal-dots",()=> map.getCanvas().style.cursor= useFootageStore.getState().pinMode?"crosshair":"");
     });
     mapRef.current = map;
+    /* Dev-only handle for driving the camera in automated verification. */
+    if (process.env.NODE_ENV === "development") (window as any).__mainMap = map;
     // The container's width changes with every panel toggle, but the map was
     // created at whatever size the first paint happened to have - 400x300 on
     // a cold load. Without resize() the canvas keeps that stale geometry: the
@@ -1220,6 +1297,34 @@ export default function CaspianMap({
     return (siteChips ?? []).filter(s=> Number.isFinite(s.lat) && Number.isFinite(s.lng));
   },[siteChips, showColonies]);
 
+  /* Presence discs, pushed on the same cadence as the colonies/animals sources:
+     whenever the chips or the placed detections change. A site qualifies only
+     when it HAS a count and none of its sorties contributed a single placed
+     detection — sites with real positions keep their dots and hulls and get no
+     disc, because the disc is an admission that the extent is unknown, not a
+     decoration. Nothing here invents a coordinate: the centre is the site's own
+     centroid and the radius is a function of the count alone. */
+  useEffect(()=>{
+    const map=mapRef.current; if(!map||!mapLoaded) return;
+    const src = map.getSource("presence") as any;
+    if(!src) return;
+    src.setData({
+      type:"FeatureCollection",
+      features: chipAnchors
+        .filter(s=> s.count!=null && s.count>0 &&
+          /* The `-agg` marker is one synthetic dot standing in for a run whose
+             animals could not be placed — the very case the disc exists for.
+             Only a REAL per-animal detection means the extent is measured. */
+          !s.footageIds.some(id=>
+            (placed.byFootage.get(id) ?? []).some(d=> !d.id.endsWith("-agg"))))
+        .map(s=>({
+          type:"Feature",
+          geometry:{ type:"Polygon", coordinates:[presenceRing(s.lat, s.lng, presenceRadius(s.count as number))] },
+          properties:{ key:s.key, count:s.count }
+        }))
+    });
+  },[chipAnchors, placed, mapLoaded]);
+
   useEffect(()=>{
     const map=mapRef.current; if(!map||!mapLoaded) return;
     /* Coalesce through one animation frame. MapLibre fires `move` once per
@@ -1254,11 +1359,18 @@ export default function CaspianMap({
         const chips: ColonyChip[] = [];
         for(const a of chipAnchors){
           const pr = m.project([a.lng, a.lat]);
-          if(rect && (pr.x < -120 || pr.x > rect.width+120 || pr.y < -120 || pr.y > rect.height+120)) continue;
+          if(rect && offCanvas(pr.x, pr.y, rect)) continue;
           chips.push({ ...a, x:pr.x, y:pr.y, ay:pr.y });
         }
         separateChips(chips);
-        setOverlayChips(prev=> sameChips(prev, chips) ? prev : chips);
+        /* Second cull, AFTER displacement: separateChips only ever pushes a
+           chip down, and at basin zoom a stack of coincident sites can push
+           the last one hundreds of pixels past the bottom edge. The layer
+           clips it either way — this keeps it out of the DOM instead of
+           parking a node nobody can see. */
+        const r = rect;
+        const live = r ? chips.filter(c=> !offCanvas(c.x, c.y, r)) : chips;
+        setOverlayChips(prev=> sameChips(prev, live) ? prev : live);
         const projectedAvoidance=avoidanceRegions.map(region=>{
           const point=m.project([region.lng,region.lat]);
           return {...region,x:point.x,y:point.y};
@@ -1555,7 +1667,7 @@ export default function CaspianMap({
           catching clicks meant for the anchor.
           `chipLayerRef` is load-bearing, not decoration: the wheel over a chip
           used to zoom the map underneath it. */}
-      <div ref={chipLayerRef} className={`absolute inset-0 z-[6] pointer-events-none ${pinMode ? "colony-chips-dimmed" : ""}`}>
+      <div ref={chipLayerRef} className={`chip-layer absolute inset-0 z-[6] pointer-events-none ${pinMode ? "colony-chips-dimmed" : ""}`}>
         {overlayChips.map(c=>{
           const isSel = c.key===selectedSiteKey;
           /* Two ways a chip goes quiet, and they are different claims. A site
@@ -1666,6 +1778,17 @@ export default function CaspianMap({
               const m = mapRef.current;
               if(m){ try{ m.easeTo({ center:[p.lng, p.lat], duration: 250 }); }catch{} }
             }}
+            /* Only when a file is actually waiting for this point. An anchor
+               with no owner has nothing to confirm INTO, so the card offers no
+               Confirm and does not promise one — Загрузка says what to do with
+               it (ingest.anchorNoOwner). */
+            onConfirm={pinTarget ? () => {
+              /* The same store action the queue row's Confirm runs, and then
+                 the trip back: the point was placed here, the file it belongs
+                 to is over there, and leaving somebody on the map wondering
+                 whether it took was the whole complaint. */
+              if (useIngestStore.getState().applyPin()) setMode("ingest");
+            } : undefined}
           />
         )}
       </div>
@@ -1937,6 +2060,7 @@ export function PinReadout({
   zoom,
   entry,
   onChange,
+  onConfirm,
 }: {
   value: { lat: number; lng: number } | null;
   zoom: number | null;
@@ -1946,6 +2070,10 @@ export function PinReadout({
    *  and the label used to claim the click's for both. */
   entry?: "click" | "typed" | null;
   onChange: (p: { lat: number; lng: number }) => void;
+  /** Accept the point and hand it to whatever is waiting for it. Absent when
+   *  nothing is: then this card only reports and sets a coordinate, and it
+   *  promises no Confirm it does not have. */
+  onConfirm?: () => void;
 }) {
   const { t } = useT();
   const [text, setText] = useState("");
@@ -1953,11 +2081,21 @@ export function PinReadout({
   const typed = entry === "typed";
 
   const apply = () => {
+    const raw = text.trim();
+    /* An empty box over a point that is already on the map is not a mistake:
+       the operator clicked the map and then pressed the only button on the
+       card. Answering that with the red parse error read as "your click was
+       refused, type it instead" — so it accepts the click instead. */
+    if (!raw && value && onConfirm) {
+      setBad(false);
+      onConfirm();
+      return;
+    }
     /* One shared parser, and a pure one. Inline here it rejected the most
        common paste in the world — "43.65,51.18", straight out of Google Maps —
        because it normalised decimal commas before it split on the separator.
        lib/parsers/latlng.ts has that case in its selftest now. */
-    const p = parseLatLng(text);
+    const p = parseLatLng(raw);
     if (!p) {
       setBad(true);
       return;
@@ -1965,11 +2103,17 @@ export function PinReadout({
     setBad(false);
     setText("");
     onChange(p);
+    /* Typed, set, done — the same one gesture the Confirm button is. Without
+       this the coordinate landed and the operator was left on the map with no
+       sign that anything had been accepted. */
+    onConfirm?.();
   };
 
   return (
     <div className="plate px-2.5 py-2 max-w-[260px]">
-      <div className="text-2xs text-ink3">{value ? t("map.anchorSet") : t("map.clickCentre")}</div>
+      <div className="text-2xs text-ink3">
+        {value ? (onConfirm ? t("map.anchorSet") : t("map.anchorSetOrphan")) : t("map.clickCentre")}
+      </div>
       {value && (
         /* The coordinate is the readout's figure, so it is set like one:
            Inter at reading size with tabular, slashed-zero digits. It used to
@@ -2016,6 +2160,16 @@ export function PinReadout({
         </button>
       </div>
       {bad && <div className="text-2xs text-bad mt-0.5">{t("map.coordBad")}</div>}
+      {/* The promise the card has been making, kept: the point is accepted
+          HERE, where it was placed, and the file that asked for it is taken
+          back up on its own screen. */}
+      {onConfirm && (
+        <div className="mt-2">
+          <Button variant="primary" full disabled={!value} onClick={apply}>
+            {t("btn.confirm")}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

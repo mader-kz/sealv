@@ -11,8 +11,12 @@
  *
  * What is in it, and why each part is here rather than somewhere else:
  *
- *   the name      Editable in place, because naming a place is how this product
- *                 stops printing "42.53, 51.08" at people who know the beach by
+ *   the name      The header IS the place: its name, or — while nobody has named
+ *                 it — its coordinates, which are the only true thing about an
+ *                 unnamed beach. Renaming is an ACTION in the row under the
+ *                 photograph, not a permanent invitation occupying the title:
+ *                 naming a place is how this product stops printing
+ *                 "42.53, 51.08" at people who know the beach by
  *                 name. The write goes through the same reuse-before-create path
  *                 the sortie inspector's SitePicker uses, and for the same
  *                 reason: two site rows over one beach would let a later
@@ -21,16 +25,25 @@
  *   the standing  The one number the season estimate takes from this place: its
  *   count         latest visit that produced one, with that visit's band and
  *                 basis, and the date it was flown. Not a sum over visits —
- *                 summing them would count one haul-out once per flight.
+ *                 summing them would count one haul-out once per flight. It is
+ *                 printed ONCE, here; every caveat that used to be a sentence
+ *                 around it is a muted chip carrying the whole sentence in its
+ *                 tooltip. Nothing is deleted, only demoted: a card whose
+ *                 qualifications are longer than its figure gets read as prose
+ *                 and therefore not read at all.
  *   the dynamics  Every visit, plotted and then written out, from the existing
  *                 SiteDynamics: dots with whiskers, no line between them, gaps
  *                 drawn as gaps. Clicking a visit selects the sortie, which is
- *                 what puts the full sortie inspector on screen.
+ *                 what puts the full sortie inspector on screen. Shown only
+ *                 once there are two counts to have dynamics BETWEEN: one dot
+ *                 is not a trend, and the section under it only restated the
+ *                 hero's count, date, centroid and unnamed-ness.
  *   История       What has been DONE to this place's numbers: counted,
  *                 corrected, retired — assembled from the corrections and
  *                 retirement records the store already hydrates. A corrected
  *                 figure with no visible trace of what it replaced is an
- *                 unsourced number.
+ *                 unsourced number. A single event is always the one count the
+ *                 hero already states, so the section starts at two.
  *   the note      Field notes, read-only. They are written against a sortie, in
  *                 that sortie's own card, and this says so rather than offering
  *                 a second editor that would write to a different row than the
@@ -43,9 +56,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import SiteDynamics from "@/components/dashboard/SiteDynamics";
 import { EvidenceFrame } from "@/components/evidence/EvidenceView";
-import { Button, IconButton } from "@/components/ui/primitives";
+import ReplayView from "@/components/replay/ReplayView";
+import Icon from "@/components/ui/Icon";
+import { Button, IconButton, Pill } from "@/components/ui/primitives";
 import { createSite, fetchSites, renameSite } from "@/lib/api";
 import { formatDate } from "@/lib/analytics/brush";
+import { reviewStats } from "@/lib/analytics/review";
 import { SITE_RADIUS_M, siteSeries, type Site } from "@/lib/analytics/surveys";
 import { basisText, useT } from "@/lib/i18n";
 import type { Footage } from "@/lib/types";
@@ -61,6 +77,23 @@ function metresBetween(
   const mPerDeg = 111320;
   const cos = Math.max(Math.cos((((a.lat + b.lat) / 2) * Math.PI) / 180), 0.01);
   return Math.hypot((a.lng - b.lng) * cos * mPerDeg, (a.lat - b.lat) * mPerDeg);
+}
+
+/** A caveat, worn small. The chip says the short of it and the tooltip carries
+ *  the sentence this card used to print in full next to the figure — the
+ *  qualification is not gone, it is simply no longer louder than the number it
+ *  qualifies. Neutral tone on purpose: the accent belongs to the standing
+ *  estimate alone, and a green warning would claim the opposite of what it
+ *  says. */
+function Chip({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <span
+      title={title}
+      className="inline-flex items-center h-5 px-1.5 border border-hair cursor-help"
+    >
+      <Pill tone="neutral">{children}</Pill>
+    </span>
+  );
 }
 
 /** One line of История. `t` is the instant it happened; a record with no
@@ -222,8 +255,12 @@ export default function SiteCard({
     () => photoVisits.find((f) => f.id === shownId) ?? photoVisits[0] ?? null,
     [photoVisits, shownId],
   );
+  /* The count replay, launched from the photograph itself. Held as the
+     footage rather than a boolean so the dialog cannot outlive a site switch
+     and replay some other beach's animals. */
+  const [replayFor, setReplayFor] = useState<Footage | null>(null);
   /* Switching sites must not leave the previous site's frame selected. */
-  useEffect(() => { setShownId(null); }, [site.id]);
+  useEffect(() => { setShownId(null); setReplayFor(null); }, [site.id]);
 
   /* ---------------------------------------------------------- the record */
   const events = useMemo(() => {
@@ -304,6 +341,23 @@ export default function SiteCard({
   const band = standing?.band;
   const hasRange = !!band && band.low != null && band.high != null && band.high > band.low;
 
+  /* Which clock this place's dates are on. The same count SiteDynamics makes
+     for its own note, made here too because the note only appears with the
+     chart, and the chart only appears once there are two counts to compare. */
+  const flown = useMemo(
+    () => series.filter((e) => (e.footage.capturedAt ?? "").trim() !== "").length,
+    [series],
+  );
+  /* Animals the engine counted with no row anyone can open. A fact about the
+     standing figure specifically, so it is read off that visit and not the
+     whole series. */
+  const unreviewable = standing ? reviewStats(standing.footage).unreviewable : 0;
+
+  /* Dynamics needs two counts to be dynamics; one dot is the hero figure drawn
+     again, under a heading that promises a trend. История needs two events for
+     the same reason: a lone "counted 575" is the hero in a list. */
+  const counted = useMemo(() => series.filter((e) => e.best != null).length, [series]);
+
   const open = (id: string) => select(id);
 
   return (
@@ -327,22 +381,22 @@ export default function SiteCard({
             className="w-full bg-transparent border-0 border-b border-line px-0 pb-1 text-base font-semibold tracking-tight focus:border-ink2 transition-colors"
           />
         ) : (
-          /* The name IS the control — click it to type. A named place reads as
-             a heading; an unnamed one reads as its coordinates with the offer
-             to name it, never as a blank field. */
-          <button
-            type="button"
-            onClick={() => setEditing(true)}
-            title={site.name ? t("rec.site.rename") : t("rec.site.nameIt")}
-            className="block w-full text-left pr-6 text-base font-semibold tracking-tight border-b border-transparent hover:border-hair transition-colors"
+          /* The title is the PLACE, not an invitation to type. A named beach
+             reads as its name; an unnamed one reads as the coordinates that
+             identify it, which is the truest heading available and is also the
+             only place on this card coordinates appear. Naming is offered as an
+             action below, where the other things a reader can do to this place
+             already are. */
+          <h2
+            className={`pr-6 text-base font-semibold tracking-tight truncate ${site.name ? "" : "tnum"}`}
+            title={site.name ?? coord}
           >
-            {site.name ?? (
-              <span className="text-ink3 font-normal tnum text-sm">{t("site.namePlaceholder")}</span>
-            )}
-          </button>
+            {site.name ?? coord}
+          </h2>
         )}
         <div className="text-2xs text-ink3 tnum mt-1.5">
-          {coord} · {visits} {tp(visits, "unit.sorties")}
+          {site.name && <>{coord} · </>}
+          {visits} {tp(visits, "unit.sorties")}
         </div>
         <div className="absolute top-3 right-2">
           <IconButton name="close" onClick={onClose} title={t("btn.close")} />
@@ -384,18 +438,46 @@ export default function SiteCard({
                 </span>
                 <span className="text-2xs text-ink3 leading-snug pb-1">
                   {tp(standing.best as number, "unit.seals")}
-                  <br />
-                  {hasRange
-                    ? t("misc.range", { low: band!.low as number, high: band!.high as number })
-                    : t("season.bandNone")}
+                  {hasRange && (
+                    <>
+                      <br />
+                      {t("misc.range", { low: band!.low as number, high: band!.high as number })}
+                    </>
+                  )}
                 </span>
               </div>
-              <p className="text-2xs text-ink3 mt-2.5 leading-relaxed">
+              {/* The date this number was measured on, once, quietly. */}
+              <p className="text-2xs text-ink3 tnum mt-2.5 leading-relaxed">
                 {t("site.standingBy", {
                   when: formatDate(standing.uploadedAt, lang, { day: "numeric", month: "short", year: "numeric" }),
                 })}
                 {band?.basis && <> · {basisText(lang, band.basis)}</>}
               </p>
+              {/* Everything this figure is NOT: no band, dates that are the
+                  count's clock rather than the flight's, animals with no row to
+                  check. Each chip's tooltip is the sentence that used to sit
+                  here in full. */}
+              {(!hasRange || flown < series.length || unreviewable > 0) && (
+                <div className="flex flex-wrap gap-1.5 mt-2.5">
+                  {!hasRange && <Chip title={t("season.bandNone")}>{t("site.chip.noBand")}</Chip>}
+                  {flown < series.length && (
+                    <Chip
+                      title={
+                        flown === 0
+                          ? t("dyn.datesJob")
+                          : t("dyn.datesMixed", { n: flown, m: series.length })
+                      }
+                    >
+                      {t("site.chip.dateJob")}
+                    </Chip>
+                  )}
+                  {unreviewable > 0 && (
+                    <Chip title={t("dash.plusUnreviewable", { n: unreviewable })}>
+                      {t("dyn.unreviewable", { n: unreviewable })}
+                    </Chip>
+                  )}
+                </div>
+              )}
             </>
           ) : (
             <>
@@ -417,24 +499,37 @@ export default function SiteCard({
             sortie, where the full evidence view lives. */}
         {photoVisits.length > 0 && shown && (
           <div className="px-4 pb-4">
+            {/* Pressing the photograph replays the count over it — the number
+                this card leads with, earned again in front of the reader. The
+                badge is an affordance label inside the same button, not a
+                second control; the sortie record keeps its own door in the
+                caption row below. */}
             <button
               type="button"
-              onClick={() => open(shown.id)}
-              title={t("site.openSortie")}
-              className="block w-full text-left group"
+              onClick={() => setReplayFor(shown)}
+              title={t("insp.replay")}
+              className="block w-full text-left group relative"
             >
               <div className="aspect-video bg-bg border border-hair overflow-hidden">
                 <EvidenceFrame mediaId={shown.mediaId as string} pixels={shown.pixels ?? []} />
               </div>
-              <div className="flex items-baseline gap-2 mt-1.5">
-                <span className="text-2xs text-ink3 truncate group-hover:text-ink2 transition-colors">
-                  {shown.filename}
-                </span>
+              <span className="pointer-events-none absolute bottom-2 right-2 plate inline-flex items-center gap-1.5 h-7 px-2.5 text-xs text-ink2 group-hover:text-ink transition-colors">
+                <Icon name="play" size={12} />
+                {t("insp.replay")}
+              </span>
+            </button>
+            {/* Which file this is. Its date only when the frame on screen is
+                NOT the one the standing figure was measured on — otherwise the
+                line under the hero already said it, and saying it twice is how
+                a reader stops believing either. */}
+            <div className="flex items-baseline gap-2 mt-1.5">
+              <span className="text-2xs text-ink3 truncate">{shown.filename}</span>
+              {shown.id !== standing?.footage.id && (
                 <span className="text-2xs text-ink3 tnum ml-auto shrink-0">
                   {formatDate(shown.uploadedAt, lang, { day: "numeric", month: "short" })}
                 </span>
-              </div>
-            </button>
+              )}
+            </div>
 
             {photoVisits.length > 1 && (
               /* Every other photographed visit of this place, smallest useful
@@ -456,25 +551,52 @@ export default function SiteCard({
                 ))}
               </div>
             )}
+
+            {replayFor && (
+              <ReplayView
+                open
+                onOpenChange={(o) => { if (!o) setReplayFor(null); }}
+                footage={replayFor}
+              />
+            )}
           </div>
         )}
 
+        {/* Everything a reader can DO here, in one row, once. These used to be
+            scattered as a badge, an underlined word in a caption and a heading
+            that was secretly a button — three different shapes for three
+            equally ordinary actions. The badge on the photograph stays, because
+            pressing the photograph really does replay the count and a control
+            with no label is not a control. */}
+        <div className="px-4 pb-4 flex flex-wrap gap-2">
+          {shown && (
+            <Button icon="play" onClick={() => setReplayFor(shown)}>
+              {t("insp.replay")}
+            </Button>
+          )}
+          {shown && <Button onClick={() => open(shown.id)}>{t("site.openSortie")}</Button>}
+          <Button onClick={() => setEditing(true)} disabled={editing}>
+            {site.name ? t("rec.site.rename") : t("rec.site.nameIt")}
+          </Button>
+        </div>
+
         {/* Every visit: the chart, then the same visits written out. Reused
             wholesale — this is the component the analytics panel used to hide
-            behind a disclosure, and it was always the right drawing. */}
-        {series.length > 0 && (
+            behind a disclosure, and it was always the right drawing. Two counts
+            minimum: with one, every line of it is the hero repeated. */}
+        {counted >= 2 && (
           <div className="px-4 py-4 border-t border-hair">
             <span className="hd">{t("site.dynamics")}</span>
             <SiteDynamics site={site} series={series} onPick={(f) => open(f.id)} />
           </div>
         )}
 
-        {/* What has been done to these numbers, and by whom. */}
-        <div className="px-4 py-4 border-t border-hair">
-          <span className="hd">{t("site.history")}</span>
-          {events.length === 0 ? (
-            <p className="text-xs text-ink3 mt-2 leading-relaxed">{t("site.historyEmpty")}</p>
-          ) : (
+        {/* What has been done to these numbers, and by whom — once there is
+            more than one thing to say. A single event is always the count the
+            hero figure already is. */}
+        {events.length >= 2 && (
+          <div className="px-4 py-4 border-t border-hair">
+            <span className="hd">{t("site.history")}</span>
             <ul className="mt-2.5">
               {events.map((e) => (
                 <li key={e.key} className="flex gap-2.5 pb-2.5 last:pb-0">
@@ -522,14 +644,20 @@ export default function SiteCard({
                 </li>
               ))}
             </ul>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* A person's own words about the place. Read-only here on purpose. */}
         <div className="px-4 py-4 border-t border-hair">
           <span className="hd">{t("rec.notes.title")}</span>
           {notes.length === 0 ? (
-            <p className="text-xs text-ink4 mt-2 leading-relaxed italic">{t("site.noteEmpty")}</p>
+            <>
+              <p className="text-xs text-ink4 mt-2 leading-relaxed italic">{t("site.noteEmpty")}</p>
+              {/* Where notes DO get written — said once, to the reader who has
+                  none and might otherwise look for an editor here. With notes
+                  on screen it is a footnote about something already visible. */}
+              <p className="text-2xs text-ink4 mt-2.5 leading-relaxed">{t("site.noteWhere")}</p>
+            </>
           ) : (
             <ul className="mt-2.5 space-y-2.5">
               {notes.map((f) => (
@@ -547,7 +675,6 @@ export default function SiteCard({
               ))}
             </ul>
           )}
-          <p className="text-2xs text-ink4 mt-2.5 leading-relaxed">{t("site.noteWhere")}</p>
         </div>
       </div>
     </aside>

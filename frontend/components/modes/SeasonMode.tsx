@@ -37,7 +37,7 @@
  *  - Retired sorties are attached to their site for the RECORD (История) and
  *    are in no figure at all. Withdrawn evidence is still evidence.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import CaspianMap, { type SiteChip } from "@/components/map/CaspianMap";
 import SiteCard from "@/components/map/SiteCard";
 import PopulationTimeline from "@/components/map/PopulationTimeline";
@@ -56,7 +56,7 @@ import {
   type Site,
 } from "@/lib/analytics/surveys";
 import { useT } from "@/lib/i18n";
-import { useMode } from "@/lib/modes";
+import { setMode, useMode } from "@/lib/modes";
 import { Button } from "@/components/ui/primitives";
 import Icon from "@/components/ui/Icon";
 import type { Footage } from "@/lib/types";
@@ -110,6 +110,28 @@ export default function SeasonMode() {
      move of the timeline brush, and closes only when that sortie genuinely
      leaves the season. */
   const [anchorId, setAnchorId] = useState<string | null>(null);
+  const [summaryOpen, setSummaryOpen] = useState(true);
+
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem("sealv-season-summary-open");
+      if (saved != null) setSummaryOpen(saved !== "0");
+    } catch {
+      /* A privacy-restricted browser simply keeps the default open state. */
+    }
+  }, []);
+
+  const toggleSummary = () => {
+    setSummaryOpen((open) => {
+      const next = !open;
+      try {
+        window.localStorage.setItem("sealv-season-summary-open", next ? "1" : "0");
+      } catch {
+        /* Persistence is a convenience, not a reason to disable the control. */
+      }
+      return next;
+    });
+  };
 
   /* ------------------------------------------------------------ the season */
   /* Three sets, and keeping them apart is the whole point. A FAILED ingest is a
@@ -256,11 +278,9 @@ export default function SeasonMode() {
 
   /* ------------------------------------------------------------- the strip */
   const areaText = area.known ? `${formatArea(area.m2, lang)} ${t("unit.ha")}` : "—";
-  const areaSub =
-    [
-      area.unknown ? t("dash.noGsd", { n: area.unknown }) : null,
-      area.assumed ? t("dash.assumedGsd", { n: area.assumed }) : null,
-    ].filter(Boolean).join(" · ") || null;
+  /* No sub-line: the missing/assumed-GSD counts are exactly what the scale
+     trust light on the right states, with the long argument in its tooltip.
+     One strip must not print one caveat twice. */
 
   const unplaced = season.counted.filter((f) => !isPlaced(f)).length;
   const regionalCounts = activeSnapshot;
@@ -277,8 +297,11 @@ export default function SeasonMode() {
   const bandText =
     band.contributing === 0
       ? null
+      /* No band anywhere is a caveat, not a figure — each site's card says it
+         as a chip. A sentence permanently under the hero taught readers to
+         skip that line, which is fatal the day it holds a real range. */
       : band.degenerate === band.contributing
-        ? t("season.bandNone")
+        ? null
         : band.degenerate > 0
           ? t("season.bandPartial", {
               low: band.low, high: band.high, n: band.degenerate, m: band.contributing,
@@ -288,7 +311,8 @@ export default function SeasonMode() {
   return (
     <div className="flex-1 min-h-0 flex flex-col">
       {/* ─────────────────────────────────────────────── the season's reading */}
-      <div className="shrink-0 flex items-center gap-10 px-5 pt-3.5 pb-4 border-b border-line bg-bg overflow-x-auto">
+      <div className={`shrink-0 border-b border-line bg-bg ${summaryOpen ? "flex items-center gap-10 px-5 pt-3.5 pb-4 overflow-x-auto" : "px-5 py-1.5"}`}>
+        {summaryOpen ? <>
         {/* The hero, and the only place the season total is stated on Карта.
             One number in the signal colour; everything beside it is a
             qualification of it and is set as one. */}
@@ -307,7 +331,10 @@ export default function SeasonMode() {
               haul-out twice contributes twice, so it measures EFFORT, not a
               population — and it is stated in those words rather than deleted,
               because it is the number a repeat-survey delta is computed from. */}
-          {season.counted.length > 0 && (
+          {/* Only when it DIFFERS from the estimate: equal, it restates the
+              hero and the sortie readout at once. Different, it is the repeat-
+              survey effort figure and earns its line. */}
+          {season.counted.length > 0 && est.observed !== est.current && (
             <div className="text-2xs text-ink4 tnum mt-1 leading-relaxed">
               {t("est.observedSub", { n: est.observed, m: season.counted.length })}
             </div>
@@ -342,13 +369,18 @@ export default function SeasonMode() {
         <dl className="m-0 shrink-0">
           <Readout
             label={t("season.sites")}
-            value={t("season.sitesOf", { n: sitesWithCount, m: chips.length })}
+            /* All counted is the DEFAULT and prints as the bare total; the
+               ratio and its explanation appear only when they deviate from it.
+               "2 из 2 · все в зачёте" said one thing three ways. */
+            value={
+              sitesWithCount < chips.length
+                ? t("season.sitesOf", { n: sitesWithCount, m: chips.length })
+                : String(chips.length)
+            }
             sub={
               sitesWithCount < chips.length
                 ? t("season.sitesRetired", { n: chips.length - sitesWithCount })
-                : chips.length > 0
-                  ? t("season.sitesAll")
-                  : null
+                : null
             }
             /* What makes two flights one site, on the figure that depends on
                it. The 2 km rule is the reason the estimate does not rise when
@@ -356,11 +388,21 @@ export default function SeasonMode() {
                be told it. */
             title={t("est.basis", { km: SITE_RADIUS_M / 1000 })}
           />
-          <Readout label={t("stat.surveyed")} value={areaText} sub={areaSub} />
+          <Readout label={t("stat.surveyed")} value={areaText} sub={null} />
           <Readout
             label={t("stat.sorties")}
             value={String(season.live.length)}
-            sub={t("season.sortiesSub", { n: season.counted.length, m: unplaced })}
+            /* Quiet zeros: "2 с подсчётом · 0 без координат" under "2" carried
+               no information. Each part prints only when it deviates — fewer
+               counted than flown, or anything unplaced. */
+            sub={
+              [
+                season.counted.length < season.live.length
+                  ? t("season.sortiesCounted", { n: season.counted.length })
+                  : null,
+                unplaced > 0 ? t("season.sortiesNoCoord", { m: unplaced }) : null,
+              ].filter(Boolean).join(" · ") || null
+            }
           />
         </dl>
 
@@ -368,22 +410,18 @@ export default function SeasonMode() {
             because the short form is the reading and the long form is the
             argument behind it. */}
         <div className="ml-auto shrink-0 text-right flex flex-col gap-1.5 pl-6">
-          <p
-            className="text-2xs text-ink3 self-end"
-            style={{ borderBottom: "1px dotted var(--ink-4)", paddingBottom: 2, cursor: "help" }}
-            title={
-              review.reviewable === 0
-                ? t("season.trustReviewNoneLong")
-                : t("season.trustReviewLong", {
-                    n: review.ruled, r: review.reviewable,
-                    v: review.verified, x: review.rejected,
-                  })
-            }
-          >
-            {review.reviewable === 0
-              ? t("season.trustReviewNone")
-              : t("season.trustReview", { pct: reviewPct })}
-          </p>
+          {review.reviewable > 0 && (
+            <p
+              className="text-2xs text-ink3 self-end"
+              style={{ borderBottom: "1px dotted var(--ink-4)", paddingBottom: 2, cursor: "help" }}
+              title={t("season.trustReviewLong", {
+                n: review.ruled, r: review.reviewable,
+                v: review.verified, x: review.rejected,
+              })}
+            >
+              {t("season.trustReview", { pct: reviewPct })}
+            </p>
+          )}
           <p
             className="text-2xs text-ink3 self-end"
             style={{ borderBottom: "1px dotted var(--ink-4)", paddingBottom: 2, cursor: "help" }}
@@ -393,11 +431,54 @@ export default function SeasonMode() {
                 : t("season.trustScaleLong", { a: area.assumed, u: area.unknown })
             }
           >
+            {/* A zero cohort is not said: "предположен у 0" reads as a fact
+                about nothing. Each half prints only when it has members. */}
             {noScale
               ? t("season.trustScaleAll")
-              : t("season.trustScale", { a: area.assumed, u: area.unknown })}
+              : area.assumed > 0 && area.unknown > 0
+                ? t("season.trustScale", { a: area.assumed, u: area.unknown })
+                : area.assumed > 0
+                  ? t("season.trustScaleAssumed", { a: area.assumed })
+                  : t("season.trustScaleUnknown", { u: area.unknown })}
           </p>
         </div>
+        {/* The door for footage, on the screen people actually stand at.
+            Drag-and-drop anywhere already routes to Загрузка; this is the
+            same door for a reader with a mouse and a clip of seals. */}
+        <Button icon="upload" variant="primary" className="shrink-0 self-center" onClick={() => setMode("ingest")}>
+          {t("page.ingest")}
+        </Button>
+        <button
+          type="button"
+          onClick={toggleSummary}
+          title={t("season.collapseSummary")}
+          aria-label={t("season.collapseSummary")}
+          aria-expanded="true"
+          className="shrink-0 inline-flex items-center justify-center w-7 h-7 border border-line text-ink3 hover:text-ink hover:border-ink3 transition-colors"
+        >
+          <Icon name="chevronUp" size={15} />
+        </button>
+        </> : (
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-baseline gap-2 min-w-0">
+              <span className="text-sm tnum text-accent font-medium">{est.current}</span>
+              <span className="text-2xs text-ink3 truncate">{t("season.heroCaption")}</span>
+            </div>
+            <Button icon="upload" variant="primary" className="shrink-0" onClick={() => setMode("ingest")}>
+              {t("page.ingest")}
+            </Button>
+            <button
+              type="button"
+              onClick={toggleSummary}
+              title={t("season.expandSummary")}
+              aria-label={t("season.expandSummary")}
+              aria-expanded="false"
+              className="shrink-0 inline-flex items-center justify-center w-7 h-7 border border-line text-ink3 hover:text-ink hover:border-ink3 transition-colors"
+            >
+              <Icon name="chevronDown" size={15} />
+            </button>
+          </div>
+        )}
       </div>
 
       {/* ────────────────────────────────────────────────────────────── the map */}
@@ -414,19 +495,6 @@ export default function SeasonMode() {
           standingFootageIds={activeSnapshot.standingFootageIds}
           checkpointFootageId={activeCheckpoint?.footageId ?? null}
         />
-
-        {/* What a chip IS. The unit on this map changed — it used to be one per
-            flight — and a reader who assumes otherwise reads three visits to one
-            beach as three colonies. Text over the chart, no plate: it is a
-            caption, not a control. */}
-        <div
-          className="absolute left-5 bottom-6 z-[7] pointer-events-none max-w-[340px] text-2xs text-ink4 leading-relaxed"
-          style={{ textShadow: "0 1px 4px #000, 0 0 10px #000" }}
-        >
-          <p><b className="text-ink3 font-medium">{t("season.legendChip")}</b></p>
-          <p>{t("season.legendSpark")}</p>
-          <p>{t("season.legendRetired")}</p>
-        </div>
 
         {/* Nothing to show yet — said over the chart rather than in place of it,
             so the coast the season will be measured on is still on screen. */}
