@@ -1,7 +1,11 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Icon, { type IconName } from "@/components/ui/Icon";
 import { useT } from "@/lib/i18n";
+import { MODE_LABEL_KEY, MODE_ORDER, useMode, type Mode } from "@/lib/modes";
+import { useFootageStore } from "@/store/useFootageStore";
+import { isRunning, isWaiting, useIngestStore } from "@/store/useIngestStore";
+import { seasonReviewStats } from "@/lib/analytics/review";
 import pkg from "@/package.json";
 
 /* Icons alone don't explain themselves to a first-time user, so the rail
@@ -9,19 +13,75 @@ import pkg from "@/package.json";
    compact so the map keeps the space. */
 const STORAGE_KEY = "sealv-rail-open";
 
-export default function Rail({ onWorkbench, onToggleLeft, onToggleAnalytics, leftOpen, rightAnalytics }: { onWorkbench?: ()=>void; onToggleLeft?: ()=>void; onToggleAnalytics?: ()=>void; leftOpen?: boolean; rightAnalytics?: boolean }){
+/* No file/document glyph in the icon set, and `download` is the honest one
+   anyway: the report mode exists to leave the building as a PDF. */
+const MODE_ICON: Record<Mode, IconName> = {
+  map: "map",
+  review: "search",
+  ingest: "upload",
+  archive: "list",
+  report: "download",
+};
+
+/* A count on a rail row is a claim about work, so only numbers with exactly
+   one source get one. Съёмки counts rows in the archive, Загрузка counts the
+   queue in front of you, Проверка counts points nobody has ruled on. The map
+   deliberately has none: the season strip inside Карта states the site count
+   and the standing estimate in full, and a second, smaller copy of a number
+   4px from the edge of the screen is an invitation to check two totals against
+   each other. */
+type Badge = { n: number; attention?: boolean; title: string } | null;
+
+export default function Rail() {
   const { t } = useT();
+  const [mode, setMode] = useMode();
   const [open, setOpen] = useState(false);
   /* restore after mount — the static export must hydrate deterministically */
-  useEffect(()=>{ try { if (localStorage.getItem(STORAGE_KEY) === "1") setOpen(true); } catch {} }, []);
-  const toggle = ()=> setOpen(o=>{ const v = !o; try { localStorage.setItem(STORAGE_KEY, v ? "1" : "0"); } catch {} return v; });
+  useEffect(() => { try { if (localStorage.getItem(STORAGE_KEY) === "1") setOpen(true); } catch {} }, []);
+  const toggle = () => setOpen(o => { const v = !o; try { localStorage.setItem(STORAGE_KEY, v ? "1" : "0"); } catch {} return v; });
 
-  const items: { icon: IconName; label: string; active: boolean; onClick?: ()=>void }[] = [
-    { icon: "map", label: t("nav.map"), active: true },
-    { icon: "list", label: t("nav.footage"), active: !!leftOpen, onClick: onToggleLeft },
-    { icon: "chart", label: t("nav.analytics"), active: !!rightAnalytics, onClick: onToggleAnalytics },
-    { icon: "table", label: t("nav.detections"), active: false, onClick: onWorkbench },
-  ];
+  const footages = useFootageStore(s => s.footages);
+  const ingestItems = useIngestStore(s => s.items);
+
+  /* Over the whole store, not the brushed range: the rail is a place to go,
+     and hiding a queue of unreviewed points because the date brush happens to
+     exclude them would be the rail lying about what is left to do. */
+  const awaitingReview = useMemo(() => {
+    const s = seasonReviewStats(footages);
+    return Math.max(0, s.reviewable - s.ruled);
+  }, [footages]);
+
+  const ingestBusy = useMemo(
+    () => ingestItems.filter(i => isRunning(i.phase) || i.phase === "queued").length,
+    [ingestItems],
+  );
+  /* A card that has stopped and is waiting on a person — a duplicate to rule
+     on, a location to pin, a frame to pick, a failure to look at. It reads
+     differently from "running", so it is counted separately and drawn in ink
+     rather than in the signal colour. */
+  const ingestNeedsYou = useMemo(
+    () => ingestItems.filter(i => isWaiting(i.phase) || i.phase === "failed").length,
+    [ingestItems],
+  );
+
+  const badgeOf = (m: Mode): Badge => {
+    if (m === "review") {
+      return awaitingReview > 0
+        ? { n: awaitingReview, title: t("rail.tipReview", { n: awaitingReview }) }
+        : null;
+    }
+    if (m === "ingest") {
+      if (ingestNeedsYou > 0)
+        return { n: ingestNeedsYou, attention: true, title: t("ingest.needsYou", { n: ingestNeedsYou }) };
+      return ingestBusy > 0 ? { n: ingestBusy, title: t("rail.tipQueue", { n: ingestBusy }) } : null;
+    }
+    if (m === "archive") {
+      return footages.length > 0
+        ? { n: footages.length, title: t("rail.tipSorties", { n: footages.length }) }
+        : null;
+    }
+    return null;
+  };
 
   /* A row is a line of text on the rail's own gutter, not a filled tab. The
      one you are on is stated three ways at once — full ink, the icon at full
@@ -35,19 +95,42 @@ export default function Rail({ onWorkbench, onToggleLeft, onToggleAnalytics, lef
 
   return (
     <div className={`${open ? "w-44" : "w-12"} shrink-0 bg-bg border-r border-hair flex flex-col py-3 overflow-hidden transition-[width] duration-150`}>
-      {items.map(it=>(
-        <button
-          key={it.icon}
-          onClick={it.onClick}
-          title={open ? undefined : it.label}
-          aria-label={it.label}
-          className={row(it.active)}
-        >
-          {it.active && <span className="absolute left-0 top-1 bottom-1 w-0.5 bg-ink" />}
-          <Icon name={it.icon} size={15} className={`shrink-0 ${it.active ? "" : "opacity-50"}`} />
-          {open && <span className="text-base truncate">{it.label}</span>}
-        </button>
-      ))}
+      {MODE_ORDER.map(m => {
+        const active = mode === m;
+        const label = t(MODE_LABEL_KEY[m]);
+        const badge = badgeOf(m);
+        return (
+          <button
+            key={m}
+            onClick={() => setMode(m)}
+            aria-current={active ? "page" : undefined}
+            title={badge ? `${label} · ${badge.title}` : open ? undefined : label}
+            aria-label={badge ? `${label} · ${badge.title}` : label}
+            className={row(active)}
+          >
+            {active && <span className="absolute left-0 top-1 bottom-1 w-0.5 bg-ink" />}
+            <Icon name={MODE_ICON[m]} size={15} className={`shrink-0 ${active ? "" : "opacity-50"}`} />
+            {open && <span className="text-base truncate">{label}</span>}
+            {open && badge && (
+              /* Running work takes the signal colour; work waiting on a person
+                 is plain ink in italic — the same two states every queue in
+                 this design already distinguishes. */
+              <span className={`ml-auto text-2xs tnum shrink-0 ${badge.attention ? "text-ink italic" : "text-accent"}`}>
+                {badge.n}
+              </span>
+            )}
+            {/* Collapsed there is no room for a numeral, so the badge shrinks
+                to the fact that there IS one — a 4px mark on the icon's
+                shoulder. The count itself stays in the title. */}
+            {!open && badge && (
+              <span
+                className={`absolute top-0.5 right-0.5 w-1 h-1 rounded-full ${badge.attention ? "bg-ink" : "bg-accent"}`}
+                aria-hidden="true"
+              />
+            )}
+          </button>
+        );
+      })}
 
       <div className="flex-1" />
 
