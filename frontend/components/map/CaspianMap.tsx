@@ -2,6 +2,8 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useFootageStore } from "@/store/useFootageStore";
 import { useIngestStore } from "@/store/useIngestStore";
+import { useEnvStore } from "@/store/useEnvStore";
+import EnvLayer from "./EnvLayer";
 import { colonyHull, expandHull, colonyBounds } from "@/lib/colony";
 import { footagesInRange, detectionsFor } from "@/lib/analytics/brush";
 import { applyLinkReviews, trackSealGroups } from "@/lib/analytics/tracking";
@@ -480,6 +482,12 @@ export default function CaspianMap({
      for a flag it does not read. */
   const showTracks = layerState.footprints;
   const showColonies = layerState.detections;
+  /* The environment layer keeps its own store: it carries a moment, a chosen
+     field and a fetch of its own, and none of that belongs in the sortie
+     store, where it would put a network request behind every counts render.
+     This file only owns the toggle and where the layer is mounted. */
+  const envOn = useEnvStore(s=>s.enabled);
+  const setEnvOn = useEnvStore(s=>s.setEnabled);
 
   /* Movement is inferred from the same brushed sorties the map shows. The
      matcher groups each sortie independently before it links anything across
@@ -1935,6 +1943,12 @@ export default function CaspianMap({
         })}
       </div>
 
+      {/* The environment: weather, water temperature and ice for one moment,
+          drawn at the size it was measured. It owns its own GL source and
+          inserts its layers UNDER the sortie layers, so switching it on cannot
+          cover a count, move a chip or touch the overlay above. */}
+      {mapLoaded && <EnvLayer map={mapRef.current} />}
+
       {/* Layer controls */}
       <div className="absolute top-3 left-3 z-10 flex items-center gap-2">
         {/* The flat dark plate the map's own controls now wear — one border,
@@ -1953,6 +1967,7 @@ export default function CaspianMap({
             }}
             label={t("map.pollution")}
           />
+          <Toggle checked={envOn} onChange={setEnvOn} label={t("env.title")} />
         </div>
         {pinMode && (
           <PinReadout
