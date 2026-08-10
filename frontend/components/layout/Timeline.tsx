@@ -13,6 +13,26 @@ const BIG = 10;
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
+/** Has the season got more than one day in it?
+ *
+ *  The brush is a DATE filter; with everything flown on one day there is
+ *  nothing to brush and the strip is 34px of furniture. The condition used to
+ *  live in the shell, which is where it stopped being true the moment there
+ *  was more than one screen that wanted the brush — two call sites, two copies,
+ *  and eventually two different rules for when the season has history. It is
+ *  the component's own rule now: Timeline renders nothing when it has not
+ *  earned its strip, so mounting it is one unconditional line anywhere. */
+export function hasMultipleDays(footages: readonly { uploadedAt: string }[]): boolean {
+  const days = new Set<string>();
+  for (const f of footages) {
+    const d = new Date(f?.uploadedAt ?? "");
+    if (Number.isNaN(d.getTime())) continue;
+    days.add(d.toDateString());
+    if (days.size > 1) return true;
+  }
+  return false;
+}
+
 export default function Timeline({ minimal }: { minimal?: boolean }){
   const { t, lang } = useT();
   const footages = useFootageStore(s=>s.footages);
@@ -93,6 +113,11 @@ export default function Timeline({ minimal }: { minimal?: boolean }){
     }
     if(handled){ e.preventDefault(); e.stopPropagation(); }
   };
+
+  /* After every hook, never before one. A season flown in a single day has no
+     date range to narrow, and an inert brush over one bar is a control that
+     teaches the reader it does nothing. */
+  if(!hasMultipleDays(footages)) return null;
 
   return (
     <div
