@@ -1,11 +1,15 @@
 "use client";
-import { useFootageStore } from "@/store/useFootageStore";
+import { useFootageStore, envKeyOf } from "@/store/useFootageStore";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Row, SectionHead, Pill } from "@/components/ui/primitives";
 import Icon from "@/components/ui/Icon";
 import EvidenceView, { EvidenceFrame } from "@/components/evidence/EvidenceView";
 import ReplayView from "@/components/replay/ReplayView";
-import { basisText, useT } from "@/lib/i18n";
+import { basisText, useT, type I18nKey } from "@/lib/i18n";
+import {
+  compassOf, conditionsTime, dateIsRecorded, envUnitKey, envVarRank,
+  formatEnvValue, iceClassKey, seasonOf,
+} from "@/lib/analytics/season";
 import { formatArea } from "@/lib/analytics/area";
 import { countOf } from "@/lib/analytics/count";
 import { formatDate } from "@/lib/analytics/brush";
@@ -20,7 +24,7 @@ import {
   fetchSurveyCounts, fetchPurgePreview, REASON_MAX,
   type PurgeReceipt, type SurveyCount,
 } from "@/lib/api";
-import type { Footage } from "@/lib/types";
+import type { EnvSample, Footage } from "@/lib/types";
 
 export default function RightInspector({ compact }: { compact?: boolean }){
   const { t, tp, lang } = useT();
@@ -654,6 +658,11 @@ export default function RightInspector({ compact }: { compact?: boolean }){
           </div>
         )}
 
+        {/* What this sortie was flown INTO. Below the count, because it does
+            not change the count; above the record, because it is measured
+            rather than written down. */}
+        <SortieConditions f={f} />
+
         {/* ------------------------------------------------------- the record
             What a person knows and the engine cannot derive. Below the
             measured figures, because it annotates them rather than competing
@@ -742,8 +751,307 @@ function MarkerLine({ marks, className = "" }: { marks: React.ReactNode[]; class
           {m}
         </Fragment>
       ))}
+/* --------------------------------------------------- conditions at capture
+
+   The weather, the water, the ice and the food base where and when this
+   sortie was flown — every figure named, timed and sourced.
+
+   The rule this panel exists to keep is that no reading is ever shown alone.
+   "26.8 °C" is not something this product says: it says 26.8 °C, from MUR at
+   1 km, out of the slice of 8 August, 47 hours before the moment asked about,
+   from the cell the point falls in. Three consequences the layout has to
+   carry:
+
+   - TWO SOURCES FOR ONE THING ARE BOTH SHOWN. MUR (1 km, ~2 days behind) and
+     CoralTemp (5 km, same day) measure the same water and disagree by design.
+     Neither is picked, neither is averaged; both rows are drawn with their
+     own names, because the disagreement IS the uncertainty.
+   - A MISSING VALUE IS A ROW, not a gap in the list and never a zero. Ice
+     concentration that was not collected says so, with the archive's own
+     reason.
+   - LATENCY IS A FACT. A reading out of a two-day-old analysis prints how old
+     it is next to itself. */
+function SortieConditions({ f }: { f: Footage }) {
+  const { t, lang } = useT();
+  const loadEnv = useFootageStore(s => s.loadEnv);
+  /* The store keys conditions by point-and-moment, so two sorties off the same
+     spit within the hour share one answer; a sortie with no position has no
+     question to ask and is keyed by its own id so the panel can say that
+     rather than spin. */
+  const key = envKeyOf(f) ?? `unplaced:${f.id}`;
+  const card = useFootageStore(s => s.env[key]);
+  const [showMissing, setShowMissing] = useState(false);
+  const [asking, setAsking] = useState(false);
+
+  /* Keyed on the QUESTION, not on the sortie: re-selecting the same point and
+     moment costs nothing, and the store's own guard makes a repeat a no-op. */
+  useEffect(() => { void loadEnv(f); }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setShowMissing(false); }, [key]);
+
+  const season = seasonOf(conditionsTime(f));
+  const when = conditionsTime(f);
+
+  /* Every measured value as its own row, in one order across the product:
+     air, then sea state, then water, then ice, then the basin, then the food
+     base. Wind speed and direction are the one merge — they are one
+     measurement of one thing and reading them two rows apart is worse. */
+  const readings = useMemo(() => {
+    const out: Array<{ id: string; variable: string; sample: EnvSample; value: number }> = [];
+    for (const s of card?.data?.samples ?? []) {
+      for (const [variable, value] of Object.entries(s.values ?? {})) {
+        if (typeof value !== "number" || !Number.isFinite(value)) continue;
+        /* Folded into the wind row below. On its own — a source that gave a
+           bearing and no speed — it stays a row of its own. */
+        if (variable === "wind_dir" && typeof s.values.wind_ms === "number") continue;
+        out.push({ id: `${s.source}:${variable}`, variable, sample: s, value });
+      }
+    }
+    return out.sort((a, b) =>
+      envVarRank(a.variable) - envVarRank(b.variable) || a.sample.source.localeCompare(b.sample.source));
+  }, [card?.data]);
+
+  const missing = card?.data?.missing ?? [];
+
+  return (
+    <div className="px-4 py-3 border-b border-line">
+      <SectionHead
+        title={t("env.conditions")}
+        className="mb-1.5"
+        right={
+          season ? (
+            <span className="text-2xs text-ink3" title={t("season.basis")}>
+              {t(`season.${season}` as I18nKey)} · {t(`season.${season}.what` as I18nKey)}
+            </span>
+          ) : (
+            <span className="text-2xs text-ink3">{t("season.unknown")}</span>
+          )
+        }
+      />
+
+      {/* Which moment these describe, and — when the flight date was never
+          recorded — the fact that the moment is the count job's clock rather
+          than the day anybody flew. Conditions on the wrong day are worse than
+          no conditions, so the substitution is never silent. */}
+      <p className="text-2xs text-ink3 leading-relaxed">
+        {t("env.forTime", { time: fmtSlice(when, lang) })}
+        {!dateIsRecorded(f) && <> · {t("env.dateFallback")}</>}
+      </p>
+
+      {card?.state === "unplaced" ? (
+        <p className="text-2xs text-ink3 mt-1.5 leading-relaxed">{t("env.missing.notLocated")}</p>
+      ) : card == null || card.state === "loading" ? (
+        <p className="text-2xs text-ink3 mt-1.5">{asking ? t("env.asking") : t("env.loading")}</p>
+      ) : card.state === "error" ? (
+        <div className="mt-1.5">
+          <p className="text-2xs text-bad leading-relaxed break-words">
+            {t("env.failed", { why: card.error ?? "" })}
+          </p>
+          <button
+            onClick={() => void loadEnv(f, true)}
+            className="text-2xs text-ink3 hover:text-ink transition-colors mt-1"
+          >
+            {t("env.retry")}
+          </button>
+        </div>
+      ) : (
+        <>
+          {readings.length === 0 ? (
+            <div className="mt-1.5">
+              <p className="text-2xs text-ink3 leading-relaxed">{t("env.empty")}</p>
+              {/* The one place a live fetch is legitimate: a coordinate the
+                  collector has never visited, in front of a person who has
+                  decided to wait for it. Never on a page load — it is eight
+                  third-party round trips. */}
+              <button
+                disabled={asking}
+                onClick={async () => {
+                  setAsking(true);
+                  await loadEnv(f, true);
+                  setAsking(false);
+                }}
+                className="text-2xs text-ink3 hover:text-ink transition-colors mt-1 disabled:opacity-40"
+                title={t("env.askLiveNote")}
+              >
+                {asking ? t("env.asking") : t("env.askLive")}
+              </button>
+              <p className="text-2xs text-ink3 mt-0.5 leading-relaxed">{t("env.askLiveNote")}</p>
+            </div>
+          ) : (
+            <div className="mt-1.5">
+              {readings.map((r) => (
+                <EnvReading
+                  key={r.id}
+                  variable={r.variable}
+                  value={r.value}
+                  sample={r.sample}
+                  askedAt={card.data?.time ?? when}
+                />
+              ))}
+            </div>
+          )}
+
+          {/* Every source in the catalogue that has nothing here, with the
+              archive's own reason. Collapsed by default because it is usually
+              two rows of "not collected", never omitted because a source that
+              has been silently broken since the first cycle would otherwise be
+              invisible. */}
+          {missing.length > 0 && (
+            <div className="mt-2">
+              <button
+                onClick={() => setShowMissing(!showMissing)}
+                aria-expanded={showMissing}
+                className="text-2xs text-ink3 hover:text-ink transition-colors"
+              >
+                {t("env.missingCount", { n: missing.length })} · {showMissing ? t("env.hide") : t("env.show")}
+              </button>
+              {showMissing && (
+                <div className="mt-1">
+                  <p className="text-2xs text-ink3 leading-relaxed">{t("env.missing.note")}</p>
+                  {missing.map((m) => (
+                    <div key={m.source} className="mt-1 leading-relaxed">
+                      <span className="text-2xs text-ink2">{sourceName(t, m.source)}</span>
+                      <span className="text-2xs text-ink3"> — {missingReason(t, m.reason)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
+}
+
+/** One measured value: the quantity, the number with its unit, and — on its
+ *  own line, in the same breath — the product it came from and the slice it
+ *  came out of. The provenance is not a tooltip: a reader copying "27.4 °C"
+ *  out of this panel has to carry the source with it. */
+function EnvReading({
+  variable, value, sample, askedAt,
+}: { variable: string; value: number; sample: EnvSample; askedAt: string }) {
+  const { t, lang } = useT();
+  const unitKey = envUnitKey(variable);
+  const unit = unitKey ? t(unitKey as I18nKey) : "";
+
+  /* The IMS classes are an enumeration, not a quantity: 1 open water, 2 land,
+     3 sea ice, 4 snow-covered land. Class 2 is honest data — the 1 km chart
+     covers the coast too — and is named as land rather than hidden or
+     coloured in with the ice. */
+  const classKey = variable === "ice_class" ? iceClassKey(value) : null;
+  const point = variable === "wind_ms" ? compassOf(sample.values.wind_dir) : null;
+
+  const text = classKey
+    ? t(classKey as I18nKey)
+    : `${formatEnvValue(variable, value)}${unit ? ` ${unit}` : ""}`;
+
+  return (
+    <div className="py-1 border-b border-line-soft last:border-0">
+      <div className="flex items-baseline gap-2">
+        {/* Wrapped, never clipped. "Температура воды" and "Аномалия
+            температуры" are different measurements and an ellipsis renders
+            both as "Температура…" — in a panel whose whole claim is that every
+            number says what it is. */}
+        <span className="text-2xs text-ink3 shrink-0 w-[104px] leading-tight">
+          {t(`env.var.${variable}` as I18nKey)}
+        </span>
+        <span className="text-xs text-ink tnum flex-1 break-words">
+          {text}
+          {/* Wind is one measurement: the compass point a pilot reads and the
+              degrees the instrument recorded, never one without the other. */}
+          {point != null && typeof sample.values.wind_dir === "number" && (
+            <span className="text-ink2">
+              {" · "}
+              {t("env.windFrom", {
+                dir: t(`env.compass.${point}` as I18nKey),
+                deg: formatEnvValue("wind_dir", sample.values.wind_dir),
+              })}
+            </span>
+          )}
+          {/* Sea level is a height against a geoid, and the number is negative
+              and large. Unlabelled it reads as a depth. */}
+          {variable === "sea_level_m" && (
+            <span className="text-2xs text-ink3"> · {t("env.seaLevelDatum")}</span>
+          )}
+        </span>
+      </div>
+      <div className="text-2xs text-ink3 leading-relaxed break-words" title={latencyOf(t, sample)}>
+        {sourceShort(t, sample.source)} · {fmtSlice(sample.measured_at, lang)}
+        {ageText(t, sample, askedAt) ? <> · {ageText(t, sample, askedAt)}</> : null}
+        {" · "}
+        {sample.scope === "basin"
+          ? t("env.scope.basin")
+          : t("env.distanceKm", { km: sample.distance_km.toFixed(1) })}
+      </div>
+    </div>
+  );
+}
+
+/** The slice's own timestamp, to the minute. A conditions reading is only
+ *  meaningful with the hour on it — a 09:00 analysis and a 21:00 forecast are
+ *  different weather on the same date. */
+function fmtSlice(iso: string, lang: string): string {
+  return formatDate(iso, lang, {
+    day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
+  });
+}
+
+/** How far the slice is from the moment asked about, in the right direction.
+ *  A satellite analysis is behind; an atmospheric forecast for a planned
+ *  sortie is ahead, and printing that as "47 h earlier" would be a lie about
+ *  a working feed. `gap_hours` is unsigned, so the direction is read off the
+ *  two timestamps. Under an hour is not worth a line. */
+function ageText(
+  t: (k: I18nKey, v?: Record<string, string | number>) => string,
+  s: EnvSample,
+  askedAt: string,
+): string | null {
+  const n = Math.round(s.gap_hours);
+  if (!Number.isFinite(n) || n < 1) return null;
+  const slice = Date.parse(s.measured_at);
+  const asked = Date.parse(askedAt);
+  const ahead = Number.isFinite(slice) && Number.isFinite(asked) && slice > asked;
+  return ahead ? t("env.aheadHours", { n }) : t("env.ageHours", { n });
+}
+
+/** The compact source label — "MUR 1 км" — with its resolution baked in,
+ *  because the resolution is what makes two disagreeing readings legible. An
+ *  id this build does not know prints as the id: an unrecognised feed is
+ *  exactly what a reader must be able to see. */
+function sourceShort(t: (k: I18nKey) => string, source: string): string {
+  const key = `env.srcShort.${source}` as I18nKey;
+  const s = t(key);
+  return s === key ? source : s;
+}
+
+/** The source's full name, for the missing list where there is room for it. */
+function sourceName(t: (k: I18nKey) => string, source: string): string {
+  const key = `env.source.${source}` as I18nKey;
+  const s = t(key);
+  return s === key ? source : s;
+}
+
+/** The source's own publishing lag, in the reader's language. */
+function latencyOf(t: (k: I18nKey) => string, s: EnvSample): string {
+  const key = `env.latency.${s.source}` as I18nKey;
+  const text = t(key);
+  /* The service's English note is the fallback rather than silence: an
+     unrecognised source still has a lag, and it is evidence. */
+  return `${s.dataset} · ${text === key ? s.latency_note : text}`;
+}
+
+/** The archive's reason a source has nothing here, in the reader's language.
+ *
+ *  The service writes three sentences and, on a live fetch, the source's own
+ *  error text. The three are recognised and translated; anything else is
+ *  printed verbatim, because a message from a feed is evidence and
+ *  paraphrasing evidence is how a failure becomes a shrug. */
+function missingReason(t: (k: I18nKey) => string, reason: string): string {
+  const r = (reason ?? "").toLowerCase();
+  if (r.startsWith("no stored value")) return t("env.missing.noStored");
+  if (r.startsWith("reached the source")) return t("env.missing.noValue");
+  if (r.startsWith("not used for this date")) return t("env.missing.otherSource");
+  return reason;
 }
 
 /* ------------------------------------------------------- the count history

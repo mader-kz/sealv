@@ -161,6 +161,105 @@ export type Footage = {
   error?: string;
 };
 
+/* ------------------------------------------------------------- environment
+
+   What the weather, the water and the ice were doing where and when a sortie
+   was flown. Shape-for-shape the service's /v1/env/* answers, because the one
+   rule this data lives by has to survive the trip into the UI: a value never
+   travels without its SOURCE, the MEASUREMENT TIME of the slice it came out
+   of, the size of the cell that was measured, and how far both of those are
+   from what was asked for. "26.8 °C" is not a thing this product says.
+
+   Note what is NOT here: no "temperature" field, no merged conditions object,
+   no defaults. Two SST sources at different resolutions and lags disagree by
+   design, and a type with one `sst` field would force somebody to choose
+   between them silently. Every source stays its own row. */
+
+/** Every measurable the service can store. `values` is a PARTIAL map over
+ *  these: a key that is absent was not measured, which is not zero and must
+ *  never be rendered as one. */
+export type EnvVar =
+  | "wind_ms" | "wind_dir" | "gust_ms" | "air_t" | "pressure" | "cloud"
+  | "wave_m" | "wave_period_s"
+  | "sst_c" | "sst_anomaly_c"
+  | "ice_class" | "ice_conc" | "ice_thickness_m"
+  | "chl_a" | "sea_level_m";
+
+/** Stable source ids. The dictionary carries a name and a latency note for
+ *  each; an id this build does not know is rendered as the id rather than
+ *  dropped, because an unknown feed is exactly what a reader must see. */
+export type EnvSourceId =
+  | "mur" | "coraltemp" | "ims" | "viirs_ice" | "viirs_chl"
+  | "gwm_sea_level" | "openmeteo_icon_eu" | "openmeteo_era5" | "openmeteo_mfwam";
+
+/** "point" describes the cell at a coordinate; "basin" describes the WHOLE
+ *  SEA (sea level is one altimetric figure per ten days). The distance of a
+ *  basin row from the asked-for point is real and large - it is stored at the
+ *  altimetry crossing - and rendering that as "320 km away" would be true and
+ *  useless. `scope` is what says to render it as "whole sea" instead. */
+export type EnvScope = "point" | "basin";
+
+export type EnvValues = Partial<Record<EnvVar, number>>;
+
+/** One source's answer for one point and one moment. */
+export type EnvSample = {
+  source: string;
+  /** The exact product identifier (jplMURSST41, icon_eu…). */
+  dataset: string;
+  /** The SLICE this came out of - not the time that was asked about. */
+  measured_at: string;
+  /** The centre of the cell that was returned, not the point that was asked
+   *  for; `distance_km` is the gap between them. */
+  lat: number;
+  lng: number;
+  values: EnvValues;
+  /** How wide ONE MEASURED CELL is, in metres. Null for a basin figure. */
+  resolution_m: number | null;
+  /** The same fact as prose, from the service ("0.01° (~1 km)"). */
+  resolution: string;
+  scope: EnvScope;
+  latency_note: string;
+  fetched_at?: string;
+  /** |measured_at − asked-for time|, in hours. */
+  gap_hours: number;
+  /** Cell centre to the asked-for point, in km. */
+  distance_km: number;
+};
+
+/** A source in the catalogue that has nothing to say here, and why. Rendered
+ *  as an explicit gap - never omitted, never drawn as a zero. */
+export type EnvMissing = {
+  source: string;
+  vars: string[];
+  reason: string;
+};
+
+/** The full catalogue, served with every answer so a feed that has been broken
+ *  since the first collection cycle is visible rather than simply absent. */
+export type EnvSourceMeta = {
+  source: string;
+  dataset: string;
+  vars: string[];
+  resolution_m: number | null;
+  resolution: string;
+  scope: EnvScope;
+  latency_note: string;
+};
+
+/** GET /v1/env/at - conditions at one point and moment, every source kept
+ *  separate. At most one sample per source. */
+export type EnvAt = {
+  point: { lat: number; lng: number };
+  time: string;
+  radius_km: number;
+  max_gap_h: number;
+  max_gap_basin_h: number;
+  live: boolean;
+  samples: EnvSample[];
+  missing: EnvMissing[];
+  sources: EnvSourceMeta[];
+};
+
 /* Only the layers the map still draws. `clusters` and `heatmap` outlived the
    heat layer that was removed for painting a density nobody measured; a dead
    field in a shared type reads as a contract to the next author. */
