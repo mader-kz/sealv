@@ -42,6 +42,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import SiteDynamics from "@/components/dashboard/SiteDynamics";
+import { EvidenceFrame } from "@/components/evidence/EvidenceView";
 import { Button, IconButton } from "@/components/ui/primitives";
 import { createSite, fetchSites, renameSite } from "@/lib/api";
 import { formatDate } from "@/lib/analytics/brush";
@@ -202,6 +203,27 @@ export default function SiteCard({
       setBusy(false);
     }
   }, [name, members, site.siteId, site.centroid, assignSite, applySiteName, t]);
+
+  /* ------------------------------------------------------- the photographs */
+  /* A visit worth showing is a STILL whose engine run left per-animal pixels:
+     those two facts are what EvidenceFrame needs to draw the frame with its
+     marks. A video has neither a single frame nor pixel marks to put on one,
+     so it is absent here rather than represented by a black rectangle.
+     Newest first — the standing count's own frame leads. */
+  const photoVisits = useMemo(
+    () =>
+      members
+        .filter((f) => !f.videoUrl && f.mediaId && (f.pixels?.length ?? 0) > 0)
+        .sort((a, b) => String(b.uploadedAt ?? "").localeCompare(String(a.uploadedAt ?? ""))),
+    [members],
+  );
+  const [shownId, setShownId] = useState<string | null>(null);
+  const shown = useMemo(
+    () => photoVisits.find((f) => f.id === shownId) ?? photoVisits[0] ?? null,
+    [photoVisits, shownId],
+  );
+  /* Switching sites must not leave the previous site's frame selected. */
+  useEffect(() => { setShownId(null); }, [site.id]);
 
   /* ---------------------------------------------------------- the record */
   const events = useMemo(() => {
@@ -385,6 +407,57 @@ export default function SiteCard({
             </>
           )}
         </div>
+
+        {/* The place, as it was actually photographed. A card that talks about
+            700 animals without ever showing one is a spreadsheet about a coast;
+            the frame the standing count was measured on belongs at the top of
+            it. Only a still can be shown — a video sortie has no single frame
+            to stand for it — so the newest visit that carries marked pixels
+            wins, and the row underneath offers the others. Clicking opens the
+            sortie, where the full evidence view lives. */}
+        {photoVisits.length > 0 && shown && (
+          <div className="px-4 pb-4">
+            <button
+              type="button"
+              onClick={() => open(shown.id)}
+              title={t("site.openSortie")}
+              className="block w-full text-left group"
+            >
+              <div className="aspect-video bg-bg border border-hair overflow-hidden">
+                <EvidenceFrame mediaId={shown.mediaId as string} pixels={shown.pixels ?? []} />
+              </div>
+              <div className="flex items-baseline gap-2 mt-1.5">
+                <span className="text-2xs text-ink3 truncate group-hover:text-ink2 transition-colors">
+                  {shown.filename}
+                </span>
+                <span className="text-2xs text-ink3 tnum ml-auto shrink-0">
+                  {formatDate(shown.uploadedAt, lang, { day: "numeric", month: "short" })}
+                </span>
+              </div>
+            </button>
+
+            {photoVisits.length > 1 && (
+              /* Every other photographed visit of this place, smallest useful
+                 size. Same haul-out a month apart, side by side — which is the
+                 comparison the whole site-first idea exists to make. */
+              <div className="flex gap-1.5 mt-2 overflow-x-auto pb-1">
+                {photoVisits.map((f) => (
+                  <button
+                    key={f.id}
+                    type="button"
+                    onClick={() => setShownId(f.id)}
+                    title={`${f.filename} · ${formatDate(f.uploadedAt, lang, { day: "numeric", month: "short" })}`}
+                    className={`shrink-0 w-[68px] aspect-video overflow-hidden border transition-colors ${
+                      f.id === shown.id ? "border-accent" : "border-hair hover:border-ink3"
+                    }`}
+                  >
+                    <EvidenceFrame mediaId={f.mediaId as string} pixels={[]} />
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Every visit: the chart, then the same visits written out. Reused
             wholesale — this is the component the analytics panel used to hide
