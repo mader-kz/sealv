@@ -570,7 +570,10 @@ export default function EvidenceView({
             exitWalk();
           }
         }}
-        className="max-w-[92vw] w-[92vw] h-[88vh] p-0 gap-0 flex flex-col overflow-hidden bg-surface border-line rounded"
+        /* No radius class: the instrument is square, and `rounded` here was a
+           leftover intention that only stopped showing because the token went
+           to 0. The dialog's own base carries the border and the shadow. */
+        className="max-w-[92vw] w-[92vw] h-[88vh] p-0 gap-0 flex flex-col overflow-hidden bg-surface border-line"
       >
         <DialogHeader className="flex-row items-baseline gap-3 space-y-0 px-4 py-3 pr-12 border-b border-line shrink-0">
           {/* The hero of this view is the frame, so its chrome stays chrome:
