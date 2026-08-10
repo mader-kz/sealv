@@ -7,7 +7,13 @@ import unittest
 from unittest.mock import Mock, patch
 from datetime import datetime, timezone
 
-from service.pollution import api, opencode_geocoder
+from service.pollution import opencode_geocoder
+try:
+    from service.pollution import api
+except ModuleNotFoundError as exc:
+    if exc.name != "fastapi":
+        raise
+    api = None
 
 from service.pollution.models import PollutionSource
 from service.pollution.pollers import lada_rss, news, telegram
@@ -193,6 +199,7 @@ class CallerStorageTests(unittest.TestCase):
         )
 
 
+@unittest.skipIf(api is None, "FastAPI is installed in the import-time dependency gate")
 class RootCauseApiTests(unittest.TestCase):
     def test_geojson_exposes_valid_root_cause_separately_from_title(self) -> None:
         connection = Mock()
