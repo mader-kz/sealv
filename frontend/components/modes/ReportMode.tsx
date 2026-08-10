@@ -29,7 +29,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { useFootageStore } from "@/store/useFootageStore";
+import { useFootageStore, envKeyOf, ENV_MAX_KEYS } from "@/store/useFootageStore";
 import { Button, SectionHead } from "@/components/ui/primitives";
 import TrustPanel from "@/components/dashboard/TrustPanel";
 import { MovementAnalytics } from "@/components/dashboard/Dashboard";
@@ -48,8 +48,12 @@ import {
   type SeriesEntry,
 } from "@/lib/analytics/surveys";
 import { useOperator } from "@/lib/identity";
-import { useT } from "@/lib/i18n";
-import type { Footage } from "@/lib/types";
+import { useT, type I18nKey } from "@/lib/i18n";
+import type { EnvSample, Footage } from "@/lib/types";
+import {
+  bySeason, compassOf, COMPASS_ORDER, envRanges, envUnitKey, envVarRank,
+  formatEnvValue, iceClassKey, type EnvRange, type Season,
+} from "@/lib/analytics/season";
 import { setMode } from "@/lib/modes";
 
 const GROUP_RADIUS_M = 5; // animals closer together than this are one group
@@ -784,6 +788,15 @@ export default function ReportMode(){
                     />
                   </div>
 
+                  {/* The season's own weather, between the trust block and the
+                      derived sentences: it qualifies every figure above it —
+                      water three degrees over baseline and a week of one wind
+                      is why a count reads the way it does — and it is the part
+                      of the акт a reader six months on cannot reconstruct. */}
+                  <div className="py-7">
+                    <SeasonConditions footages={chosen} />
+                  </div>
+
                   {/* Derived summary — sentences the app assembled out of the
                       figures above. NOT "Notes": a field note is a person's
                       observation and lives on the sortie that person flew. */}
@@ -863,3 +876,210 @@ function Td({
     </td>
   );
 }
+
+/* ------------------------------------------------- conditions of the season
+
+   Moved here from the analytics panel when that panel became a report. The
+   season's weather belongs with the акт: a reader defending a number six
+   months on needs to know the water was three degrees above its own baseline
+   and the wind blew from the south-west all week. Same helpers, same rule —
+   every range names its source and its slice, and a factor nobody collected
+   is a row saying so. */
+function SeasonConditions({ footages }: { footages: Footage[] }) {
+  const { t, tp, lang } = useT();
+  const env = useFootageStore(s => s.env);
+  const loadEnvFor = useFootageStore(s => s.loadEnvFor);
+  const [pick, setPick] = useState<Season | null>(null);
+
+  /* Conditions are read for the sorties in the window, deduplicated by
+     point-and-moment inside the store — a season flown off one spit is twenty
+     sorties and, usually, a handful of distinct questions. */
+  useEffect(() => { void loadEnvFor(footages); }, [footages, loadEnvFor]);
+
+  const { groups, undated } = useMemo(() => bySeason(footages), [footages]);
+  /* The season with the most sorties leads, because that is the one this
+     window is mostly about. A person can switch; nothing is hidden. */
+  const primary = useMemo(() => {
+    let best: { season: Season; n: number } | null = null;
+    for (const g of groups) if (!best || g.footages.length > best.n) best = { season: g.season, n: g.footages.length };
+    return best?.season ?? null;
+  }, [groups]);
+  const season = pick && groups.some(g => g.season === pick) ? pick : primary;
+  const group = groups.find(g => g.season === season) ?? null;
+
+  /* Ranges over the picked season only. `answers` is one entry per sortie —
+     a sortie whose conditions were never collected contributes nothing and is
+     counted in the coverage line instead. */
+  const { ranges, winds, covered, loading } = useMemo(() => {
+    const answers: EnvSample[][] = [];
+    let anyLoading = false;
+    /* Wind direction is a CIRCULAR quantity and has no low and high: a season
+       of northerlies scattered around 350° and 10° would print as "10–350°",
+       which reads as a wind that swung through the entire compass. So the
+       bearing is summarised as the set of eight-point directions actually
+       observed, per source, and kept out of the numeric ranges below. */
+    const seen = new Map<string, Set<string>>();
+    for (const f of group?.footages ?? []) {
+      const card = env[envKeyOf(f) ?? `unplaced:${f.id}`];
+      if (card?.state === "loading" || card == null) anyLoading = true;
+      const samples = card?.data?.samples ?? [];
+      if (samples.length) answers.push(samples);
+      for (const s of samples) {
+        const p = compassOf(s.values.wind_dir);
+        if (!p) continue;
+        const set = seen.get(s.source) ?? new Set<string>();
+        set.add(p);
+        seen.set(s.source, set);
+      }
+    }
+    return {
+      ranges: envRanges(answers)
+        .filter((r) => r.variable !== "wind_dir")
+        .sort((a, b) => envVarRank(a.variable) - envVarRank(b.variable) || a.source.localeCompare(b.source)),
+      winds: [...seen.entries()].map(([source, set]) => ({
+        source,
+        /* In compass order, not in the order the sorties happened to fly. */
+        points: COMPASS_ORDER.filter((p) => set.has(p)),
+      })),
+      covered: answers.length,
+      loading: anyLoading,
+    };
+  }, [group, env]);
+
+  const total = group?.footages.length ?? 0;
+
+  return (
+    <div className="px-4 py-4 border-b border-line">
+      <SectionHead title={t("dash.envTitle")} />
+
+      {groups.length === 0 ? (
+        <p className="text-sm text-ink3 mt-2.5">{t("dash.envNone")}</p>
+      ) : (
+        <>
+          {/* One chip per season present. With a single season there is
+              nothing to choose between, so the row states the season instead
+              of pretending to be a control. */}
+          <div className="flex flex-wrap items-baseline gap-1.5 mt-2">
+            {groups.map(g => (
+              <button
+                key={g.season}
+                type="button"
+                onClick={() => setPick(g.season)}
+                aria-pressed={g.season === season}
+                disabled={groups.length === 1}
+                className={`text-2xs rounded px-1.5 py-0.5 border transition-colors ${
+                  g.season === season
+                    ? "border-line bg-surface2 text-ink"
+                    : "border-transparent text-ink3 hover:text-ink"
+                } disabled:cursor-default`}
+              >
+                {t(`season.${g.season}` as I18nKey)}
+                <span className="text-ink3 tnum"> {g.footages.length}</span>
+              </button>
+            ))}
+          </div>
+
+          {season && (
+            <p className="text-2xs text-ink3 mt-1.5 leading-relaxed">
+              {t(`season.${season}.what` as I18nKey)} · {t("season.basis")}
+            </p>
+          )}
+          <p className="text-2xs text-ink3 mt-1 leading-relaxed">{t("season.meaning")}</p>
+
+          {/* Sorties whose date the archive never recorded have no season and
+              are not silently folded into one. */}
+          {undated.length > 0 && (
+            <p className="text-2xs text-ink3 mt-1 leading-relaxed">
+              {t("season.unknown")} · {undated.length} {tp(undated.length, "unit.sorties")}
+            </p>
+          )}
+
+          {ranges.length === 0 ? (
+            <p className="text-sm text-ink3 mt-2.5">
+              {loading ? t("dash.envLoading") : t("dash.envNone")}
+            </p>
+          ) : (
+            <>
+              <p className="text-2xs text-ink3 mt-2 leading-relaxed">
+                {t("dash.envCoverage", { n: covered, m: total })} {tp(total, "unit.sorties")}
+                {total > ENV_MAX_KEYS && <> · {t("dash.envCapped", { n: ENV_MAX_KEYS })}</>}
+              </p>
+              <div className="mt-1.5">
+                {/* The bearings observed, as compass points — see the memo
+                    above for why this is not a numeric range. */}
+                {winds.map(w => (
+                  <div key={`wind:${w.source}`} className="py-1 border-b border-line-soft">
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-2xs text-ink3 shrink-0 w-[112px] leading-tight">
+                        {t("env.windSeen")}
+                      </span>
+                      <span className="text-xs text-ink flex-1 break-words">
+                        {w.points.map(p => t(`env.compass.${p}` as I18nKey)).join(" · ")}
+                      </span>
+                    </div>
+                    <div className="text-2xs text-ink3 leading-relaxed">{srcShort(t, w.source)}</div>
+                  </div>
+                ))}
+                {ranges.map(r => (
+                  <div key={`${r.source}:${r.variable}`} className="py-1 border-b border-line-soft last:border-0">
+                    <div className="flex items-baseline gap-2">
+                      {/* Wrapped, never clipped — see EnvReading. */}
+                      <span className="text-2xs text-ink3 shrink-0 w-[112px] leading-tight">
+                        {t(`env.var.${r.variable}` as I18nKey)}
+                      </span>
+                      <span className="text-xs text-ink tnum flex-1 break-words">
+                        {rangeText(t, r)}
+                      </span>
+                    </div>
+                    <div className="text-2xs text-ink3 leading-relaxed">
+                      {srcShort(t, r.source)} · {t("dash.envOver", { n: r.n })} ·{" "}
+                      {/* The span of slices behind the range. Compared as
+                          RENDERED days, not as instants: two slices six hours
+                          apart on one date printed "9 авг.–9 авг.". */}
+                      {sliceSpan(r.from, r.to, lang)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/** low–high with the unit, or the single value when every sortie measured the
+ *  same thing. An ice class is an enumeration and has no range: the extremes
+ *  observed are named as the classes they are. */
+function rangeText(t: (k: I18nKey, v?: Record<string, string | number>) => string, r: EnvRange): string {
+  if (r.variable === "ice_class") {
+    const lo = iceClassKey(r.min);
+    const hi = iceClassKey(r.max);
+    const loText = lo ? t(lo as I18nKey) : String(r.min);
+    const hiText = hi ? t(hi as I18nKey) : String(r.max);
+    return r.min === r.max ? loText : `${loText} · ${hiText}`;
+  }
+  const unitKey = envUnitKey(r.variable);
+  const unit = unitKey ? ` ${t(unitKey as I18nKey)}` : "";
+  const lo = formatEnvValue(r.variable, r.min);
+  const hi = formatEnvValue(r.variable, r.max);
+  return lo === hi ? `${lo}${unit}` : `${lo}–${hi}${unit}`;
+}
+
+/** The days the slices behind a range fall on, collapsed to one when they are
+ *  the same day. */
+function sliceSpan(from: string, to: string, lang: string): string {
+  const a = formatDate(from, lang, { day: "numeric", month: "short" });
+  const b = formatDate(to, lang, { day: "numeric", month: "short" });
+  return a === b ? a : `${a}–${b}`;
+}
+
+/** The compact source label. Unknown ids print as themselves — a feed this
+ *  build does not recognise is exactly what a reader must see. */
+function srcShort(t: (k: I18nKey) => string, source: string): string {
+  const key = `env.srcShort.${source}` as I18nKey;
+  const s = t(key);
+  return s === key ? source : s;
+}
+
