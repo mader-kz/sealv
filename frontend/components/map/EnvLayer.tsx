@@ -588,7 +588,11 @@ export default function EnvLayer({ map }: { map: any }) {
             <div className="mt-2 text-ink3">{t("env.map.legend")}</div>
             {isIce ? (
               <div className="mt-0.5 space-y-0.5">
-                {[3, 1, 4, 2].map((c) => (
+                {/* Sea and sea ice only. The chart classifies land as well,
+                    and the point probe still reports it — but the basin layer
+                    no longer draws land cells, so listing them here would
+                    describe a colour that is not on the map. */}
+                {[3, 1].map((c) => (
                   <div key={c} className="flex items-center gap-1.5">
                     <span
                       className="inline-block w-3 h-3 rounded-[2px]"

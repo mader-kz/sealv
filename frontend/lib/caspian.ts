@@ -1,41 +1,37 @@
 /**
- * Caspian Sea water mask — tight hull around actual water, not including steppe.
- * [lng, lat] GeoJSON order. Hand-tightened to keep seals off land.
- * Hull traced from Carto dark_tiles visual + Natural Earth approx.
+ * Caspian Sea water mask — an outline of the actual water, not the steppe.
+ * [lng, lat] GeoJSON order. Kept in step with `service/env.py`'s CASPIAN_HULL,
+ * which samples the environment grid against the same shape.
+ *
+ * The previous version was wrong in both directions, and the environment layer
+ * made it visible. It called the Iranian coast (37.0 N, 48.0 E) water, so 28%
+ * of the collected grid landed on dry ground; and between a hard `lng > 52.0`
+ * cut and an east-coast rule that put the shoreline at ~51 E for every
+ * latitude, it called Turkmenbashi, Kara-Bogaz-Gol and the whole north-east
+ * shelf land — the eastern half of the sea could never hold a sample.
+ *
+ * This traces the coast instead: Volga delta, Ural mouth, Buzachi,
+ * Tyub-Karagan, Aktau, Kendirli, the Kara-Bogaz throat, the Turkmen shelf, the
+ * Iranian shore, and the Caucasus coast back to the delta. Still an
+ * approximation — the service treats it as a fallback and prefers the 1 km IMS
+ * land mask, which is measured rather than traced.
  */
 export const CASPIAN_HULL: [number, number][] = [
-  [47.1, 47.4], [48.2, 47.0], [49.4, 46.1], [50.4, 45.0], [51.0, 44.2],
-  [51.3, 43.4], [51.55, 42.6], [51.7, 41.6], [51.6, 40.3], [51.1, 39.1],
-  [50.3, 38.0], [49.2, 37.1], [48.0, 36.9], [47.1, 37.3], [46.6, 38.2],
-  [46.4, 39.6], [46.45, 41.0], [46.7, 42.6], [47.0, 44.2], [47.1, 47.4],
+  [47.9, 46.30], [48.6, 46.60], [49.5, 46.60], [50.5, 46.80], [51.5, 46.90],
+  [52.3, 45.60], [51.8, 45.20], [51.2, 45.00], [50.6, 44.80], [50.3, 44.50],
+  [51.0, 44.00], [51.2, 43.60], [51.8, 43.00], [52.4, 42.40], [52.7, 41.60],
+  [52.9, 41.20], [53.2, 40.60], [53.3, 40.00], [53.7, 39.20], [53.9, 38.40],
+  [54.0, 37.70], [53.8, 36.90], [53.0, 36.80], [52.3, 36.70], [51.5, 36.65],
+  [50.6, 36.80], [50.0, 37.20], [49.5, 37.50], [49.1, 37.90], [48.9, 38.40],
+  [49.0, 39.00], [49.2, 39.50], [49.4, 40.00], [50.0, 40.20], [50.4, 40.40],
+  [49.9, 40.70], [49.3, 41.20], [48.8, 41.60], [48.5, 41.90], [48.3, 42.20],
+  [47.9, 42.60], [47.6, 43.00], [47.4, 43.60], [47.2, 44.30], [47.2, 45.00],
+  [47.4, 45.60], [47.9, 46.30],
 ];
 
-// Kazakh east coast — anything east of this at given lat is steppe/land
-function isEastOfKazakhCoast(lat: number, lng: number): boolean {
-  if (lat > 45.2) return lng > 50.85;  // north Durneva
-  if (lat > 44.2) return lng > 51.05;  // Tyuleniy/Bautino north
-  if (lat > 43.6) return lng > 51.00;  // Aktau north
-  if (lat > 42.8) return lng > 51.00;  // Aktau proper — 51.18 is land, 50.92 is water
-  if (lat > 41.8) return lng > 51.45;  // Kendirli
-  if (lat > 39.5) return lng > 51.4;
-  return lng > 51.0;
-}
-
-// West coast — anything west of this is land (Dagestan/Azerbaijan side)
-function isWestOfCaspian(lat: number, lng: number): boolean {
-  if (lat > 44.5) return lng < 47.0;
-  if (lat > 42.5) return lng < 47.0;
-  if (lat > 40.5) return lng < 46.8;
-  if (lat > 38.5) return lng < 46.6;
-  return lng < 47.5;
-}
-
 export function isWater(lat: number, lng: number): boolean {
-  if (lat < 36.6 || lat > 47.6 || lng < 46.0 || lng > 52.0) return false;
-  if (!pointInPolygon([lng, lat], CASPIAN_HULL)) return false;
-  if (isEastOfKazakhCoast(lat, lng)) return false;
-  if (isWestOfCaspian(lat, lng)) return false;
-  return true;
+  if (lat < 36.6 || lat > 47.6 || lng < 46.0 || lng > 55.0) return false;
+  return pointInPolygon([lng, lat], CASPIAN_HULL);
 }
 
 function pointInPolygon(pt: [number, number], poly: [number, number][]): boolean {

@@ -199,6 +199,7 @@ jobs:
       # field team types in, and the GeoJSON/CSV/PDF builders.
       - name: Self-tests
         run: |
+          node lib/caspian.selftest.mjs
           node lib/colony.selftest.mjs
           node lib/analytics/analytics.selftest.mjs
           node lib/analytics/review.selftest.mjs
