@@ -130,7 +130,7 @@ function Row({ item, queuePos, queueTotal }: { item: IngestItem; queuePos: numbe
        placed on, so asking for a location and staying on the queue costs the
        operator a mode switch they cannot have wanted — the crosshair is armed,
        the map is elsewhere, and the card they are looking at can do nothing
-       until they leave it. PinBar carries the confirm across. */
+       until they leave it. The map's own readout carries the confirm. */
     setMode("map");
   }, [item.phase, item.id, pinTarget, claimPin, setPinMode, setPinPoints]);
 
