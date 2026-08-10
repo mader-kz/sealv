@@ -1,13 +1,36 @@
 "use client";
+/* ─────────────────────────────────────────────────────────────────────────────
+ * HANDOVER — this panel is being taken apart, and this note is the coordination.
+ *
+ * It used to be the permanent left column: the season's headline figures on top
+ * of the sortie list, beside the map, always. In the five-mode shell it has no
+ * home — Карта is places, not flights — so its two halves went different ways:
+ *
+ *   the STATS (standing estimate, the observed-across-N-sorties line, the
+ *   surveyed-area readout with its no-GSD / assumed-GSD caveats) have MOVED to
+ *   the season strip at the top of Карта — components/modes/SeasonMode.tsx.
+ *   They are gone from this file; do not restore them here, or the season total
+ *   will be stated in two places again, which is how it came to be stated
+ *   differently in two places.
+ *
+ *   the LIST and everything hanging off it — search, the CSV export, retire
+ *   (with its reason), show-retired, clear-all, the ground-count entry, the
+ *   seed-test-data button, the empty state that teaches the loop — are
+ *   ArchiveMode's material (Съёмки). This file is kept, unmounted, purely as
+ *   that agent's source: it is the windowed list, working, with every one of
+ *   those capabilities attached.
+ *
+ * ARCHIVE AGENT: once ArchiveMode.tsx carries the list and the actions above,
+ * DELETE this file. Nothing imports it — the shell dropped it when the modes
+ * landed — so it is dead weight the moment you no longer need it to copy from.
+ * ───────────────────────────────────────────────────────────────────────────── */
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useFootageStore } from "@/store/useFootageStore";
-import { Button, Field, Stat, SectionHead, Pill } from "@/components/ui/primitives";
+import { Button, Field, SectionHead, Pill } from "@/components/ui/primitives";
 import Icon from "@/components/ui/Icon";
 import { useT } from "@/lib/i18n";
-import { formatArea, totalAreaM2 } from "@/lib/analytics/area";
 import { countOf } from "@/lib/analytics/count";
 import { footagesInRange, formatDate } from "@/lib/analytics/brush";
-import { seasonEstimate } from "@/lib/analytics/estimate";
 import { hasResult, isPlaced } from "@/lib/analytics/surveys";
 import { reviewStats } from "@/lib/analytics/review";
 import { csvCell, downloadText } from "@/lib/export/animals";
@@ -96,31 +119,11 @@ export default function LeftPanel(){
       || f.id.toLowerCase().includes(needle));
   },[listed,q]);
 
-  /* The standing estimate, from the shared helper — the latest sortie at each
-     site, not a sum over every sortie flown. The sum is still printed below it
-     as what it actually measures: effort, not animals. One helper, so this
-     headline, the map chip, the analytics panel and the report cannot print
-     four different numbers for one season. */
-  const est = useMemo(()=> seasonEstimate(counted), [counted]);
-
-  /* Surveyed area — what the sorties actually photographed — replaces the old
-     "coverage" stat, which was sorties × 6.2%, i.e. 17 flights = 100% of the
-     Caspian. The shared helper, so the number and its precision match the
-     analytics panel and the report exactly; sorties with no GSD are unknown,
-     not zero, and the count of them is printed rather than swallowed. */
-  /* Only sorties that photographed ground. A failed ingest has no footprint
-     because it has no survey; a ground count has none because nobody took a
-     picture — counting either as "without GSD" blames them for missing a
-     scale that was never applicable. */
-  const area = useMemo(
-    ()=> totalAreaM2(counted.filter(f=> f.engine !== "manual")),
-    [counted],
-  );
-  const areaText = area.known ? `${formatArea(area.m2, lang)} ${t("unit.ha")}` : "—";
-  const areaSub = [
-    area.unknown ? t("dash.noGsd", { n: area.unknown }) : null,
-    area.assumed ? t("dash.assumedGsd", { n: area.assumed }) : null,
-  ].filter(Boolean).join(" · ") || undefined;
+  /* The standing estimate and the surveyed-area readout used to be computed
+     here and printed above the list. They are the season's statement, so they
+     belong to the season's screen: both now live in SeasonMode's strip, from
+     the same shared helpers (seasonEstimate, totalAreaM2). See the handover
+     note at the top of this file. */
 
   /* Per-sortie summary. Every column is measured: the band with its basis, the
      reviewed share, the photographed area. Filenames go through csvCell —
@@ -257,41 +260,9 @@ export default function LeftPanel(){
 
   return (
     <div className="w-[340px] shrink-0 bg-surface flex flex-col overflow-hidden h-full">
-      {/* The season's one figure, and everything else a step down from it.
-          Two equal-weight KPI columns used to sit here; they are not equal —
-          the standing estimate is the answer this product exists to give and
-          the surveyed area is a qualification of it. So the estimate is the
-          hero, in the one signal colour reserved for exactly this number, and
-          the area drops to a readout line: label left, value right, its
-          caveats under it. */}
-      <div className="px-4 pt-4 pb-3.5">
-        <Stat label={t("est.current")} value={est.current} size="lg" tone="accent" />
-        {/* The demoted total. Summing every sortie counts one haul-out once per
-            visit, so it is effort, not a population — said in those words. */}
-        {/* "across M sorties" counts the sorties the animals were observed ON,
-            which is the ones that produced a count — not every row in the
-            list. */}
-        {counted.length>0 && (
-          <p className="text-2xs text-ink3 mt-2 leading-relaxed">
-            {t("est.observedSub", { n: est.observed, m: counted.length })}
-          </p>
-        )}
-        {/* stat.surveyed, not the analytics panel's longer stat.area: the
-            sub-line is not optional — a sum over the sorties that HAVE a
-            scale, printed bare, reads as the whole survey. */}
-        <div className="mt-3.5 pt-3 border-t border-hair">
-          <div className="flex items-baseline gap-3">
-            <span className="text-xs text-ink3 shrink-0">{t("stat.surveyed")}</span>
-            <span className="flex-1" />
-            <span className="tnum text-lead text-ink truncate" title={areaText}>{areaText}</span>
-          </div>
-          {areaSub && (
-            <p className="text-2xs text-ink3 mt-1 leading-tight" title={areaSub}>{areaSub}</p>
-          )}
-        </div>
-      </div>
+      {/* No headline block. The season's figures are stated once, on Карта. */}
 
-      <div className="px-4 pb-3 space-y-2 border-b border-line">
+      <div className="px-4 pt-4 pb-3 space-y-2 border-b border-line">
         <div className="flex gap-2">
           <Field value={q} onChange={setQ} placeholder={t("left.filter")} icon="search" />
           <Button icon="download" onClick={exportCSV} title={t("left.exportCsvTitle")} />

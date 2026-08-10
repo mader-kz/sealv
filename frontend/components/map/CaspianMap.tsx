@@ -3,7 +3,6 @@ import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useFootageStore } from "@/store/useFootageStore";
 import { useIngestStore } from "@/store/useIngestStore";
 import { colonyHull, expandHull, colonyBounds } from "@/lib/colony";
-import { countOf } from "@/lib/analytics/count";
 import { footagesInRange, detectionsFor } from "@/lib/analytics/brush";
 import type { Detection } from "@/lib/types";
 import { useT } from "@/lib/i18n";
@@ -65,24 +64,56 @@ const DARK_STYLE: any = {
   glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
 };
 
-/* One DOM chip per sortie: the count, and under it the low–high band when the
-   engine produced one. Projected via map.project like the track overlay —
-   DOM renders under any GL backend (headless/software included), which is why
-   the chip is NOT a symbol layer. */
-type ColonyChip = {
-  x: number; y: number;
-  fid: string;
-  count: number;
+/**
+ * One chip per SITE — the map's unit of reading, and the one thing about this
+ * component that the mode rewrite changed.
+ *
+ * It used to be one chip per SORTIE, which meant three visits to one beach drew
+ * three chips stacked on the same 200 m of coast, each with a different number,
+ * and the reader had to know that only the newest of them was in the season
+ * estimate. A site says the thing the estimate is actually made of: one place,
+ * its standing count, and — when it has been flown more than once — the shape
+ * of the visits behind that count.
+ *
+ * This is a DATA-INPUT change and deliberately nothing more. The anchor →
+ * project → diff → absolutely-positioned-DOM pipeline below is untouched: the
+ * chips are still plain DOM (they render under any GL backend, headless
+ * included), still projected in the same rAF pass, still diffed by sameChips
+ * before they touch React. What changed is who fills the array — SeasonMode
+ * clusters the season with the shared groupIntoSites/siteSeries helpers and
+ * hands the result down, so the chip on the map and the card that opens from it
+ * can never disagree about what a site is.
+ */
+export type SiteChip = {
+  /** Stable identity of the site: its assigned id, else its centroid. */
+  key: string;
+  lat: number;
+  lng: number;
+  /** The name somebody typed, or null — never a placeholder. An unnamed site
+   *  is shown by its coordinates, which are the thing that is true about it. */
+  name: string | null;
+  /** The site's STANDING count — its latest visit that produced one. Null when
+   *  every visit is retired or produced nothing: an unknown, never a zero. */
+  count: number | null;
   low: number | null;
   high: number | null;
-  /* The site this sortie belongs to, once someone has named it. Unnamed sites
-     keep their coordinates and this stays null — a placeholder name would be
-     a fact about the map, not about the coast. */
-  name: string | null;
+  /** One value per counted visit, oldest first. Two or more draw the spark. */
+  spark: number[];
+  visits: number;
+  /** No standing count. The chip stays (the place was surveyed) and goes quiet. */
+  retired: boolean;
+  /** The sorties at this site — what the camera frames when the chip is
+   *  clicked. Ids only; the map reads their points from the store. */
+  footageIds: string[];
 };
 
-/* A counted zero, at the weight a zero deserves. One declaration now: the chip
-   sets `color` on itself and .chip-best inherits, so turning the colour down
+/* A chip, once projected. `x`/`y` are canvas pixels; everything else is the
+   SiteChip it came from, copied flat so sameChips can diff without walking. */
+type ColonyChip = SiteChip & { x: number; y: number };
+
+/* A figure that must not spend the signal colour: a counted zero, and a site
+   with no standing count at all. One declaration for both — the chip sets
+   `color` on itself and .chip-best inherits, so turning the colour down
    here mutes the figure without touching anything else. Everything the chip is
    — the flat plate, the square corners, the left hairline, the translate
    centring, the hover scale, the selected rule — stays in globals.css, so a
@@ -95,24 +126,26 @@ type ColonyChip = {
 const ZERO_CHIP_BEST: React.CSSProperties = { fontSize: 13, fontWeight: 500 };
 const ZERO_CHIP_STYLE: React.CSSProperties = { color: "var(--ink-3)" };
 
-/* Where a chip wants to sit, in world coordinates. Computed from the data
-   once; the move handler only projects it. */
-type ChipAnchor = {
-  fid: string;
-  lng: number; lat: number;
-  count: number;
-  low: number | null;
-  high: number | null;
-  name: string | null;
-};
+/* The sparkline drawn inside a multi-visit chip: one polyline over the site's
+   counted visits, oldest first. Not a chart — it has no axis and states no
+   value; it says "this place has been flown before, and this is the shape of
+   it". The numbers themselves are in the site card, one click away, where they
+   can be read properly with their bands and their dates. */
+const SPARK_W = 92;
+const SPARK_H = 16;
 
-/** The site name a sortie carries, read defensively: the field is written by
- *  the site registry and an archive row loaded before any site was named
- *  simply does not have it. */
-const siteNameOf = (f: unknown): string | null => {
-  const n = (f as { siteName?: unknown } | null)?.siteName;
-  return typeof n === "string" && n.trim() ? n.trim() : null;
-};
+function sparkPoints(vals: number[]): string {
+  const max = Math.max(...vals);
+  const min = Math.min(...vals);
+  const range = max - min || 1;
+  return vals
+    .map((v, i) => {
+      const x = (i / (vals.length - 1)) * (SPARK_W - 2) + 1;
+      const y = SPARK_H - 1 - ((v - min) / range) * (SPARK_H - 3);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+}
 
 /* A colony outline, ready for GeoJSON: [lng,lat] pairs with the ring closed.
    Cached per sortie — see hullCacheRef. */
@@ -138,7 +171,18 @@ function pointsSignature(pts: Detection[]): string {
   return pts.length + ":" + h;
 }
 
-export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void }) {
+export default function CaspianMap({
+  onMapReady,
+  siteChips,
+  selectedSiteKey,
+  onSiteClick,
+}: {
+  onMapReady?: (m: any)=>void;
+  /** One chip per site, from the mode that owns the season's grouping. */
+  siteChips?: SiteChip[];
+  selectedSiteKey?: string | null;
+  onSiteClick?: (key: string)=>void;
+}) {
   const { t, tp } = useT();
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any | null>(null);
@@ -578,33 +622,21 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
     return out;
   },[footages, showTracks]);
 
-  /* One chip per sortie, anchored at the centre of the colony's bounding box
-     (fallback: the sortie centre). The number comes from countOf() — the one
-     shared definition: the engine's best estimate, else the surviving
-     detections plus the animals it counted but could not place. The point
-     cloud supplies the GEOMETRY only, so the chip over a colony and the
-     inspector's headline for that same sortie can never disagree. */
+  /* Where the chips want to sit, in world coordinates — the caller's sites,
+     filtered to the ones that can be placed. The "colonies" toggle still hides
+     them, because a chip IS the colony reading at season zoom and turning the
+     colonies off and leaving twelve counts floating over the water was never
+     what that switch meant.
+
+     Nothing is computed from the sortie list here any more. The season's
+     arithmetic — which visit is standing, what the band is, whether the place
+     has a name — belongs to the helpers SeasonMode calls, and duplicating any
+     part of it in the renderer is how the map came to print a number the panel
+     beside it disagreed with. */
   const chipAnchors = useMemo(()=>{
-    if(!showColonies) return [] as ChipAnchor[];
-    const out: ChipAnchor[] = [];
-    for(const f of footages){
-      const pts = placed.byFootage.get(f.id);
-      const b = pts ? colonyBounds(pts) : null;
-      const lat = b ? (b.minLat+b.maxLat)/2 : f.center?.lat;
-      const lng = b ? (b.minLng+b.maxLng)/2 : f.center?.lng;
-      if(!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
-      const hasBand = f.band != null && f.band.low != null && f.band.high != null && f.band.low !== f.band.high;
-      out.push({
-        fid: f.id,
-        lng: lng as number, lat: lat as number,
-        count: countOf(f),
-        low: hasBand ? f.band!.low : null,
-        high: hasBand ? f.band!.high : null,
-        name: siteNameOf(f),
-      });
-    }
-    return out;
-  },[footages, placed, showColonies]);
+    if(!showColonies) return [] as SiteChip[];
+    return (siteChips ?? []).filter(s=> Number.isFinite(s.lat) && Number.isFinite(s.lng));
+  },[siteChips, showColonies]);
 
   useEffect(()=>{
     const map=mapRef.current; if(!map||!mapLoaded) return;
@@ -629,7 +661,7 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
         for(const a of chipAnchors){
           const pr = m.project([a.lng, a.lat]);
           if(rect && (pr.x < -120 || pr.x > rect.width+120 || pr.y < -120 || pr.y > rect.height+120)) continue;
-          chips.push({ x:pr.x, y:pr.y, fid:a.fid, count:a.count, low:a.low, high:a.high, name:a.name });
+          chips.push({ ...a, x:pr.x, y:pr.y });
         }
         setOverlayChips(prev=> sameChips(prev, chips) ? prev : chips);
         /* The zoom, for the pin readout: a coordinate clicked at basin zoom
@@ -653,24 +685,57 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
     };
   },[mapLoaded, trackLines, chipAnchors]);
 
-  /* Chip click = select the sortie and frame its colony. Store read at event
-     time — closures over store state go stale (the map outlives renders). */
-  const handleChipClick = useCallback((fid: string)=>{
-    select(fid);
+  /* Chip click = open the site and frame it. The site's own animals decide the
+     frame — every placed point of every sortie flown there, so a haul-out
+     surveyed three times from three slightly different centres still lands
+     whole. Store read at event time; closures over store state go stale
+     because the map outlives renders. */
+  const handleChipClick = useCallback((chip: SiteChip)=>{
+    onSiteClick?.(chip.key);
     const m = mapRef.current; if(!m) return;
     try{ m.stop(); }catch{}
     const s = useFootageStore.getState();
-    const pts = s.detections.filter(d=> d.footageId===fid && d.status!=="false_positive");
+    const ids = new Set(chip.footageIds);
+    const pts = s.detections.filter(d=> ids.has(d.footageId) && d.status!=="false_positive");
     const b = colonyBounds(pts);
     if (b) {
       try{ m.fitBounds([[b.minLng, b.minLat],[b.maxLng, b.maxLat]], { padding: 80, duration: 420, maxZoom: 13 }); }catch{}
-    } else {
-      const f = s.footages.find(x=>x.id===fid);
-      if (f && Number.isFinite(f.center?.lat) && Number.isFinite(f.center?.lng)) {
-        try{ m.easeTo({ center:[f.center.lng, f.center.lat], zoom: Math.max(m.getZoom(), ZOOM_ANIMALS+0.1), duration: 420 }); }catch{}
-      }
+    } else if (Number.isFinite(chip.lat) && Number.isFinite(chip.lng)) {
+      /* No placed animals — the count exists, the points do not. The centroid
+         is still a real coordinate, so the camera goes there rather than
+         refusing to move and reading as a dead chip. */
+      try{ m.easeTo({ center:[chip.lng, chip.lat], zoom: Math.max(m.getZoom(), ZOOM_COLONY+0.4), duration: 420 }); }catch{}
     }
-  },[select]);
+  },[onSiteClick]);
+
+  /* The one camera channel, and its half of the handshake.
+   *
+   * Anything anywhere — a site card's visit row, an archive row, a report line
+   * — dispatches `flyto` on `document`; nothing reaches into this map through a
+   * global. The shell listens too, but only to make sure the map is ON SCREEN:
+   * when the event is raised from another mode it switches to Карта and
+   * re-raises the same detail every 200 ms until somebody answers, because this
+   * component may still be code-splitting in when the switch happens.
+   *
+   * preventDefault() IS the answer. Calling it once the camera has actually
+   * moved is what stops the replay; without it the retries simply run out and
+   * the camera is eased to the same place up to six times, which is wasteful
+   * rather than broken. Replayed events are NOT ignored here — they are the
+   * ones this handler exists to receive. */
+  useEffect(()=>{
+    const h = (e: Event)=>{
+      const d = ((e as CustomEvent).detail ?? {}) as Record<string, unknown>;
+      const lat = Number(d.lat), lng = Number(d.lng);
+      if(!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+      const zoom = Number.isFinite(Number(d.zoom)) ? Number(d.zoom) : 8.5;
+      const m = mapRef.current; if(!m) return;
+      try{ m.stop(); }catch{}
+      try{ m.easeTo({ center:[lng,lat], zoom, duration: 260 }); }catch{ return; }
+      e.preventDefault();
+    };
+    document.addEventListener("flyto", h);
+    return ()=> document.removeEventListener("flyto", h);
+  },[mapLoaded]);
 
   /* A chip is a clickable DOM overlay, not a child of MapLibre's canvas
      container. That is why clicks work — but it also means a wheel / trackpad
@@ -738,39 +803,78 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
         ))}
       </svg>
 
-      {/* Colony chips — the only coloured thing on screen, now that the
-          basemap is monochrome and the hulls are ink. One per sortie: the
-          count, and under it the honest low–high band. In pin mode they step
-          back and stop catching clicks meant for the anchor.
+      {/* Site chips — the only coloured thing on screen, now that the basemap
+          is monochrome and the hulls are ink. One per PLACE: its name, its
+          standing count, the band under it, and a spark when the place has
+          been flown more than once. In pin mode they step back and stop
+          catching clicks meant for the anchor.
           `chipLayerRef` is load-bearing, not decoration: the wheel over a chip
           used to zoom the map underneath it. */}
       <div ref={chipLayerRef} className={`absolute inset-0 z-[6] pointer-events-none ${pinMode ? "colony-chips-dimmed" : ""}`}>
         {overlayChips.map(c=>{
-          const isSel = c.fid===selectedId;
-          /* A sortie that counted nothing is data, so its chip stays, keeps its
-             number and keeps its click. What it loses is the volume: a chip
-             reading "0" in the signal colour shouts louder over an empty beach
-             than the 645 next to it does over a full one. Quiet, not hidden. */
-          const zero = c.count===0;
+          const isSel = c.key===selectedSiteKey;
+          /* Two ways a chip goes quiet, and they are different claims. A site
+             with NO standing count (every visit retired, or none produced a
+             number) prints an em dash — the signal colour is for measurements,
+             and there is none. A site that counted ZERO keeps its number, in
+             ink rather than green: "this beach was empty" is a finding, and a
+             green 0 shouts it louder than the 645 next to it. */
+          const muted = c.retired || c.count===0;
+          const label = c.name ?? `${c.lat.toFixed(3)}, ${c.lng.toFixed(3)}`;
+          const band = c.low!=null && c.high!=null && c.low!==c.high;
           return (
             <button
-              key={c.fid}
-              onClick={()=>handleChipClick(c.fid)}
-              /* The site's name first when it has one — a chip reading "Kenderli ·
-                 218 seals" is a sentence an ecologist can act on; "218 seals"
-                 over a dot is a number they have to go and identify. */
+              key={c.key}
+              onClick={()=>handleChipClick(c)}
+              /* The place's name first — a chip reading "Kenderli · 218 seals"
+                 is a sentence an ecologist can act on; "218 seals" over a dot
+                 is a number they have to go and identify. */
               title={[
-                c.name,
-                c.low!=null
-                  ? `${c.count} ${tp(c.count, "unit.seals")} (${t("misc.range", { low: c.low, high: c.high as number })})`
-                  : `${c.count} ${tp(c.count, "unit.seals")}`,
-              ].filter(Boolean).join(" · ")}
+                label,
+                c.count==null
+                  ? t("site.noStanding")
+                  : band
+                    ? `${c.count} ${tp(c.count, "unit.seals")} (${t("misc.range", { low: c.low as number, high: c.high as number })})`
+                    : `${c.count} ${tp(c.count, "unit.seals")}`,
+                `${c.visits} ${tp(c.visits, "unit.sorties")}`,
+              ].join(" · ")}
+              aria-label={t("site.open")}
               className={`colony-chip ${isSel ? "selected z-10" : ""}`}
-              style={{ left:c.x, top:c.y, ...(zero ? ZERO_CHIP_STYLE : null) }}
+              style={{ left:c.x, top:c.y, ...(muted ? ZERO_CHIP_STYLE : null) }}
             >
-              <span className="chip-best tnum" style={zero ? ZERO_CHIP_BEST : undefined}>{c.count}</span>
-              {c.low!=null && c.high!=null && (
+              {/* The name, above the figure and a step quieter than it. It is
+                  how you tell two chips apart; the number is why you looked. */}
+              <span
+                className="block max-w-[176px] truncate"
+                style={{ fontSize: 10.5, lineHeight: 1.3, color: "var(--ink-3)", marginBottom: 3 }}
+              >
+                {label}
+              </span>
+              <span className="chip-best tnum" style={muted ? ZERO_CHIP_BEST : undefined}>
+                {c.count ?? "—"}
+              </span>
+              {band && (
                 <span className="chip-range tnum">{c.low}–{c.high}</span>
+              )}
+              {/* A place flown more than once says so on the chip itself. The
+                  values are not labelled here on purpose — this is a shape, and
+                  the numbers behind it are one click away in the site card. */}
+              {c.spark.length > 1 && (
+                <svg
+                  width={SPARK_W}
+                  height={SPARK_H}
+                  viewBox={`0 0 ${SPARK_W} ${SPARK_H}`}
+                  aria-hidden="true"
+                  style={{ display: "block", marginTop: 5 }}
+                >
+                  <polyline
+                    points={sparkPoints(c.spark)}
+                    fill="none"
+                    stroke="var(--ink-4)"
+                    strokeWidth={1}
+                    strokeLinejoin="round"
+                  />
+                </svg>
               )}
             </button>
           );
@@ -817,7 +921,14 @@ function sameChips(a: ColonyChip[], b: ColonyChip[]){
   if(a.length!==b.length) return false;
   for(let i=0;i<a.length;i++){
     const x=a[i], y=b[i];
-    if(x.fid!==y.fid || x.count!==y.count || x.low!==y.low || x.high!==y.high || x.name!==y.name) return false;
+    if(x.key!==y.key || x.count!==y.count || x.low!==y.low || x.high!==y.high) return false;
+    if(x.name!==y.name || x.retired!==y.retired || x.visits!==y.visits) return false;
+    /* The spark is redrawn from these values, so a visit whose count changed
+       under review has to reach the DOM even when the site's standing figure
+       did not move. Length first, then the values — the array is one number
+       per visit, so this is a handful of comparisons per chip. */
+    if(x.spark.length!==y.spark.length) return false;
+    for(let k=0;k<x.spark.length;k++) if(x.spark[k]!==y.spark[k]) return false;
     if(Math.abs(x.x-y.x)>0.5 || Math.abs(x.y-y.y)>0.5) return false;
   }
   return true;
