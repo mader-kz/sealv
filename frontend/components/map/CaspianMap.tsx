@@ -359,6 +359,12 @@ export default function CaspianMap({
     });
     if (NavCtrl) map.addControl(new NavCtrl({ showCompass: false }), "bottom-right");
     if (AttrCtrl) map.addControl(new AttrCtrl({ compact: true }), "bottom-left");
+    /* A survey chart with no scale bar asks the reader to guess how far apart
+       two haul-outs are — on a product whose whole subject is distance, area
+       and the 2 km that decides whether two visits are one place. Metric, and
+       bottom-right above the zoom so it never lands on the attribution. */
+    const ScaleCtrl: any = (ml as any).ScaleControl || (ml as any).default?.ScaleControl;
+    if (ScaleCtrl) map.addControl(new ScaleCtrl({ maxWidth: 110, unit: "metric" }), "bottom-right");
     // ensure interactions enabled — overlay was blocking
     try{ map.dragPan.enable(); map.scrollZoom.enable(); map.doubleClickZoom.enable(); map.boxZoom.enable(); map.keyboard.enable(); }catch{}
     map.on("load", ()=> {
@@ -971,6 +977,7 @@ export default function CaspianMap({
                  centre to the true anchor; hairline, never interactive. */
               <span
                 aria-hidden="true"
+                className="chip-stalk"
                 style={{
                   position: "absolute",
                   left: c.x,

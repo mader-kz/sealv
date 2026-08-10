@@ -757,7 +757,11 @@
     "site.openSortie": "Түсірілімді ашу",
     "pin.barAsk": "Картадан орынды басыңыз",
     "pin.barPlaced": "Нүкте: {lat}, {lng} — жылжыту үшін тағы басыңыз",
-    "pin.barOrphan": "Орын күтіп тұрған файл жоқ"
+    "pin.barOrphan": "Орын күтіп тұрған файл жоқ",
+    "map.pinTypedExact": "енгізілген дәлдікте сақталады",
+    "map.pinTypeLabel": "Ені мен бойлықты енгізу",
+    "map.pinSet": "Қою",
+    "map.pinBad": "Ені мен бойлықты енгізіңіз, мысалы 43.650, 51.180"
   },
   "ru": {
     "brand.sub": "Учёт каспийского тюленя",
@@ -1517,7 +1521,11 @@
     "site.openSortie": "Открыть съёмку",
     "pin.barAsk": "Кликните место на карте",
     "pin.barPlaced": "Точка: {lat}, {lng} — кликните ещё раз, чтобы сдвинуть",
-    "pin.barOrphan": "Нет файла, который ждёт место"
+    "pin.barOrphan": "Нет файла, который ждёт место",
+    "map.pinTypedExact": "сохраняется ровно так, как введено",
+    "map.pinTypeLabel": "Ввести широту и долготу",
+    "map.pinSet": "Задать",
+    "map.pinBad": "Нужны широта и долгота, например 43.650, 51.180"
   },
   "en": {
     "brand.sub": "Caspian seal survey",
@@ -2277,6 +2285,10 @@
     "site.openSortie": "Open the sortie",
     "pin.barAsk": "Click the spot on the map",
     "pin.barPlaced": "Point: {lat}, {lng} — click again to move it",
-    "pin.barOrphan": "No file is waiting for a location"
+    "pin.barOrphan": "No file is waiting for a location",
+    "map.pinTypedExact": "stored exactly as typed",
+    "map.pinTypeLabel": "Type latitude and longitude",
+    "map.pinSet": "Set",
+    "map.pinBad": "Latitude and longitude, e.g. 43.650, 51.180"
   }
 }
