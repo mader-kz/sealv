@@ -221,13 +221,18 @@ export default function Page(){
                      exists to produce, so it is the one number allowed to be
                      large and the one allowed the signal colour. The sortie
                      count beside it is context and steps down hard — same
-                     baseline, half the size, plain ink. */
+                     baseline, a fifth of the size, plain ink.
+                     It is set at the figure step, above the 21 px each colony
+                     chip carries: this chip only appears with the footage list
+                     shut, so it is the only place the season total is stated,
+                     and a total drawn smaller than every one of its parts on
+                     the same map is the hierarchy upside down. */
                   <div
                     className="plate px-2.5 py-1.5"
                     title={t("est.observedSub", { n: est.observed, m: brushed.length })}
                   >
                     <div className="flex items-baseline gap-1.5">
-                      <span className="text-title tnum text-accent">{est.current}</span>
+                      <span className="text-fig tnum text-accent">{est.current}</span>
                       {!mapNarrow && <span className="text-2xs text-ink3">{tp(est.current, "unit.seals")}</span>}
                       <span className="text-ink4 px-0.5">·</span>
                       <span className="text-base tnum text-ink">{brushed.length}</span>
