@@ -149,16 +149,17 @@ export default function SitePicker({ f }: { f: Footage }) {
   }, [name, f.surveyId, f.siteId, centroid, members, assignSite, applySiteName, t]);
 
   return (
-    <div className="py-1.5 border-b border-line-soft last:border-0">
+    <div className="py-1.5 border-b border-hair last:border-0">
       <div className="flex items-baseline gap-3">
-        <span className="text-xs text-ink3 w-[96px] shrink-0">{t("rec.site.label")}</span>
+        <span className="label w-[96px] shrink-0">{t("rec.site.label")}</span>
         <span className="text-sm text-ink truncate flex-1" title={assignedName ?? undefined}>
           {assignedName ?? (
             /* No name is not no place: the measured coordinate stands in, so a
-               site is never rendered as blank. */
+               site is never rendered as blank. It is a figure, so it is set in
+               tabular Inter rather than dressed up as a hash. */
             <span className="text-ink3">
               {centroid
-                ? <span className="font-mono tnum">{centroid.lat.toFixed(3)}, {centroid.lng.toFixed(3)}</span>
+                ? <span className="tnum">{centroid.lat.toFixed(3)}, {centroid.lng.toFixed(3)}</span>
                 : t("rec.site.unnamed")}
             </span>
           )}
@@ -166,7 +167,7 @@ export default function SitePicker({ f }: { f: Footage }) {
         {f.surveyId && (
           <button
             onClick={() => setOpen((v) => !v)}
-            className="text-2xs text-ink3 hover:text-ink transition-colors shrink-0"
+            className="text-xs text-ink3 hover:text-ink transition-colors shrink-0"
           >
             {assignedName ? t("rec.site.rename") : t("rec.site.nameIt")}
           </button>
@@ -174,7 +175,9 @@ export default function SitePicker({ f }: { f: Footage }) {
       </div>
 
       {open && (
-        <div className="mt-2 space-y-1.5">
+        <div className="mt-2 space-y-2">
+          {/* Naming a place is typing on a ruled line — the same object as
+              every other field in this column. */}
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -182,22 +185,22 @@ export default function SitePicker({ f }: { f: Footage }) {
             maxLength={120}
             placeholder={t("rec.site.nameLabel")}
             aria-label={t("rec.site.nameLabel")}
-            className="w-full h-7 bg-surface2 border border-line rounded px-2.5 text-sm placeholder:text-ink3 focus:outline-none focus:border-ink3 transition-colors"
+            className="w-full h-7 bg-transparent border-0 border-b border-line px-0 text-sm placeholder:text-ink4 focus:border-ink2 transition-colors"
           />
           {/* What is about to happen, before it happens: this writes to every
               sortie at the place, not to the one on screen. */}
           {!f.siteId && members.length > 1 && (
-            <p className="text-2xs text-ink3 leading-relaxed">
+            <p className="text-xs text-ink3 leading-relaxed">
               {t("rec.site.applies", { n: members.length })}
             </p>
           )}
           {progress && (
-            <p className="text-2xs text-ink2 tnum">
+            <p className="text-xs text-ink2 tnum">
               {t("rec.site.assigning", { n: progress.done, m: progress.total })}
             </p>
           )}
-          {error && <p className="text-2xs text-bad leading-relaxed">{error}</p>}
-          <div className="flex gap-1.5">
+          {error && <p className="text-xs text-bad leading-relaxed">{error}</p>}
+          <div className="flex gap-2">
             <Button variant="primary" onClick={() => void submit()} disabled={busy}>
               {t("btn.confirm")}
             </Button>

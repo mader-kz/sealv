@@ -100,7 +100,7 @@ export default function EditHistory({ f }: { f: Footage }) {
             <button
               onClick={toggle}
               aria-expanded={open}
-              className="text-2xs text-ink3 hover:text-ink transition-colors"
+              className="text-xs text-ink3 hover:text-ink transition-colors"
             >
               {open ? t("rec.edits.hide") : t("rec.edits.show")}
             </button>
@@ -123,7 +123,7 @@ export default function EditHistory({ f }: { f: Footage }) {
               return (
                 <div
                   key={`${r.id}-${i}`}
-                  className="flex items-baseline gap-2 py-1 border-b border-line-soft last:border-0"
+                  className="flex items-baseline gap-2 py-1 border-b border-hair last:border-0"
                 >
                   <span className="text-2xs text-ink2 w-[76px] shrink-0 truncate">
                     {opLabel(text(r.op))}

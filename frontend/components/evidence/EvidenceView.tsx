@@ -82,6 +82,14 @@ const Overlay = memo(function Overlay({
       {pixels.map((p) => {
         if (!isMark(p)) return null;
         if (!Number.isFinite(p.px) || !Number.isFinite(p.py)) return null;
+        /* Colour means a verdict here and nothing else. A mark nobody has
+           ruled on is a near-empty white ring — the frame underneath is the
+           evidence, so the mark points at the animal instead of painting over
+           it — and green appears only where a human has said yes. It was the
+           other way round in effect: `good` and `accent` are the same green,
+           so every engine mark on the frame already wore the confirmed
+           colour, and a reviewer could not see what their own pass had
+           changed. Rejected marks are not drawn at all (isMark, above). */
         const validated = p.status === "validated";
         return (
           <circle
@@ -90,8 +98,8 @@ const Overlay = memo(function Overlay({
             cy={p.py}
             r={r}
             className={interactive ? cls : undefined}
-            fill={validated ? "var(--good)" : "var(--accent)"}
-            fillOpacity={validated ? 0.55 : 0.4}
+            fill={validated ? "var(--good)" : "var(--ink)"}
+            fillOpacity={validated ? 0.38 : 0.09}
             stroke={validated ? "var(--good)" : "#fff"}
             strokeOpacity={0.9}
             strokeWidth={Math.max(0.75, r * 0.3)}
@@ -565,7 +573,12 @@ export default function EvidenceView({
         className="max-w-[92vw] w-[92vw] h-[88vh] p-0 gap-0 flex flex-col overflow-hidden bg-surface border-line rounded"
       >
         <DialogHeader className="flex-row items-baseline gap-3 space-y-0 px-4 py-3 pr-12 border-b border-line shrink-0">
-          <DialogTitle className="text-sm font-medium text-ink tracking-normal">
+          {/* The hero of this view is the frame, so its chrome stays chrome:
+              one step up from the body, no more. The count stays INSIDE the
+              title — it is part of the dialog's accessible name, and pulling
+              it out into a sibling span would have announced "Evidence" over a
+              screen showing 1175 marked animals. */}
+          <DialogTitle className="text-lead font-medium text-ink tracking-normal">
             {t("ev.title")} — <span className="tnum">{n}</span>{" "}
             {tp(n, "ev.animalsMarked")}
           </DialogTitle>
