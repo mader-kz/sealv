@@ -627,7 +627,13 @@
     "nav.report": "Есеп",
     "rail.tipReview": "Тексеруді күтеді: {n}",
     "rail.tipQueue": "Кезекте: {n}",
-    "rail.tipSorties": "Мұрағаттағы ұшулар: {n}"
+    "rail.tipSorties": "Мұрағаттағы ұшулар: {n}",
+    "ingest.pageSub": "ұшу аппаратынан түскеннің бәрі — картадағы санға айналғанға дейін",
+    "ingest.returning": "Кезек аяқталды — Картаға ораламыз",
+    "ingest.queueEmpty": "Кезек бос",
+    "ingest.queueEmptyHint": "Файлдарды терезенің кез келген жеріне сүйресеңіз болады — бұл экран өзі ашылады.",
+    "drop.browse": "Файлдарды таңдау",
+    "ingest.pinOnMap": "Нүкте Картада қойылады: «Картада көрсету» түймесін басыңыз, картаны басыңыз да, растау үшін осында оралыңыз."
   },
   "ru": {
     "brand.sub": "Учёт каспийского тюленя",
@@ -1257,7 +1263,13 @@
     "nav.report": "Отчёт",
     "rail.tipReview": "Ждут проверки: {n}",
     "rail.tipQueue": "В очереди: {n}",
-    "rail.tipSorties": "Вылетов в архиве: {n}"
+    "rail.tipSorties": "Вылетов в архиве: {n}",
+    "ingest.pageSub": "всё, что прилетело с борта, — до того, как это станет цифрой на карте",
+    "ingest.returning": "Очередь досчиталась — возвращаемся на Карту",
+    "ingest.queueEmpty": "Очередь пуста",
+    "ingest.queueEmptyHint": "Файлы можно бросить в любое место окна — этот экран откроется сам.",
+    "drop.browse": "Выбрать файлы",
+    "ingest.pinOnMap": "Точка ставится на Карте: нажмите «Указать на карте», кликните по карте и вернитесь сюда, чтобы подтвердить."
   },
   "en": {
     "brand.sub": "Caspian seal survey",
@@ -1887,6 +1899,12 @@
     "nav.report": "Report",
     "rail.tipReview": "Awaiting review: {n}",
     "rail.tipQueue": "In the queue: {n}",
-    "rail.tipSorties": "Sorties in the archive: {n}"
+    "rail.tipSorties": "Sorties in the archive: {n}",
+    "ingest.pageSub": "everything that came off the aircraft — before it becomes a number on the map",
+    "ingest.returning": "The queue is done — going back to the map",
+    "ingest.queueEmpty": "The queue is empty",
+    "ingest.queueEmptyHint": "Files can be dropped anywhere in the window — this screen opens itself.",
+    "drop.browse": "Choose files",
+    "ingest.pinOnMap": "The anchor is placed on the map: press “Point at it on the map”, click the map, then come back here to confirm."
   }
 }
