@@ -62,6 +62,23 @@ type Repeat =
 /** Number of items to print before the list says how much it is not showing. */
 const LIST_CAP = 8;
 
+/* This panel is one long argument in five parts, and every line of it used to
+   be the same 10px grey — the reader had no way in but to read all of it in
+   order. The parts are separated the way the rest of the instrument separates
+   things: by weight and colour at a fixed size, never by a caps rule or a box.
+
+   GROUP is one step under the panel's own SectionHead (`.hd`, 11.5/600/ink-2)
+   and one step over the body, so the panel head still leads:
+     panel head  11.5px  600  ink-2   .hd
+     group       11px    500  ink-2   GROUP
+     sub-head    11px    400  ink-2   SUB
+     body        11px    400  ink-3
+   Body prose also came up off 10px onto the 11px label step: 10px is this
+   design's footer size, and every sentence here is a qualification on a figure
+   somebody is about to put in a report. */
+const GROUP = "text-xs font-medium text-ink2";
+const SUB = "text-xs text-ink2";
+
 export default function TrustPanel({
   footages,
   retired,
@@ -213,11 +230,11 @@ export default function TrustPanel({
   return (
     <div className="px-4 py-4 border-b border-line">
       <SectionHead title={t("trust.title")} />
-      <p className="text-2xs text-ink3 mt-1 leading-relaxed">{t("trust.intro")}</p>
+      <p className="text-xs text-ink3 mt-1 leading-relaxed">{t("trust.intro")}</p>
 
       {/* Verification — three numbers, because one share hides the third. */}
       <div className="mt-3">
-        <div className="text-2xs text-ink3">{t("trust.verification")}</div>
+        <div className={GROUP}>{t("trust.verification")}</div>
         <div className="flex gap-3 mt-1.5">
           {/* Four, not one. A single share hides two of them: 562 animals of
               this season have no row a reviewer can open, and a rejection is
@@ -232,11 +249,11 @@ export default function TrustPanel({
           />
           <Figure value={season.unreviewable} label={t("trust.notReviewable")} />
         </div>
-        <p className="text-2xs text-ink3 mt-1.5 leading-relaxed">{t("trust.notReviewableWhy")}</p>
+        <p className="text-xs text-ink3 mt-1.5 leading-relaxed">{t("trust.notReviewableWhy")}</p>
         {/* Ground counts are outside every figure above, and saying so is the
             difference between an exclusion and an omission. */}
         {groundCounts > 0 && (
-          <p className="text-2xs text-ink3 mt-1.5 leading-relaxed">
+          <p className="text-xs text-ink3 mt-1.5 leading-relaxed">
             {t("trust.groundCountsExcluded", { n: groundCounts })}
           </p>
         )}
@@ -244,7 +261,7 @@ export default function TrustPanel({
             rulings of either kind, so a sortie whose animals were all rejected
             reads as finished rather than as untouched. */}
         {perSortie.length > 0 && (
-          <p className="text-2xs text-ink3 mt-1.5 leading-relaxed">{t("trust.rowsRuled")}</p>
+          <p className="text-xs text-ink3 mt-1.5 leading-relaxed">{t("trust.rowsRuled")}</p>
         )}
         {perSortie.length > 0 && (
           <ul className="mt-2 space-y-1">
@@ -256,7 +273,7 @@ export default function TrustPanel({
                  It is named for what it is and says so instead. */
               const label = rs.groundCount ? t("rec.manual.title") : f.filename;
               return (
-                <li key={f.id} className="flex items-baseline justify-between gap-2 text-2xs">
+                <li key={f.id} className="flex items-baseline justify-between gap-2 text-xs">
                   <span className="text-ink3 truncate" title={label}>{label}</span>
                   <span className="tnum text-ink2 shrink-0">
                     {rs.groundCount
@@ -274,7 +291,7 @@ export default function TrustPanel({
           </ul>
         )}
         {footages.length > perSortie.length && (
-          <p className="text-2xs text-ink3 mt-1">
+          <p className="text-xs text-ink3 mt-1">
             {t("est.showingOf", { n: perSortie.length, m: footages.length })}
           </p>
         )}
@@ -282,25 +299,25 @@ export default function TrustPanel({
 
       {/* Scale provenance — an assumed GSD is a guess under every area. */}
       <div className="mt-4">
-        <div className="text-2xs text-ink3">{t("trust.scale")}</div>
+        <div className={GROUP}>{t("trust.scale")}</div>
         <div className="flex gap-3 mt-1.5">
           <Figure value={scale.measured} label={t("trust.scaleMeasured")} />
           <Figure value={scale.assumed} label={t("trust.scaleAssumed")} />
           <Figure value={scale.unknown} label={t("trust.scaleUnknown")} />
         </div>
-        <p className="text-2xs text-ink3 mt-1.5 leading-relaxed">{t("trust.scaleNote")}</p>
+        <p className="text-xs text-ink3 mt-1.5 leading-relaxed">{t("trust.scaleNote")}</p>
       </div>
 
       {/* The engine's own reservations, verbatim. Paraphrasing a caveat is
           editing evidence. */}
       <div className="mt-4">
-        <div className="text-2xs text-ink3">{t("trust.caveats")}</div>
+        <div className={GROUP}>{t("trust.caveats")}</div>
         {caveated.length === 0 ? (
-          <p className="text-2xs text-ink3 mt-1.5 leading-relaxed">{t("trust.noCaveats")}</p>
+          <p className="text-xs text-ink3 mt-1.5 leading-relaxed">{t("trust.noCaveats")}</p>
         ) : (
           <ul className="mt-1.5 space-y-1.5">
             {caveated.slice(0, LIST_CAP).map(({ f, list }) => (
-              <li key={f.id} className="text-2xs leading-relaxed">
+              <li key={f.id} className="text-xs leading-relaxed">
                 <span className="text-ink2">{f.filename}</span>
                 {list.map((c, i) => (
                   <span key={i} className="block text-ink3">{c}</span>
@@ -310,13 +327,13 @@ export default function TrustPanel({
           </ul>
         )}
         <div className="mt-2">
-          <div className="text-2xs text-ink3">{t("trust.fpBasis")}</div>
+          <div className={SUB}>{t("trust.fpBasis")}</div>
           {fpGroups.length === 0 ? (
-            <p className="text-2xs text-ink3 mt-1 leading-relaxed">{t("trust.noFpBasis")}</p>
+            <p className="text-xs text-ink3 mt-1 leading-relaxed">{t("trust.noFpBasis")}</p>
           ) : (
             <ul className="mt-1 space-y-1">
               {fpGroups.map((g) => (
-                <li key={g.text} className="text-2xs leading-relaxed">
+                <li key={g.text} className="text-xs leading-relaxed">
                   <span className="text-ink3">
                     {g.n} {tp(g.n, "unit.sorties")} —{" "}
                   </span>
@@ -330,11 +347,11 @@ export default function TrustPanel({
 
       {/* Repeatability, stated as the two things that were measured. */}
       <div className="mt-4">
-        <div className="text-2xs text-ink3">{t("trust.repeatability")}</div>
-        <p className="text-2xs text-ink3 mt-1 leading-relaxed">{t("trust.repeatNote")}</p>
+        <div className={GROUP}>{t("trust.repeatability")}</div>
+        <p className="text-xs text-ink3 mt-1 leading-relaxed">{t("trust.repeatNote")}</p>
 
-        <div className="mt-2 text-2xs leading-relaxed">
-          <span className="text-ink3">{t("trust.determinism")}</span>
+        <div className="mt-2 text-xs leading-relaxed">
+          <span className={SUB}>{t("trust.determinism")}</span>
           {repeats.length === 0 ? (
             <p className="text-ink3 mt-1">{t("trust.determNone")}</p>
           ) : (
@@ -359,8 +376,8 @@ export default function TrustPanel({
           )}
         </div>
 
-        <div className="mt-2.5 text-2xs leading-relaxed">
-          <span className="text-ink3">{t("trust.spread")}</span>
+        <div className="mt-2.5 text-xs leading-relaxed">
+          <span className={SUB}>{t("trust.spread")}</span>
           <p className="text-ink3 mt-1">{t("trust.spreadNote")}</p>
           {spread.rows.length === 0 ? (
             <p className="text-ink3 mt-1">{t("trust.spreadNone")}</p>
@@ -385,8 +402,8 @@ export default function TrustPanel({
       </div>
 
       {/* What is missing from every figure above, said out loud. */}
-      <div className="mt-4 space-y-1 text-2xs leading-relaxed">
-        <div className="text-2xs text-ink3">{t("trust.missing")}</div>
+      <div className="mt-4 space-y-1 text-xs leading-relaxed">
+        <div className={GROUP}>{t("trust.missing")}</div>
         <p className="text-ink2">
           {failedError
             ? t("trust.failedUnknown")
@@ -425,13 +442,23 @@ function retiredReasons(retired: Footage[]): string | undefined {
     .join("\n");
 }
 
-/** One count with its word under it. Smaller than Stat — three of these sit in
- *  a 380px column and Stat's figure size would wrap every label. */
+/** One count with its word under it. Smaller than Stat — four of these sit in
+ *  a 380px column and Stat's figure size would wrap every label.
+ *
+ *  A zero steps down to the quiet ramp, the same rule the group-size histogram
+ *  follows: on today's data three of these four figures are 0, and printed at
+ *  full ink they read as four findings when the panel is making one. Nothing
+ *  is hidden — the zero is still there, at the weight a zero deserves. */
 function Figure({ value, label }: { value: number; label: string }) {
   return (
     <div className="min-w-0 flex-1">
-      <div className="tnum text-lead text-ink leading-none truncate" title={String(value)}>{value}</div>
-      <div className="text-2xs text-ink3 mt-1 leading-tight">{label}</div>
+      <div
+        className={`tnum text-lead leading-none truncate ${value ? "text-ink" : "text-ink3"}`}
+        title={String(value)}
+      >
+        {value}
+      </div>
+      <div className="text-xs text-ink3 mt-1 leading-tight">{label}</div>
     </div>
   );
 }

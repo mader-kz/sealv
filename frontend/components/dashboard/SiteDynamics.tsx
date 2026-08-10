@@ -90,11 +90,31 @@ export default function SiteDynamics({
 
   const day = (iso: string) => formatDate(iso, lang, { day: "numeric", month: "short" });
 
+  /* Which visit is this site's STANDING count — the one figure of this whole
+     series that the season headline is built from, and therefore the only mark
+     here allowed the signal colour.
+
+     It is not simply the last dot. seasonEstimate() walks back from the end
+     past visits that produced no count (null is unknown, never zero), because
+     a flight that measured nothing does not empty a haul-out. This repeats
+     that walk exactly, so the green dot is always on the number that is
+     actually being summed into the estimate above — a green dot on the last
+     visit when the estimate is reading the one before it would be the chart
+     contradicting the headline. */
+  let standingIdx = -1;
+  for (let i = series.length - 1; i >= 0; i--) {
+    const b = series[i].best;
+    if (b != null && Number.isFinite(b)) { standingIdx = i; break; }
+  }
+
   return (
     <div className="mt-2 pl-2 border-l border-line-soft">
       <div className="flex items-baseline justify-between gap-2">
-        <span className="text-2xs text-ink3">{t("dyn.allVisits")}</span>
-        <span className="text-2xs tnum text-ink3" title={t("dyn.axisTopTitle")}>
+        {/* The disclosure's own head, carried by weight and colour — one step
+            over the axis reading beside it, which is a fact about the chart
+            and not a title. */}
+        <span className="text-xs font-medium text-ink2">{t("dyn.allVisits")}</span>
+        <span className="text-xs tnum text-ink3" title={t("dyn.axisTopTitle")}>
           {t("dyn.axisTop", { n: top })}
         </span>
       </div>
@@ -159,12 +179,19 @@ export default function SiteDynamics({
               )}
               {/* A ground count is a hollow dot — a shape difference, not a
                   colour one, so the manual/machine distinction survives a
-                  greyscale print and a colour-blind reader. */}
+                  greyscale print and a colour-blind reader. Colour is the
+                  other axis and carries the other fact: the standing visit is
+                  the signal green, every earlier one steps back to ink2.
+                  Slightly larger too, so the distinction is not colour alone. */}
               <circle
                 cx={x}
                 cy={yOf(e.best)}
-                r={3}
-                className={manual ? "fill-none stroke-ink2" : "fill-ink2 stroke-none"}
+                r={i === standingIdx ? 3.6 : 2.8}
+                className={
+                  i === standingIdx
+                    ? (manual ? "fill-none stroke-accent" : "fill-accent stroke-none")
+                    : (manual ? "fill-none stroke-ink2" : "fill-ink2 stroke-none")
+                }
                 strokeWidth={1.2}
               />
               <title>
@@ -179,9 +206,12 @@ export default function SiteDynamics({
         <span>{day(series[0].uploadedAt)}</span>
         <span>{day(series[series.length - 1].uploadedAt)}</span>
       </div>
-      <p className="text-2xs text-ink3 mt-1.5 leading-relaxed">{clockNote}</p>
+      {/* Both of these qualify what the chart above is claiming — which clock
+          the x axis is on, and that a gap is an unknown and not a zero — so
+          they sit on the label step, not the footer one. */}
+      <p className="text-xs text-ink3 mt-1.5 leading-relaxed">{clockNote}</p>
       {series.some((e) => e.best == null) && (
-        <p className="text-2xs text-ink3 mt-1 leading-relaxed">{t("dyn.gapNote")}</p>
+        <p className="text-xs text-ink3 mt-1 leading-relaxed">{t("dyn.gapNote")}</p>
       )}
 
       {/* Every visit written out. The chart is the shape; this is the record,
@@ -208,7 +238,7 @@ export default function SiteDynamics({
               <button
                 type="button"
                 onClick={() => onPick?.(f)}
-                className="w-full text-left rounded px-1 -mx-1 py-0.5 hover:bg-surface2"
+                className="w-full text-left px-1 -mx-1 py-0.5 hover:bg-hover transition-colors"
                 title={f.filename}
               >
                 <span className="flex items-baseline justify-between gap-2 text-xs">
@@ -244,8 +274,12 @@ export default function SiteDynamics({
       {/* The measured thing the name stands for. A named site still prints its
           centroid, so a reader can check what was named; an unnamed one says
           plainly that nobody has named it, rather than looking unfinished. */}
-      <p className="text-2xs text-ink3 mt-2 leading-relaxed">
-        <span className="font-mono tnum">
+      <p className="text-xs text-ink3 mt-2 leading-relaxed">
+        {/* A coordinate is a number, not a hash: Inter with tabular figures.
+            The typewriter face is reserved for run and survey ids, where
+            reading character by character is the actual task — a latitude is
+            read as a quantity. */}
+        <span className="tnum">
           {t("dyn.centroid", {
             lat: site.centroid.lat.toFixed(4),
             lng: site.centroid.lng.toFixed(4),

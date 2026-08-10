@@ -135,7 +135,7 @@ export default function ManualCount({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         aria-describedby={undefined}
-        className="max-w-[420px] w-[92vw] p-0 gap-0 bg-surface border-line rounded"
+        className="max-w-[420px] w-[92vw] p-0 gap-0 bg-surface border-line"
       >
         <DialogHeader className="px-4 py-3 pr-12 border-b border-line space-y-0">
           <DialogTitle className="text-lead font-medium text-ink tracking-normal">
