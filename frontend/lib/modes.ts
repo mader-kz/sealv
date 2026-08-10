@@ -28,10 +28,10 @@
 import { create } from "zustand";
 import type { I18nKey } from "./i18n";
 
-export type Mode = "map" | "review" | "ingest" | "archive" | "report";
+export type Mode = "map" | "review" | "ingest" | "archive" | "report" | "manage";
 
 /** Rail order, and the only place it is written down. */
-export const MODE_ORDER: readonly Mode[] = ["map", "review", "ingest", "archive", "report"];
+export const MODE_ORDER: readonly Mode[] = ["map", "review", "ingest", "archive", "report", "manage"];
 
 /** The mode a URL with no (or an unreadable) hash means. */
 export const DEFAULT_MODE: Mode = "map";
@@ -46,6 +46,7 @@ export const MODE_LABEL_KEY: Record<Mode, I18nKey> = {
   ingest: "nav.ingest",
   archive: "nav.footage",
   report: "nav.report",
+  manage: "nav.manage",
 };
 
 /* Slugs that are not the canonical one but that a link in the wild may carry:
@@ -65,6 +66,8 @@ const ALIASES: Record<string, Mode> = {
   sorties: "archive",
   otchet: "report",
   otchyot: "report",
+  manage: "manage",
+  settings: "manage",
 };
 
 const isMode = (s: string): s is Mode => (MODE_ORDER as readonly string[]).includes(s);

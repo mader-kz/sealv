@@ -21,6 +21,7 @@ const MODE_ICON: Record<Mode, IconName> = {
   ingest: "upload",
   archive: "list",
   report: "download",
+  manage: "settings",
 };
 
 /* A count on a rail row is a claim about work, so only numbers with exactly
