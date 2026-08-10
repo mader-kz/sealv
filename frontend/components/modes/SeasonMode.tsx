@@ -55,6 +55,8 @@ import {
   type Site,
 } from "@/lib/analytics/surveys";
 import { useT } from "@/lib/i18n";
+import { useMode } from "@/lib/modes";
+import { Button } from "@/components/ui/primitives";
 import type { Footage } from "@/lib/types";
 import { useFootageStore } from "@/store/useFootageStore";
 
@@ -77,6 +79,7 @@ function metresBetween(
 
 export default function SeasonMode() {
   const { t, tp, lang } = useT();
+  const [, setMode] = useMode();
   const footages = useFootageStore((s) => s.footages);
   const timeRange = useFootageStore((s) => s.timeRange);
   const hydrating = useFootageStore((s) => s.hydrating);
@@ -384,7 +387,20 @@ export default function SeasonMode() {
                 {hydrating ? t("est.restoring") : t("season.empty")}
               </p>
               {!hydrating && (
-                <p className="text-2xs text-ink3 mt-1.5 leading-relaxed">{t("season.emptyHint")}</p>
+                <>
+                  <p className="text-2xs text-ink3 mt-1.5 leading-relaxed">{t("season.emptyHint")}</p>
+                  {/* An empty chart has to offer the one thing that fills it.
+                      The rail carries Загрузка, but a first-time reader is
+                      looking at the middle of the screen, not at an icon
+                      column — so the call to action stands where the emptiness
+                      is. `pointer-events-auto` because the whole overlay is
+                      transparent to the map behind it. */}
+                  <div className="mt-3 pointer-events-auto">
+                    <Button variant="primary" icon="plus" onClick={() => setMode("ingest")}>
+                      {t("nav.ingest")}
+                    </Button>
+                  </div>
+                </>
               )}
             </div>
           </div>
