@@ -621,7 +621,13 @@
     "rec.purge.confirm": "Иә, жою",
     "rec.purge.done": "Біржола жойылды: файл — {files}, нүкте — {points}",
     "rec.purge.filesLeft": "{n} файл жойылмады — олар сервердің жұмыс қалтасында қалды.",
-    "rec.purge.failed": "Ұшуды жою мүмкін болмады"
+    "rec.purge.failed": "Ұшуды жою мүмкін болмады",
+    "nav.review": "Тексеру",
+    "nav.ingest": "Жүктеу",
+    "nav.report": "Есеп",
+    "rail.tipReview": "Тексеруді күтеді: {n}",
+    "rail.tipQueue": "Кезекте: {n}",
+    "rail.tipSorties": "Мұрағаттағы ұшулар: {n}"
   },
   "ru": {
     "brand.sub": "Учёт каспийского тюленя",
@@ -1245,7 +1251,13 @@
     "rec.purge.confirm": "Да, удалить",
     "rec.purge.done": "Удалено навсегда: файлов — {files}, точек — {points}",
     "rec.purge.filesLeft": "Не удалось удалить файлов: {n} — они остались в рабочей папке сервера.",
-    "rec.purge.failed": "Не удалось удалить вылет"
+    "rec.purge.failed": "Не удалось удалить вылет",
+    "nav.review": "Проверка",
+    "nav.ingest": "Загрузка",
+    "nav.report": "Отчёт",
+    "rail.tipReview": "Ждут проверки: {n}",
+    "rail.tipQueue": "В очереди: {n}",
+    "rail.tipSorties": "Вылетов в архиве: {n}"
   },
   "en": {
     "brand.sub": "Caspian seal survey",
@@ -1869,6 +1881,12 @@
     "rec.purge.confirm": "Yes, delete",
     "rec.purge.done": "Destroyed for ever: {files} file(s), {points} points",
     "rec.purge.filesLeft": "{n} file(s) could not be removed — they are still in the server's workspace.",
-    "rec.purge.failed": "The sortie could not be deleted"
+    "rec.purge.failed": "The sortie could not be deleted",
+    "nav.review": "Review",
+    "nav.ingest": "Ingest",
+    "nav.report": "Report",
+    "rail.tipReview": "Awaiting review: {n}",
+    "rail.tipQueue": "In the queue: {n}",
+    "rail.tipSorties": "Sorties in the archive: {n}"
   }
 }
