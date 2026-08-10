@@ -61,8 +61,9 @@ radius. A raw satellite scene footprint is never stored as an oil spill.
 
 - Engineering fallback map: <http://127.0.0.1:8090/v1/pollution/map>
 - Incidents: `GET /v1/pollution`
+- Incremental incident stream: `GET /v1/pollution/changes?after=<cursor>`
 - Poller and scheduler state: `GET /v1/pollution/status`
-- Manual run: `POST /v1/pollution/poll`
+- Autonomous polling is controlled by `POLLUTION_SCHEDULER_ENABLED`; no public endpoint triggers collection.
 - Six-month backfill:
 
 ```bash
@@ -89,6 +90,12 @@ both automatically use the `opencode-go` API credential in
 `OPENCODE_API_KEY` (OpenCode Zen) and then `OPENAI_API_KEY` remain fallbacks.
 Kazhydromet monthly PDF extraction requires `pypdf`, which the container
 installs from `requirements.txt`.
+
+Polling runs each source in a killable child process. The main controls are
+`POLLUTION_POLL_TIMEOUT_SECONDS`, `POLLUTION_HOST_MIN_INTERVAL_SECONDS`, and
+`POLLUTION_MAX_RESPONSE_BYTES`. Failed sources use exponential backoff and
+honor HTTP `Retry-After`. The map checks the durable change cursor once per
+minute while its tab is visible and shows failed or stale source counts.
 
 Evidence limits remain visible in the API and map: `exact`, `field`, and
 `approximate` describe location precision; circles show uncertainty, not spill

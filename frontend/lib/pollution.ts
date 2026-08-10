@@ -19,6 +19,8 @@ export type PollutionProperties = {
   confidence?: number | null;
   location_precision: string;
   raw?: Record<string, unknown>;
+  change_seq?: number;
+  change_action?: "inserted" | "updated";
 };
 
 export type PollutionFeature = {
@@ -32,8 +34,18 @@ export type PollutionFeature = {
 export type PollutionFC = {
   type: "FeatureCollection";
   features: PollutionFeature[];
+  removed?: string[];
   count?: number;
   generated_at?: string;
+  cursor?: number;
+  has_more?: boolean;
+};
+
+export type PollutionStatus = {
+  summary: {
+    statuses: Record<string, number>;
+    stale: number;
+  };
 };
 
 export type PollutionAgeBucket =
@@ -58,6 +70,53 @@ export async function fetchPollution(
   const res = await fetch(url, { signal: opts?.signal });
   if (!res.ok) throw new Error(`pollution fetch ${res.status}`);
   return (await res.json()) as PollutionFC;
+}
+
+
+export async function fetchPollutionChanges(
+  after: number,
+  opts?: { bbox?: string; limit?: number; signal?: AbortSignal },
+): Promise<PollutionFC> {
+  const p = new URLSearchParams({ after: String(after) });
+  if (opts?.bbox) p.set("bbox", opts.bbox);
+  if (opts?.limit) p.set("limit", String(opts.limit));
+  const res = await fetch(`${API}/v1/pollution/changes?${p}`, { signal: opts?.signal });
+  if (!res.ok) throw new Error(`pollution changes fetch ${res.status}`);
+  return (await res.json()) as PollutionFC;
+}
+
+
+export async function fetchPollutionStatus(
+  signal?: AbortSignal,
+): Promise<PollutionStatus> {
+  const res = await fetch(`${API}/v1/pollution/status`, { signal });
+  if (!res.ok) throw new Error(`pollution status fetch ${res.status}`);
+  return (await res.json()) as PollutionStatus;
+}
+
+
+export function mergePollution(
+  current: PollutionFC,
+  changes: PollutionFC,
+): PollutionFC {
+  const removed = new Set(changes.removed ?? []);
+  if (!changes.features.length && !removed.size) {
+    return { ...current, cursor: changes.cursor ?? current.cursor };
+  }
+  const byId = new Map(
+    current.features
+      .filter(feature => !removed.has(feature.properties.id))
+      .map(feature => [feature.properties.id, feature]),
+  );
+  for (const feature of changes.features) byId.set(feature.properties.id, feature);
+  const features = [...byId.values()];
+  return {
+    type: "FeatureCollection",
+    features,
+    count: features.length,
+    generated_at: changes.generated_at ?? current.generated_at,
+    cursor: changes.cursor ?? current.cursor,
+  };
 }
 
 export function pollutionAgeBucket(

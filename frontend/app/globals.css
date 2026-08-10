@@ -453,64 +453,51 @@ a:focus-visible {
   overflow: hidden;
 }
 
-/* Colony chip: one per sortie — the count, and under it the honest low–high
-   band. A DOM element, deliberately not a GL symbol layer: DOM renders under
-   every GL backend (headless/software included) and never loses its glyphs.
-
-   Instrument form: a flat dark plate, square, anchored by a single hairline
-   down its left edge — no fill, no pill, no shadow stack. The count is the
-   one green figure on the map; the band under it steps far down.
-
-   The geometry is untouched on purpose. The translate(-50%,-50%) centring
-   lives IN the transform so the hover scale composes with it instead of
-   knocking the chip off its anchor, and CaspianMap positions chips against
-   exactly that centring.
-
-   Colour is set on the CHIP, not on .chip-best, so a caller that turns one
-   chip down (the counted zero, which sets `color` inline) mutes the figure
-   with it instead of fighting a more specific rule. */
+/* One compact marker per surveyed place: the transparent seal/target mark and
+   the standing count. The dark plate keeps both legible over satellite tiles;
+   all names, ranges and visit history remain one click away in the site card.
+   The translate lives in the base transform so hover does not move the anchor. */
 .colony-chip {
   position: absolute;
   transform: translate(-50%, -50%);
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  text-align: left;
-  min-width: 104px;
-  padding: 4px 10px 5px;
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 3px 8px 3px 4px;
   border: 0;
-  border-left: 1px solid var(--ink-4);
   border-radius: 0;
-  background: rgb(11 13 16 / 0.93);
+  background: rgb(11 13 16 / 0.9);
   color: var(--accent);
   box-shadow: none;
   cursor: pointer;
   pointer-events: auto;
   line-height: 1;
-  transition: transform 0.12s linear, background 0.12s linear, border-color 0.12s linear;
+  transition: transform 0.12s linear, background 0.12s linear, box-shadow 0.12s linear;
 }
 .colony-chip:hover {
   transform: translate(-50%, -50%) scale(1.04);
   background: rgb(22 26 32 / 0.96);
-  border-left-color: var(--ink-2);
 }
 .colony-chip.selected {
-  border-left-color: var(--accent);
   background: rgb(22 26 32 / 0.96);
+  box-shadow: inset 0 0 0 1px rgb(12 196 236 / 0.72);
 }
 .colony-chip .chip-best {
-  font-size: 21px;
+  font-size: 24px;
   line-height: 1;
   font-weight: 500;
-  letter-spacing: -0.025em;
+  letter-spacing: -0.03em;
   color: inherit;
 }
-.colony-chip .chip-range {
-  font-size: 10px;
-  line-height: 1.2;
-  font-weight: 400;
-  margin-top: 3px;
-  color: var(--ink-3);
+.seal-marker-icon {
+  display: block;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  background: url("/seal-marker.png") center / contain no-repeat;
+  filter: drop-shadow(0 1px 1px rgb(0 0 0 / 0.55));
 }
 /* Pin mode: the anchor is the loudest thing on the chart — chips step back
    and must not swallow the click that places it. */
@@ -524,10 +511,9 @@ a:focus-visible {
   pointer-events: none;
 }
 
-/* A tracked group's snapshots use the same instrument-card language as the
-   current site chips: dark square plates, a coordinate label, and one green
-   count. Their links express inferred chronological adjacency, not a sampled
-   GPS trail. */
+/* A tracked group's snapshots use the same compact seal/count mark as current
+   sites. Dates and coordinates remain in the title and focused history panel;
+   their links express inferred adjacency, not a sampled GPS trail. */
 .movement-card-link {
   stroke: var(--good);
   stroke-width: 1.5;
@@ -538,21 +524,20 @@ a:focus-visible {
   position: absolute;
   transform: translate(-50%, -50%);
   pointer-events: auto;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  text-align: left;
-  min-width: 104px;
-  padding: 4px 10px 5px;
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 3px 8px 3px 4px;
   border: 0;
-  border-left: 1px solid var(--ink-4);
   border-radius: 0;
-  background: rgb(11 13 16 / 0.93);
+  background: rgb(11 13 16 / 0.9);
   color: var(--accent);
   box-shadow: none;
   cursor: pointer;
   line-height: 1;
-  transition: transform .12s linear, opacity .12s linear, background .12s linear, border-color .12s linear;
+  transition: transform .12s linear, opacity .12s linear, background .12s linear, box-shadow .12s linear;
 }
 .movement-observation-card:hover {
   transform: translate(-50%, -50%) scale(1.04);
@@ -568,34 +553,18 @@ a:focus-visible {
 .movement-observation-card.expanded:not(.latest) {
   opacity: 0.72;
 }
-.movement-card-location {
-  display: block;
-  margin-bottom: 3px;
-  color: var(--ink-3);
-  font-size: 10.5px;
-  line-height: 1.3;
-  font-weight: 400;
-}
-.movement-card-date {
-  display: block;
-  margin-bottom: 3px;
-  color: var(--ink-4);
-  font-size: 9.5px;
-  line-height: 1.2;
-  font-weight: 400;
-}
 .movement-card-count {
   color: inherit;
-  font-size: 21px;
+  font-size: 24px;
   line-height: 1;
   font-weight: 500;
-  letter-spacing: -0.025em;
+  letter-spacing: -0.03em;
 }
 .movement-observation-card.latest {
   z-index: 2;
   transform: translate(-50%, -50%) scale(1.04);
-  border-left: 2px solid var(--accent);
   background: rgb(22 26 32 / 0.98);
+  box-shadow: inset 0 0 0 1px rgb(12 196 236 / 0.72);
   opacity: 1;
 }
 .movement-observation-card.latest:hover {
@@ -604,12 +573,11 @@ a:focus-visible {
 .movement-observation-card.anomaly,
 .movement-observation-card.latest.anomaly {
   color: var(--bad);
-  border-left-color: var(--bad);
   background: color-mix(in srgb, var(--bad) 10%, rgb(11 13 16 / 0.98));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bad) 72%, transparent);
 }
 .movement-observation-card.anomaly:hover,
 .movement-observation-card.latest.anomaly:hover {
-  border-left-color: var(--bad);
   background: color-mix(in srgb, var(--bad) 16%, rgb(22 26 32 / 0.98));
 }
 .movement-observation-card.timestamp-context:not(.selected) {
@@ -618,20 +586,7 @@ a:focus-visible {
 .movement-observation-card.timestamp-updated:not(.selected) {
   z-index: 3;
   opacity: 1;
-  border-left: 2px solid var(--accent);
   background: rgb(17 21 26 / .96);
-}
-.movement-observation-card.timestamp-updated:not(.selected)::before {
-  content: "";
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  width: 4px;
-  height: 4px;
-  background: var(--accent);
-}
-.movement-observation-card.timestamp-updated.anomaly:not(.selected) {
-  border-left-color: var(--bad);
 }
 .movement-observation-card.selected,
 .movement-observation-card.expanded.selected,
@@ -639,8 +594,7 @@ a:focus-visible {
   z-index: 100;
   opacity: 1;
   transform: translate(-50%, -50%) scale(1.1);
-  border: 1px solid var(--accent);
-  border-left-width: 3px;
+  border: 0;
   background: rgb(22 26 32 / 1);
   box-shadow:
     0 0 0 1px rgb(11 13 16 / .95),

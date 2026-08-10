@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Sequence
 
 from service.db import connect, init_db
+from service.pollution import db as pollution_db
 from service.pollution.opencode_geocoder import (
     extract_report_details,
     validate_root_cause,
@@ -118,16 +119,17 @@ def enrich_root_causes(
 
         updated_raw = dict(raw)
         updated_raw["root_cause"] = cause
-        serialized = json.dumps(updated_raw, ensure_ascii=False, separators=(",", ":"))
         try:
-            cursor = conn.execute(
-                "UPDATE pollution_incident SET raw = ? WHERE id = ? AND raw IS ?",
-                (serialized, row["id"], raw_text),
+            updated = pollution_db.update_incident_raw(
+                conn,
+                str(row["id"]),
+                updated_raw,
+                expected_raw=raw_text,
             )
         except sqlite3.Error:
             failed += 1
             continue
-        if cursor.rowcount == 1:
+        if updated:
             enriched += 1
         else:
             skipped += 1

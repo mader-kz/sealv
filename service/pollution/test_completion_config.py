@@ -6,7 +6,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock, patch
 
 from service.pollution import classifier, opencode_geocoder
 from service.pollution.completion_config import (
@@ -16,6 +16,7 @@ from service.pollution.completion_config import (
     OPENCODE_ZEN_ENDPOINT,
     completion_config,
 )
+from service.pollution.net import HttpResponse
 
 
 class CompletionConfigTests(unittest.TestCase):
@@ -78,50 +79,54 @@ class CompletionConfigTests(unittest.TestCase):
     def test_local_go_reaches_classifier_and_geocoder_requests(self) -> None:
         self._write_go_credential("unit-" + "credential")
         environment = self._environment()
-        classifier_response = MagicMock()
-        classifier_response.__enter__.return_value.read.return_value = json.dumps(
-            {"choices": [{"message": {"content": "yes"}}]}
-        ).encode("utf-8")
-        classifier_urlopen = Mock(return_value=classifier_response)
-        geocoder_response = MagicMock()
-        geocoder_response.__enter__.return_value.read.return_value = json.dumps(
-            {
-                "choices": [
+        classifier_fetch = Mock(
+            return_value=HttpResponse(
+                body=json.dumps({"choices": [{"message": {"content": "yes"}}]}).encode(),
+                url=OPENCODE_GO_ENDPOINT,
+                status=200,
+                charset="utf-8",
+            )
+        )
+        geocoder_fetch = Mock(
+            return_value=HttpResponse(
+                body=json.dumps(
                     {
-                        "message": {
-                            "content": json.dumps(
-                                {
-                                    "place": "Аташ",
-                                    "root_cause": "Reported pipeline leak.",
+                        "choices": [
+                            {
+                                "message": {
+                                    "content": json.dumps(
+                                        {
+                                            "place": "Аташ",
+                                            "root_cause": "Reported pipeline leak.",
+                                        }
+                                    )
                                 }
-                            )
-                        }
+                            }
+                        ]
                     }
-                ]
-            }
-        ).encode("utf-8")
-        geocoder_urlopen = Mock(return_value=geocoder_response)
+                ).encode(),
+                url=OPENCODE_GO_ENDPOINT,
+                status=200,
+                charset="utf-8",
+            )
+        )
 
         with patch.dict(os.environ, environment, clear=True), patch.object(
-            classifier, "urlopen", classifier_urlopen
-        ), patch.object(opencode_geocoder, "urlopen", geocoder_urlopen):
-            self.assertTrue(
-                classifier.is_pollution_article("Caspian oil spill near Atash")
-            )
+            classifier, "fetch", classifier_fetch
+        ), patch.object(opencode_geocoder, "fetch", geocoder_fetch):
+            self.assertTrue(classifier.is_pollution_article("Caspian oil spill near Atash"))
             extracted = opencode_geocoder.extract_report_details(
                 "Разлив нефти у неизвестного безымянного мыса"
             )
             self.assertEqual(extracted.place, "Аташ")
             self.assertEqual(extracted.root_cause, "Reported pipeline leak.")
 
-        classifier_request = classifier_urlopen.call_args.args[0]
-        self.assertEqual(classifier_request.full_url, OPENCODE_GO_ENDPOINT)
-        classifier_payload = json.loads(classifier_request.data.decode("utf-8"))
+        classifier_payload = json.loads(classifier_fetch.call_args.kwargs["data"].decode("utf-8"))
+        self.assertEqual(classifier_fetch.call_args.args[0], OPENCODE_GO_ENDPOINT)
         self.assertEqual(classifier_payload["model"], DEFAULT_OPENCODE_MODEL)
         self.assertEqual(classifier_payload["max_tokens"], 128)
-        geocoder_request = geocoder_urlopen.call_args.args[0]
-        self.assertEqual(geocoder_request.full_url, OPENCODE_GO_ENDPOINT)
-        geocoder_payload = json.loads(geocoder_request.data.decode("utf-8"))
+        geocoder_payload = json.loads(geocoder_fetch.call_args.kwargs["data"].decode("utf-8"))
+        self.assertEqual(geocoder_fetch.call_args.args[0], OPENCODE_GO_ENDPOINT)
         self.assertEqual(geocoder_payload["model"], DEFAULT_GEOCODER_MODEL)
         self.assertEqual(geocoder_payload["max_tokens"], 256)
         prompt = geocoder_payload["messages"][0]["content"]

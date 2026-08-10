@@ -5,8 +5,8 @@ import json
 import logging
 import os
 import re
-from urllib.request import Request, urlopen
 from .completion_config import completion_config
+from .net import fetch
 
 logger = logging.getLogger(__name__)
 
@@ -100,9 +100,15 @@ def _classify_with_endpoint(text: str, endpoint: str, model: str, key: str | Non
     }
     if key:
         headers["Authorization"] = f"Bearer {key}"
-    request = Request(endpoint, data=payload, headers=headers, method="POST")
-    with urlopen(request, timeout=_timeout_seconds()) as response:
-        data = json.loads(response.read().decode("utf-8"))
+    response = fetch(
+        endpoint,
+        data=payload,
+        headers=headers,
+        method="POST",
+        timeout=_timeout_seconds(),
+        max_bytes=1024 * 1024,
+    )
+    data = json.loads(response.body.decode("utf-8"))
     content = data["choices"][0]["message"]["content"]
     answer = str(content).strip().lower()
     match = re.search(r"\b(yes|no)\b", answer)

@@ -6,16 +6,19 @@ import html
 import json
 import os
 import re
+import sqlite3
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from typing import Any, Iterable, Optional
-from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl, quote_plus, urlencode, urljoin, urlsplit, urlunsplit
-from urllib.request import Request, urlopen
 
+from service.db import connect as _connect
+
+from .. import db as pollution_db
 from ..classifier import is_pollution_article
+from ..net import fetch_text
 from ..models import PollutionIncident, PollutionSource
 from ..opencode_geocoder import (
     extract_report_details,
@@ -197,15 +200,15 @@ def _clean_text(value: str) -> str:
 
 
 def _fetch(url: str) -> str:
-    request = Request(url, headers={"User-Agent": _USER_AGENT, "Accept": "text/html,application/xml;q=0.9,*/*;q=0.8"})
-    try:
-        with urlopen(request, timeout=_TIMEOUT_SECONDS) as response:
-            charset = response.headers.get_content_charset() or "utf-8"
-            return response.read().decode(charset, errors="replace")
-    except HTTPError as exc:
-        raise RuntimeError(f"HTTP {exc.code} for {url}") from exc
-    except (URLError, TimeoutError, OSError) as exc:
-        raise RuntimeError(f"fetch failed for {url}: {exc}") from exc
+    return fetch_text(
+        url,
+        headers={
+            "User-Agent": _USER_AGENT,
+            "Accept": "text/html,application/xml;q=0.9,*/*;q=0.8",
+        },
+        timeout=_TIMEOUT_SECONDS,
+        max_bytes=10 * 1024 * 1024,
+    )
 
 
 def _max_pages(default: int) -> int:
@@ -374,14 +377,17 @@ def parse_article(document: str, requested_url: str, listed_at: Optional[str] = 
     )
 
 
-def _list_html_pages(source: PollutionSource) -> tuple[list[Candidate], int, list[str]]:
+def _list_html_pages(
+    source: PollutionSource, cutoff: datetime
+) -> tuple[list[Candidate], int, list[str]]:
     pages: list[str] = []
+    incremental = cutoff >= datetime.now(timezone.utc) - timedelta(days=2)
     if source.id == "azh_news":
-        maximum = _max_pages(12)
+        maximum = 1 if incremental else _max_pages(12)
         for category in ("ecology", "neft-i-gaz"):
             pages.extend(f"https://azh.kz/ru/news/{category}" + (f"?page={page}" if page > 1 else "") for page in range(1, maximum + 1))
     elif source.id == "tengrinews_search":
-        maximum = _max_pages(8)
+        maximum = 1 if incremental else _max_pages(8)
         for query in ("Каспий разлив", "Каспий загрязнение", "Атырау выброс"):
             encoded = quote_plus(query)
             pages.append(f"https://tengrinews.kz/search/?text={encoded}")
@@ -390,7 +396,7 @@ def _list_html_pages(source: PollutionSource) -> tuple[list[Candidate], int, lis
         pages.append(tag)
         pages.extend(f"{tag}page/{page}/" for page in range(2, maximum + 1))
     elif source.id == "atpress_ecology":
-        maximum = _max_pages(24)
+        maximum = 1 if incremental else _max_pages(24)
         pages.extend("https://atpress.kz/ru/news/ekologiya" + (f"?start={(page - 1) * 12}" if page > 1 else "") for page in range(1, maximum + 1))
     candidates: list[Candidate] = []
     errors: list[str] = []
@@ -398,7 +404,9 @@ def _list_html_pages(source: PollutionSource) -> tuple[list[Candidate], int, lis
     for page_url in pages:
         try:
             document = _fetch(page_url)
-        except RuntimeError as exc:
+        except SourceUnavailableError as exc:
+            if exc.retry_after_seconds is not None:
+                raise
             errors.append(str(exc))
             print(f"[pollution] {source.id} listing failure: {exc}")
             continue
@@ -418,6 +426,8 @@ def _list_sitemaps(source: PollutionSource, cutoff: datetime) -> tuple[list[Cand
     try:
         index_document = _fetch(source.url)
         fetched += 1
+    except SourceUnavailableError:
+        raise
     except RuntimeError as exc:
         raise SourceUnavailableError(str(exc)) from exc
     try:
@@ -425,13 +435,22 @@ def _list_sitemaps(source: PollutionSource, cutoff: datetime) -> tuple[list[Cand
     except (ET.ParseError, ValueError) as exc:
         raise SourceUnavailableError(f"invalid sitemap {source.url}: {exc}") from exc
     candidates = list(rows)
+    incremental = cutoff >= datetime.now(timezone.utc) - timedelta(days=2)
     if source.id == "informburo_sitemap":
-        archive = sorted((url for url in nested if "/sitemaps/articles/" in url), key=_numeric_sitemap_order)
+        archive = sorted(
+            (url for url in nested if "/sitemaps/articles/" in url),
+            key=_numeric_sitemap_order,
+            reverse=True,
+        )
         news = [url for url in nested if url.endswith("sitemap-news.xml")]
-        sitemap_urls = (news + archive)[: _max_pages(30)]
+        sitemap_urls = (news + archive)[: (2 if incremental else _max_pages(30))]
     else:
-        archive = sorted((url for url in nested if re.search(r"/sitemap/\d+\.xml$", url)), key=_numeric_sitemap_order)
-        sitemap_urls = archive[: _max_pages(4)]
+        archive = sorted(
+            (url for url in nested if re.search(r"/sitemap/\d+\.xml$", url)),
+            key=_numeric_sitemap_order,
+            reverse=True,
+        )
+        sitemap_urls = archive[: (1 if incremental else _max_pages(4))]
         if source.url.endswith("google-news-sitemap.xml"):
             sitemap_urls = []
     for sitemap_url in sitemap_urls:
@@ -439,9 +458,15 @@ def _list_sitemaps(source: PollutionSource, cutoff: datetime) -> tuple[list[Cand
             document = _fetch(sitemap_url)
             fetched += 1
             child_rows, _ = parse_sitemap(document)
-        except (RuntimeError, ET.ParseError, ValueError) as exc:
+        except SourceUnavailableError as exc:
+            if exc.retry_after_seconds is not None:
+                raise
             errors.append(f"{sitemap_url}: {exc}")
             print(f"[pollution] {source.id} sitemap failure: {sitemap_url}: {exc}")
+            continue
+        except (ET.ParseError, ValueError) as exc:
+            errors.append(f"{sitemap_url}: {exc}")
+            print(f"[pollution] {source.id} invalid sitemap: {sitemap_url}: {exc}")
             continue
         for row in child_rows:
             listed = _parse_datetime(row.listed_at)
@@ -460,6 +485,16 @@ def _dedupe_candidates(candidates: Iterable[Candidate]) -> list[Candidate]:
             selected[url] = Candidate(url, candidate.title, candidate.listed_at)
     return [selected[url] for url in sorted(selected)]
 
+
+
+def _cached_record(source_id: str, record_key: str) -> Optional[dict]:
+    conn = _connect()
+    try:
+        return pollution_db.get_record(conn, source_id, record_key)
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
 
 def _record_rejection(source_id: str, url: str, reason: str) -> None:
     LAST_REJECTIONS.setdefault(source_id, []).append({"url": url, "reason": reason})
@@ -587,24 +622,49 @@ def poll(source: PollutionSource, since: Optional[str] = None) -> list[Pollution
     if source.id in {"informburo_sitemap", "zakon_news"}:
         candidates, fetched_pages, errors = _list_sitemaps(source, cutoff)
     else:
-        candidates, fetched_pages, errors = _list_html_pages(source)
+        candidates, fetched_pages, errors = _list_html_pages(source, cutoff)
     if fetched_pages == 0:
         message = errors[0] if errors else f"no listing pages fetched for {source.id}"
         raise SourceUnavailableError(message)
-    candidates = _dedupe_candidates(candidates)
+    candidate_cache: dict[str, Optional[dict]] = {}
+    filtered_candidates: list[Candidate] = []
+    recheck_after = datetime.now(timezone.utc) - timedelta(days=7)
+    for candidate in _dedupe_candidates(candidates):
+        listed = _parse_datetime(candidate.listed_at)
+        if listed is not None and listed.astimezone(timezone.utc) < cutoff:
+            continue
+        cached = _cached_record(source.id, candidate.url)
+        candidate_cache[candidate.url] = cached
+        if cached is not None and (
+            listed is None or listed.astimezone(timezone.utc) < recheck_after
+        ):
+            continue
+        filtered_candidates.append(candidate)
+    candidates = filtered_candidates
     incidents: list[PollutionIncident] = []
     detail_failures = 0
     lexical_candidates = [candidate for candidate in candidates if _listing_prefilter(f"{candidate.title} {candidate.url}")]
     for candidate in lexical_candidates:
         try:
             document = _fetch(candidate.url)
+            content_hash = hashlib.sha256(document.encode("utf-8")).hexdigest()
+            cached = candidate_cache.get(candidate.url)
+            if cached is not None and cached.get("content_hash") == content_hash:
+                continue
             article = parse_article(document, candidate.url, candidate.listed_at)
-        except RuntimeError as exc:
+        except SourceUnavailableError as exc:
+            if exc.retry_after_seconds is not None:
+                raise SourceUnavailableError(
+                    str(exc),
+                    retry_after_seconds=exc.retry_after_seconds,
+                    partial_incidents=incidents,
+                ) from exc
             detail_failures += 1
             _record_rejection(source.id, candidate.url, str(exc))
             continue
         incident = _incident_from_article(source, article, cutoff)
         if incident is not None:
+            incident.raw["_content_hash"] = content_hash
             incidents.append(incident)
     incidents.sort(key=lambda item: (item.observed_at or "", item.id))
     LAST_POLL_STATUS[source.id] = {
@@ -617,8 +677,12 @@ def poll(source: PollutionSource, since: Optional[str] = None) -> list[Pollution
         "accepted": len(incidents),
         "cutoff": cutoff.isoformat(),
     }
-    if lexical_candidates and detail_failures == len(lexical_candidates):
-        raise SourceUnavailableError(f"all {detail_failures} candidate detail fetches failed for {source.id}")
+    if errors or detail_failures:
+        raise SourceUnavailableError(
+            f"incomplete {source.id} scan: {len(errors)} listing failures, "
+            f"{detail_failures} detail failures",
+            partial_incidents=incidents,
+        )
     return incidents
 
 

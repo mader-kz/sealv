@@ -8,9 +8,9 @@ import math
 import os
 import re
 from urllib.parse import quote
-from urllib.request import Request, urlopen
 
 from .completion_config import completion_config
+from .net import fetch
 
 try:
     from .fields import geocode_field
@@ -317,11 +317,15 @@ def extract_report_details(text: str) -> ReportExtraction:
     if key:
         headers["Authorization"] = f"Bearer {key}"
     try:
-        request = Request(endpoint, data=payload, headers=headers, method="POST")
-        with urlopen(
-            request, timeout=_timeout_seconds("POLLUTION_GEOCODER_TIMEOUT", 20.0)
-        ) as response:
-            data = json.loads(response.read().decode("utf-8"))
+        response = fetch(
+            endpoint,
+            data=payload,
+            headers=headers,
+            method="POST",
+            timeout=_timeout_seconds("POLLUTION_GEOCODER_TIMEOUT", 20.0),
+            max_bytes=1024 * 1024,
+        )
+        data = json.loads(response.body.decode("utf-8"))
         content = data["choices"][0]["message"]["content"]
         extracted = _extract_json_object(content) if isinstance(content, str) else {}
         return ReportExtraction(
@@ -401,20 +405,20 @@ def geocode_place(place: str) -> tuple[float, float, float, str] | None:
         "&countrycodes=kz,ru,az,tm,ir&bounded=1&viewbox=45,49.5,56.5,35"
     )
     endpoint = f"https://nominatim.openstreetmap.org/search?{params}"
-    request = Request(
-        endpoint,
-        headers={
-            "Accept": "application/json",
-            "User-Agent": os.environ.get(
-                "POLLUTION_USER_AGENT", "SEALv-Pollution/1.0"
-            ),
-        },
-    )
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": os.environ.get(
+            "POLLUTION_USER_AGENT", "SEALv-Pollution/1.0"
+        ),
+    }
     try:
-        with urlopen(
-            request, timeout=_timeout_seconds("POLLUTION_GEOCODER_TIMEOUT")
-        ) as response:
-            results = json.loads(response.read().decode("utf-8"))
+        response = fetch(
+            endpoint,
+            headers=headers,
+            timeout=_timeout_seconds("POLLUTION_GEOCODER_TIMEOUT"),
+            max_bytes=2 * 1024 * 1024,
+        )
+        results = json.loads(response.body.decode("utf-8"))
     except Exception as exc:
         logger.warning("Nominatim place lookup failed: place=%r error=%s", place, exc)
         return None

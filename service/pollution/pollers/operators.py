@@ -10,16 +10,15 @@ import hashlib
 import html
 import json
 import re
-import urllib.error
-import urllib.request
 from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from typing import Optional
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from ..fields import geocode_field
+from ..net import fetch_bytes
 from ..models import PollutionIncident, PollutionSource
-from ..registry import register_source
+from ..registry import SourceUnavailableError, register_source
 
 _USER_AGENT = "SEALv pollution operators/1.0 (+https://sealv.kz)"
 _TIMEOUT_S = 15
@@ -95,17 +94,16 @@ class _HTMLText(HTMLParser):
             self.parts.append(data.strip())
 
 
-def _fetch(url: str) -> bytes | None:
-    req = urllib.request.Request(
+def _fetch(url: str) -> bytes:
+    return fetch_bytes(
         url,
-        headers={"User-Agent": _USER_AGENT, "Accept": "text/html,application/json;q=0.9,*/*;q=0.5"},
+        headers={
+            "User-Agent": _USER_AGENT,
+            "Accept": "text/html,application/json;q=0.9,*/*;q=0.5",
+        },
+        timeout=_TIMEOUT_S,
+        max_bytes=10 * 1024 * 1024,
     )
-    try:
-        with urllib.request.urlopen(req, timeout=_TIMEOUT_S) as response:
-            return response.read()
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError) as exc:
-        print(f"[pollution.operators] fetch_failed url={url!r} error={exc!r}")
-        return None
 
 
 def _decode(data: bytes) -> str:
@@ -241,18 +239,25 @@ def _oldest_dmy(text: str) -> datetime | None:
     return min(dates) if dates else None
 
 
-def _ncoc_links(cutoff: datetime) -> list[str]:
+def _ncoc_links(cutoff: datetime) -> tuple[list[str], list[SourceUnavailableError]]:
     links: list[str] = []
+    errors: list[SourceUnavailableError] = []
     for page in range(1, 44):
         api_url = f"https://www.ncoc.kz/api/v1/news?locale=en&page={page}"
-        data = _fetch(api_url)
+        try:
+            data = _fetch(api_url)
+        except SourceUnavailableError as exc:
+            errors.append(exc)
+            break
         if not data:
             break
         try:
             payload = json.loads(_decode(data))
             items = payload.get("data") or []
         except (ValueError, AttributeError) as exc:
+            message = f"invalid NCOC listing JSON at {api_url}: {exc}"
             print(f"[pollution.operators] json_parse_failed url={api_url!r} error={exc!r}")
+            errors.append(SourceUnavailableError(message))
             break
         if not items:
             break
@@ -267,41 +272,66 @@ def _ncoc_links(cutoff: datetime) -> list[str]:
                 links.append(f"https://www.ncoc.kz/en/news/{item['slug']}")
         if oldest and oldest < cutoff:
             break
-    return list(dict.fromkeys(links))
+    return list(dict.fromkeys(links)), errors
 
 
-def _source_links(source: PollutionSource, cutoff: datetime) -> list[str]:
+def _source_links(
+    source: PollutionSource, cutoff: datetime
+) -> tuple[list[str], list[SourceUnavailableError]]:
     if source.id == "ncoc_news":
         return _ncoc_links(cutoff)
     if source.id == "tco_news":
-        links, _, _ = _detail_links(source.url, lambda u: "/tco-news/detail/" in u)
-        return [u for u in links if (_parse_date("", u) or cutoff) >= cutoff]
+        try:
+            links, _, _ = _detail_links(source.url, lambda u: "/tco-news/detail/" in u)
+        except SourceUnavailableError as exc:
+            return [], [exc]
+        return [u for u in links if (_parse_date("", u) or cutoff) >= cutoff], []
     if source.id == "kpo_news":
         predicate = lambda u: "company-news" in u and "tx_news_pi1%5Bnews%5D=" in u
-        first, pages, first_text = _detail_links(source.url, predicate)
+        try:
+            first, pages, first_text = _detail_links(source.url, predicate)
+        except SourceUnavailableError as exc:
+            return [], [exc]
         links = list(first)
+        errors: list[SourceUnavailableError] = []
         oldest = _oldest_dmy(first_text)
         if oldest and oldest < cutoff:
-            return links
-        # A six-month window is normally 2-4 archive pages; cap work to keep a
-        # malformed paginator from creating an unbounded crawl.
+            return links, errors
         for page_url in pages[:11]:
-            page_links, _, page_text = _detail_links(page_url, predicate)
+            try:
+                page_links, _, page_text = _detail_links(page_url, predicate)
+            except SourceUnavailableError as exc:
+                errors.append(exc)
+                break
             links.extend(page_links)
             oldest = _oldest_dmy(page_text)
             if oldest and oldest < cutoff:
                 break
-        return list(dict.fromkeys(links))
+        return list(dict.fromkeys(links)), errors
     print(f"[pollution.operators] unsupported_source id={source.id!r}")
-    return []
+    return [], []
 
 
 def poll(source: PollutionSource, since: Optional[str] = None) -> list[PollutionIncident]:
     """Poll official operator history and return only located real incidents."""
     cutoff = _cutoff(since)
     output: list[PollutionIncident] = []
-    for url in _source_links(source, cutoff):
-        data = _fetch(url)
+    links, listing_errors = _source_links(source, cutoff)
+    failures = len(listing_errors)
+    retry_values = [
+        exc.retry_after_seconds
+        for exc in listing_errors
+        if exc.retry_after_seconds is not None
+    ]
+    retry_after_seconds = max(retry_values, default=None)
+    for url in links:
+        try:
+            data = _fetch(url)
+        except SourceUnavailableError as exc:
+            failures += 1
+            if exc.retry_after_seconds is not None:
+                retry_after_seconds = max(retry_after_seconds or 0, exc.retry_after_seconds)
+            continue
         if not data:
             continue
         text, _ = _parse_html(data)
@@ -314,6 +344,12 @@ def poll(source: PollutionSource, since: Optional[str] = None) -> list[Pollution
         incident = _incident(source, url, text, observed)
         if incident:
             output.append(incident)
+    if failures:
+        raise SourceUnavailableError(
+            f"incomplete {source.id} scan: {failures} detail failures",
+            retry_after_seconds=retry_after_seconds,
+            partial_incidents=output,
+        )
     return output
 
 

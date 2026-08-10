@@ -240,20 +240,27 @@ CREATE TABLE IF NOT EXISTS pollution_source (
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE TABLE IF NOT EXISTS pollution_source_health (
-    source_id           TEXT PRIMARY KEY REFERENCES pollution_source(id),
-    status              TEXT NOT NULL DEFAULT 'never',
-    attempts            INTEGER NOT NULL DEFAULT 0,
-    successes           INTEGER NOT NULL DEFAULT 0,
-    total_items         INTEGER NOT NULL DEFAULT 0,
-    last_attempt_at     TEXT,
-    last_success_at     TEXT,
-    last_item_count     INTEGER,
-    last_error          TEXT,
-    last_duration_ms    INTEGER,
-    next_poll_at        TEXT,
-    lease_owner         TEXT,
-    lease_until         TEXT,
-    updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+    source_id             TEXT PRIMARY KEY REFERENCES pollution_source(id),
+    status                TEXT NOT NULL DEFAULT 'never',
+    attempts              INTEGER NOT NULL DEFAULT 0,
+    successes             INTEGER NOT NULL DEFAULT 0,
+    consecutive_failures  INTEGER NOT NULL DEFAULT 0,
+    total_items           INTEGER NOT NULL DEFAULT 0,
+    total_inserted        INTEGER NOT NULL DEFAULT 0,
+    total_updated         INTEGER NOT NULL DEFAULT 0,
+    total_unchanged       INTEGER NOT NULL DEFAULT 0,
+    last_attempt_at       TEXT,
+    last_success_at       TEXT,
+    last_item_count       INTEGER,
+    last_inserted_count   INTEGER,
+    last_updated_count    INTEGER,
+    last_unchanged_count  INTEGER,
+    last_error            TEXT,
+    last_duration_ms      INTEGER,
+    next_poll_at          TEXT,
+    lease_owner           TEXT,
+    lease_until           TEXT,
+    updated_at            TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS ix_pollution_health_due ON pollution_source_health(next_poll_at);
 CREATE TABLE IF NOT EXISTS field (
@@ -281,3 +288,29 @@ CREATE TABLE IF NOT EXISTS pollution_incident (
 CREATE INDEX IF NOT EXISTS ix_pollution_time ON pollution_incident(observed_at);
 CREATE INDEX IF NOT EXISTS ix_pollution_geo ON pollution_incident(lat, lng);
 CREATE INDEX IF NOT EXISTS ix_pollution_source ON pollution_incident(source_id);
+CREATE TABLE IF NOT EXISTS pollution_change (
+    seq          INTEGER PRIMARY KEY AUTOINCREMENT,
+    incident_id  TEXT NOT NULL REFERENCES pollution_incident(id) ON DELETE CASCADE,
+    action       TEXT NOT NULL CHECK (action IN ('inserted', 'updated')),
+    changed_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS ix_pollution_change_incident ON pollution_change(incident_id);
+INSERT INTO pollution_change (incident_id, action, changed_at)
+SELECT incident.id, 'inserted', strftime('%Y-%m-%dT%H:%M:%fZ', incident.created_at)
+FROM pollution_incident AS incident
+WHERE NOT EXISTS (
+    SELECT 1 FROM pollution_change AS change WHERE change.incident_id = incident.id
+);
+CREATE TABLE IF NOT EXISTS pollution_record_cache (
+    source_id     TEXT NOT NULL REFERENCES pollution_source(id) ON DELETE CASCADE,
+    record_key    TEXT NOT NULL,
+    content_hash  TEXT,
+    observed_at   TEXT,
+    outcome       TEXT NOT NULL,
+    updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    PRIMARY KEY (source_id, record_key)
+);
+CREATE TABLE IF NOT EXISTS pollution_host_rate (
+    host             TEXT PRIMARY KEY,
+    next_request_at  REAL NOT NULL
+);

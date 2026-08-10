@@ -13,16 +13,16 @@ import io
 import json
 import re
 import urllib.parse
-import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
 from datetime import datetime, timezone
 from typing import Optional
+from ..net import fetch_bytes
 
 from ..fields import VERIFIED_PLACE_SOURCES, geocode_field
 from ..opencode_geocoder import geocode_place
 from ..models import PollutionIncident, PollutionSource
-from ..registry import register_source
+from ..registry import SourceUnavailableError, register_source
 
 VZ_URL = "https://www.kazhydromet.kz/ru/ecology/svedeniya-o-sluchayah-vysokogo-zagryazneniya-i-ekstremalno-vysokogo-zagryazneniya-okruzhayuschey-sredy"
 MONTHLY_URL = "https://www.kazhydromet.kz/ru/ecology/ezhemesyachnyy-informacionnyy-byulleten-o-sostoyanii-okruzhayuschey-sredy"
@@ -67,20 +67,13 @@ _PLACE_CACHE: dict[str, tuple[float, float, float, str] | None] = {}
 WEEKLY_CONTEXT: list[dict[str, str]] = []
 
 
-def _fetch(url: str) -> bytes | None:
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-        with urllib.request.urlopen(req, timeout=_TIMEOUT_S) as response:
-            length = response.headers.get("Content-Length")
-            if length and int(length) > _MAX_DOCUMENT_BYTES:
-                raise ValueError(f"response too large: {length} bytes")
-            data = response.read(_MAX_DOCUMENT_BYTES + 1)
-            if len(data) > _MAX_DOCUMENT_BYTES:
-                raise ValueError("response exceeded size limit")
-            return data
-    except Exception as exc:
-        print(f"[kazhydromet] fetch_failed url={url!r} error={exc}")
-        return None
+def _fetch(url: str) -> bytes:
+    return fetch_bytes(
+        url,
+        headers={"User-Agent": _USER_AGENT},
+        timeout=_TIMEOUT_S,
+        max_bytes=_MAX_DOCUMENT_BYTES,
+    )
 
 
 def _html_links(data: bytes, base_url: str, suffix: str) -> list[str]:
@@ -185,22 +178,19 @@ def _docx_rows(data: bytes) -> list[str]:
         text = " ".join(node.text for node in root.findall(".//w:t", namespace) if node.text)
         return [re.sub(r"\s+", " ", text).strip()] if text.strip() else []
     except Exception as exc:
-        print(f"[kazhydromet_vz] parse_failed error={exc}")
-        return []
+        raise SourceUnavailableError(f"invalid Kazhydromet DOCX: {exc}") from exc
 
 
 def _pdf_text(data: bytes, url: str) -> str:
     try:
         from pypdf import PdfReader
-    except ImportError:
-        print("[kazhydromet_monthly] dependency_missing package=pypdf")
-        return ""
+    except ImportError as exc:
+        raise SourceUnavailableError("Kazhydromet PDF support requires pypdf") from exc
     try:
         reader = PdfReader(io.BytesIO(data))
         return "\n".join(page.extract_text() or "" for page in reader.pages)
     except Exception as exc:
-        print(f"[kazhydromet_monthly] parse_failed url={url!r} error={exc}")
-        return ""
+        raise SourceUnavailableError(f"invalid Kazhydromet PDF {url}: {exc}") from exc
 
 
 def _monthly_location(text: str, position: int):
@@ -260,12 +250,21 @@ def poll(source: PollutionSource, since: Optional[str] = None) -> list[Pollution
             documents.append((url, month))
 
     incidents: list[PollutionIncident] = []
+    failures = 0
+    retry_after_seconds: float | None = None
     for doc_url, month in documents:
-        raw_document = _fetch(doc_url)
-        if not raw_document:
+        try:
+            raw_document = _fetch(doc_url)
+            if not raw_document:
+                continue
+            rows = _docx_rows(raw_document)
+        except SourceUnavailableError as exc:
+            failures += 1
+            if exc.retry_after_seconds is not None:
+                retry_after_seconds = max(retry_after_seconds or 0, exc.retry_after_seconds)
             continue
         doc_name = urllib.parse.unquote(urllib.parse.urlsplit(doc_url).path.rsplit("/", 1)[-1])
-        for row_number, row in enumerate(_docx_rows(raw_document)):
+        for row_number, row in enumerate(rows):
             if not _OIL_RE.search(row):
                 continue
             geo = geocode_field(row)
@@ -308,6 +307,12 @@ def poll(source: PollutionSource, since: Optional[str] = None) -> list[Pollution
                 _reject(source.id, doc_url, f"invalid_incident:{exc}", row)
                 continue
             incidents.append(incident)
+    if failures:
+        raise SourceUnavailableError(
+            f"incomplete {source.id} scan: {failures} document failures",
+            retry_after_seconds=retry_after_seconds,
+            partial_incidents=incidents,
+        )
     return incidents
 
 
@@ -329,11 +334,19 @@ def poll_monthly(source: PollutionSource, since: Optional[str] = None) -> list[P
             documents.append((url, month))
 
     incidents: list[PollutionIncident] = []
+    failures = 0
+    retry_after_seconds: float | None = None
     for pdf_url, month in documents:
-        raw_document = _fetch(pdf_url)
-        if not raw_document:
+        try:
+            raw_document = _fetch(pdf_url)
+            if not raw_document:
+                continue
+            text = _pdf_text(raw_document, pdf_url)
+        except SourceUnavailableError as exc:
+            failures += 1
+            if exc.retry_after_seconds is not None:
+                retry_after_seconds = max(retry_after_seconds or 0, exc.retry_after_seconds)
             continue
-        text = _pdf_text(raw_document, pdf_url)
         if not text:
             continue
         for match_number, exceedance_match in enumerate(_EXPLICIT_OIL_EXCEED_RE.finditer(text)):
@@ -371,6 +384,12 @@ def poll_monthly(source: PollutionSource, since: Optional[str] = None) -> list[P
                 _reject(source.id, pdf_url, f"invalid_incident:{exc}", snippet)
                 continue
             incidents.append(incident)
+    if failures:
+        raise SourceUnavailableError(
+            f"incomplete {source.id} scan: {failures} document failures",
+            retry_after_seconds=retry_after_seconds,
+            partial_incidents=incidents,
+        )
     return incidents
 
 

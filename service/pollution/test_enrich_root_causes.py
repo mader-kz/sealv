@@ -79,6 +79,10 @@ class RootCauseEnrichmentTests(unittest.TestCase):
         self.assertEqual(
             tuple(geometry), (43.75, 51.25, 750.0, "POINT(51.25 43.75)", "oil")
         )
+        change = self.conn.execute(
+            "SELECT incident_id, action FROM pollution_change ORDER BY seq"
+        ).fetchone()
+        self.assertEqual(tuple(change), ("incident-a", "updated"))
 
         extractor.reset_mock()
         with patch.object(enrich_root_causes, "extract_report_details", extractor):

@@ -4,16 +4,17 @@ from __future__ import annotations
 import asyncio
 import calendar
 import hashlib
-import inspect
 import os
 import re
 import time
+import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from . import db as pol_db
 from .models import PollutionIncident, PollutionSource
+from .poll_runner import PollerProcessError, run_poller_process
 from .registry import REGISTRY, SourceUnavailableError, get_poller
 
 try:
@@ -75,6 +76,7 @@ def cadence_seconds(value: str, default: int = 3600) -> int:
         "hourly": 3600,
         "daily": 86400,
         "weekly": 604800,
+        "monthly": 2592000,
     }
     if text in aliases:
         return aliases[text]
@@ -200,6 +202,7 @@ class PollutionScheduler:
             if not claimed:
                 return {"source_id": source_id, "status": "overlap_skipped", "count": None}
             attempts = int((previous or {}).get("attempts") or 0) + 1
+            failures = int((previous or {}).get("consecutive_failures") or 0)
             poll_since = since or self._since_for(previous, attempted)
             started = time.monotonic()
             status = "ok"
@@ -207,10 +210,7 @@ class PollutionScheduler:
                 poller = get_poller(source_id)
                 if poller is None:
                     raise SourceUnavailableError("no poller registered")
-                incidents = await asyncio.wait_for(
-                    self._invoke(poller, source, poll_since),
-                    timeout=self.poll_timeout_s,
-                )
+                incidents = await self._invoke(source, poll_since)
                 if incidents is None:
                     raise TypeError("poller returned None; return [] for a successful empty poll")
                 if not isinstance(incidents, list):
@@ -224,7 +224,7 @@ class PollutionScheduler:
                 finished = _utcnow()
                 duration_ms = max(0, int((time.monotonic() - started) * 1000))
                 next_at = self._next_poll(source, finished, attempts, failed=False)
-                await asyncio.to_thread(
+                outcomes = await asyncio.to_thread(
                     self._persist_success,
                     source,
                     incidents,
@@ -236,6 +236,7 @@ class PollutionScheduler:
                     "source_id": source_id,
                     "status": status,
                     "count": len(incidents),
+                    **outcomes,
                     "since": poll_since,
                     "duration_ms": duration_ms,
                 }
@@ -246,16 +247,62 @@ class PollutionScheduler:
                     "cancelled during shutdown",
                     "error",
                     started,
-                    self._next_poll(source, _utcnow(), attempts, failed=True),
+                    self._next_poll(
+                        source, _utcnow(), attempts, failed=True,
+                        consecutive_failures=failures + 1,
+                    ),
                     True,
                 )
                 raise
             except Exception as exc:
                 finished = _utcnow()
-                status = "unavailable" if isinstance(exc, SourceUnavailableError) else "error"
-                release_lease = not isinstance(exc, asyncio.TimeoutError)
                 error = str(exc).strip() or type(exc).__name__
-                next_at = self._next_poll(source, finished, attempts, failed=True)
+                next_at = self._next_poll(
+                    source,
+                    finished,
+                    attempts,
+                    failed=True,
+                    consecutive_failures=failures + 1,
+                    retry_after_seconds=getattr(exc, "retry_after_seconds", None),
+                )
+                partial_incidents = getattr(exc, "partial_incidents", None)
+                if partial_incidents is not None:
+                    if not isinstance(partial_incidents, list):
+                        raise TypeError("partial poll result must be a list") from exc
+                    for incident in partial_incidents:
+                        if not isinstance(incident, PollutionIncident):
+                            raise TypeError("partial poll result contains a non-incident") from exc
+                        if incident.source_id != source_id:
+                            raise ValueError(
+                                f"incident {incident.id} belongs to {incident.source_id}, not {source_id}"
+                            ) from exc
+                        incident.validate()
+                    duration_ms = max(0, int((time.monotonic() - started) * 1000))
+                    outcomes = await asyncio.to_thread(
+                        self._persist_success,
+                        source,
+                        partial_incidents,
+                        finished,
+                        duration_ms,
+                        next_at,
+                        status="partial",
+                        error=error,
+                        success=False,
+                    )
+                    print(f"[pollution] poller {source_id} partial: {error}")
+                    return {
+                        "source_id": source_id,
+                        "status": "partial",
+                        "count": len(partial_incidents),
+                        **outcomes,
+                        "since": poll_since,
+                        "error": error,
+                        "duration_ms": duration_ms,
+                    }
+                unavailable = isinstance(exc, SourceUnavailableError) or (
+                    isinstance(exc, PollerProcessError) and exc.unavailable
+                )
+                status = "unavailable" if unavailable else "error"
                 await asyncio.to_thread(
                     self._persist_failure,
                     source_id,
@@ -263,7 +310,7 @@ class PollutionScheduler:
                     status,
                     started,
                     next_at,
-                    release_lease,
+                    True,
                 )
                 print(f"[pollution] poller {source_id} {status}: {error}")
                 return {
@@ -275,11 +322,19 @@ class PollutionScheduler:
                     "duration_ms": max(0, int((time.monotonic() - started) * 1000)),
                 }
 
-    async def _invoke(self, poller: Any, source: PollutionSource, since: str) -> Any:
-        if inspect.iscoroutinefunction(poller):
-            return await poller(source, since)
-        result = await asyncio.to_thread(poller, source, since)
-        return await result if inspect.isawaitable(result) else result
+    async def _invoke(self, source: PollutionSource, since: str) -> Any:
+        cancelled = threading.Event()
+        try:
+            return await asyncio.to_thread(
+                run_poller_process,
+                source.id,
+                since,
+                self.poll_timeout_s,
+                cancelled,
+            )
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
 
     def _since_for(self, previous: Optional[dict], now: datetime) -> str:
         cutoff = six_month_cutoff(now)
@@ -288,14 +343,28 @@ class PollutionScheduler:
             cutoff = max(cutoff, last_success - timedelta(minutes=5))
         return _iso(cutoff)
 
-    def _next_poll(self, source: PollutionSource, now: datetime, attempts: int, *, failed: bool) -> datetime:
-        cadence = cadence_seconds(source.update_freq, self.default_cadence_s)
+    def _next_poll(
+        self,
+        source: PollutionSource,
+        now: datetime,
+        attempts: int,
+        *,
+        failed: bool,
+        consecutive_failures: int = 0,
+        retry_after_seconds: float | None = None,
+    ) -> datetime:
+        normal_cadence = cadence_seconds(source.update_freq, self.default_cadence_s)
+        cadence = normal_cadence
         if failed:
-            cadence = min(cadence, self.error_retry_s)
+            exponent = max(0, min(consecutive_failures - 1, 12))
+            cadence = min(normal_cadence, self.error_retry_s * (2 ** exponent))
         digest = hashlib.sha256(f"{source.id}:{attempts}".encode("utf-8")).digest()
         unit = int.from_bytes(digest[:2], "big") / 65535.0
         jitter = cadence * (self.jitter_pct / 100.0) * ((unit * 2.0) - 1.0)
-        return now + timedelta(seconds=max(15.0, cadence + jitter))
+        delay = max(15.0, cadence + jitter)
+        if retry_after_seconds is not None:
+            delay = max(delay, retry_after_seconds)
+        return now + timedelta(seconds=delay)
 
     def _sync_registry(self) -> None:
         conn = _connect()
@@ -335,27 +404,60 @@ class PollutionScheduler:
         finished: datetime,
         duration_ms: int,
         next_at: datetime,
-    ) -> None:
+        *,
+        status: str = "ok",
+        error: str | None = None,
+        success: bool = True,
+    ) -> dict[str, int]:
         conn = _connect()
+        outcomes = {"inserted": 0, "updated": 0, "unchanged": 0}
         try:
             conn.execute("BEGIN IMMEDIATE")
             for incident in incidents:
-                pol_db.upsert_incident(conn, incident)
+                action = pol_db.upsert_incident(conn, incident)
+                outcomes[action] += 1
+                raw = incident.raw if isinstance(incident.raw, dict) else {}
+                record_key = next(
+                    (
+                        str(raw[key])
+                        for key in ("canonical_url", "url", "original_url")
+                        if raw.get(key)
+                    ),
+                    None,
+                )
+                if record_key:
+                    content_hash = raw.get("_content_hash")
+                    if not isinstance(content_hash, str) or not content_hash:
+                        content = str(raw.get("body") or raw.get("text") or raw.get("row") or "")
+                        content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest() if content else None
+                    pol_db.mark_record(
+                        conn,
+                        source.id,
+                        record_key,
+                        content_hash=content_hash,
+                        observed_at=incident.observed_at,
+                        outcome=action,
+                    )
             updated = pol_db.finish_source_poll(
                 conn,
                 source.id,
                 self.owner,
-                status="ok",
+                status=status,
                 finished_at=_iso(finished),
                 item_count=len(incidents),
-                error=None,
+                inserted_count=outcomes["inserted"],
+                updated_count=outcomes["updated"],
+                unchanged_count=outcomes["unchanged"],
+                error=error,
                 duration_ms=duration_ms,
                 next_poll_at=_iso(next_at),
-                success=True,
+                success=success,
+                store_results=True,
             )
             if not updated:
                 raise RuntimeError("poll lease expired before results were stored")
             conn.execute("COMMIT")
+            return outcomes
         except Exception:
             if conn.in_transaction:
                 conn.execute("ROLLBACK")

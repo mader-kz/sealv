@@ -1,9 +1,7 @@
 """Pollution API — encapsulated router, additive only."""
 from __future__ import annotations
 
-import importlib
 import math
-import pkgutil
 import sqlite3
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -12,23 +10,12 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse
 
-# Import every poller independently so one broken optional integration cannot
-# prevent healthy sources from registering at startup.
-try:
-    import service.pollution.pollers as _pollers_package
-
-    for _module in pkgutil.iter_modules(_pollers_package.__path__):
-        try:
-            importlib.import_module(f"{_pollers_package.__name__}.{_module.name}")
-        except Exception as exc:
-            print(f"[pollution] poller module {_module.name} unavailable: {exc}")
-except Exception as exc:
-    print(f"[pollution] poller discovery unavailable: {exc}")
-
 from service.pollution import db as pol_db
 from service.pollution.opencode_geocoder import validate_root_cause
-from service.pollution.registry import REGISTRY
-from service.pollution.scheduler import get_scheduler
+from service.pollution.registry import REGISTRY, discover_pollers
+from service.pollution.scheduler import cadence_seconds, get_scheduler
+
+discover_pollers()
 
 # Reuse existing DB helper — same SQLite file
 try:
@@ -88,6 +75,62 @@ def _safe_geometry(value: Any) -> Optional[dict[str, Any]]:
     return {"type": "Polygon", "coordinates": coordinates}
 
 
+def _incident_feature(
+    row: dict[str, Any],
+    source_names: dict[str, str],
+    source_urls: dict[str, Optional[str]],
+) -> Optional[dict[str, Any]]:
+    lat, lng = row.get("lat"), row.get("lng")
+    if (
+        not isinstance(lat, (int, float))
+        or not isinstance(lng, (int, float))
+        or isinstance(lat, bool)
+        or isinstance(lng, bool)
+        or not math.isfinite(float(lat))
+        or not math.isfinite(float(lng))
+        or not (-90 <= float(lat) <= 90)
+        or not (-180 <= float(lng) <= 180)
+    ):
+        return None
+    raw = _raw_dict(row.get("raw"))
+    source_id = str(row["source_id"])
+    geometry = _safe_geometry(row.get("geom")) or {
+        "type": "Point",
+        "coordinates": [float(lng), float(lat)],
+    }
+    title = _first_text(raw, "title", "name", "text", "description", "row")
+    link = None
+    for key in ("link", "url", "source_url", "href", "doc_url"):
+        link = _safe_http_url(raw.get(key))
+        if link:
+            break
+    raw_status = _first_text(raw, "verification_status", "status")
+    properties = {
+        "id": str(row["id"]),
+        "source_id": source_id,
+        "source_name": source_names.get(source_id, source_id),
+        "source_url": source_urls.get(source_id),
+        "source_link": link,
+        "title": title or "Untitled source record",
+        "root_cause": validate_root_cause(raw.get("root_cause")),
+        "status": raw_status or "source_record",
+        "observed_at": row.get("observed_at"),
+        "lat": float(lat),
+        "lng": float(lng),
+        "radius_m": row.get("radius_m"),
+        "radius_meaning": "location_uncertainty",
+        "kind": row.get("kind"),
+        "area_km2": row.get("area_km2"),
+        "confidence": row.get("confidence"),
+        "location_precision": row.get("location_precision"),
+        "raw": raw,
+    }
+    if "seq" in row:
+        properties["change_seq"] = int(row["seq"])
+        properties["change_action"] = str(row.get("action") or "updated")
+    return {"type": "Feature", "geometry": geometry, "properties": properties}
+
+
 def _conn() -> sqlite3.Connection:
     return _connect()
 
@@ -104,7 +147,37 @@ def _source_status_rows() -> list[dict[str, Any]]:
         source = REGISTRY.get(str(row["id"]))
         row.pop("lease_owner", None)
         row["poller_registered"] = bool(source and source.poller)
+        last_success_raw = row.get("last_success_at")
+        try:
+            last_success = datetime.fromisoformat(
+                str(last_success_raw).replace("Z", "+00:00")
+            ) if last_success_raw else None
+        except ValueError:
+            last_success = None
+        stale_after = max(
+            6 * 3600,
+            2 * cadence_seconds(source.update_freq if source else "", 3600),
+        )
+        row["stale"] = (
+            last_success is None
+            or (datetime.now(timezone.utc) - last_success).total_seconds() > stale_after
+        )
     return rows
+
+def _parse_bbox(value: Optional[str]) -> tuple[float, float, float, float] | None:
+    if not value:
+        return None
+    try:
+        parts = [float(item.strip()) for item in value.split(",")]
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="bbox must be west,south,east,north") from exc
+    if len(parts) != 4 or not all(math.isfinite(item) for item in parts):
+        raise HTTPException(status_code=422, detail="bbox must contain four finite numbers")
+    west, south, east, north = parts
+    if not (-180 <= west <= east <= 180 and -90 <= south <= north <= 90):
+        raise HTTPException(status_code=422, detail="bbox is outside valid coordinate bounds")
+    return west, south, east, north
+
 
 
 
@@ -121,96 +194,75 @@ def list_incidents(
     kind: Optional[str] = Query(None),
     limit: int = Query(500, ge=1, le=2000),
 ):
-    parsed_bbox = None
-    if bbox:
-        try:
-            parts = [float(x.strip()) for x in bbox.split(",")]
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail="bbox must be west,south,east,north") from exc
-        if len(parts) != 4 or not all(math.isfinite(x) for x in parts):
-            raise HTTPException(status_code=422, detail="bbox must contain four finite numbers")
-        west, south, east, north = parts
-        if not (-180 <= west <= east <= 180 and -90 <= south <= north <= 90):
-            raise HTTPException(status_code=422, detail="bbox is outside valid coordinate bounds")
-        parsed_bbox = (west, south, east, north)
+    parsed_bbox = _parse_bbox(bbox)
 
     conn = _conn()
     try:
+        conn.execute("BEGIN")
         rows = pol_db.list_incidents(conn, bbox=parsed_bbox, since=since, kind=kind, limit=limit)
+        cursor = 0 if len(rows) == limit else pol_db.latest_change_seq(conn)
         source_names = {source.id: source.name for source in REGISTRY.values()}
         source_urls = {source.id: _safe_http_url(source.url) for source in REGISTRY.values()}
         features = []
         for row in rows:
-            lat, lng = row.get("lat"), row.get("lng")
-            if (
-                not isinstance(lat, (int, float))
-                or not isinstance(lng, (int, float))
-                or isinstance(lat, bool)
-                or isinstance(lng, bool)
-                or not math.isfinite(float(lat))
-                or not math.isfinite(float(lng))
-                or not (-90 <= float(lat) <= 90)
-                or not (-180 <= float(lng) <= 180)
-            ):
-                continue
-            raw = _raw_dict(row.get("raw"))
-            source_id = str(row["source_id"])
-            geometry = _safe_geometry(row.get("geom")) or {
-                "type": "Point",
-                "coordinates": [float(lng), float(lat)],
-            }
-            title = _first_text(raw, "title", "name", "text", "description", "row")
-            link = None
-            for key in ("link", "url", "source_url", "href", "doc_url"):
-                link = _safe_http_url(raw.get(key))
-                if link:
-                    break
-            raw_status = _first_text(raw, "verification_status", "status")
-            features.append({
-                "type": "Feature",
-                "geometry": geometry,
-                "properties": {
-                    "id": str(row["id"]),
-                    "source_id": source_id,
-                    "source_name": source_names.get(source_id, source_id),
-                    "source_url": source_urls.get(source_id),
-                    "source_link": link,
-                    "title": title or "Untitled source record",
-                    "root_cause": validate_root_cause(raw.get("root_cause")),
-                    "status": raw_status or "source_record",
-                    "observed_at": row.get("observed_at"),
-                    "lat": float(lat),
-                    "lng": float(lng),
-                    "radius_m": row.get("radius_m"),
-                    "radius_meaning": "location_uncertainty",
-                    "kind": row.get("kind"),
-                    "area_km2": row.get("area_km2"),
-                    "confidence": row.get("confidence"),
-                    "location_precision": row.get("location_precision"),
-                    "raw": raw,
-                },
-            })
-        return {
+            feature = _incident_feature(row, source_names, source_urls)
+            if feature is not None:
+                features.append(feature)
+        payload = {
             "type": "FeatureCollection",
             "features": features,
             "count": len(features),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "cursor": cursor,
+        }
+        conn.execute("COMMIT")
+        return payload
+    except Exception:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
+
+
+@router.get("/changes")
+def pollution_changes(
+    after: int = Query(0, ge=0),
+    limit: int = Query(500, ge=1, le=2000),
+    bbox: Optional[str] = Query(None, description="west,south,east,north"),
+):
+    """Return ordered incident inserts and updates after a durable cursor."""
+    conn = _conn()
+    parsed_bbox = _parse_bbox(bbox)
+    try:
+        rows = pol_db.list_changes(conn, after=after, limit=limit)
+        source_names = {source.id: source.name for source in REGISTRY.values()}
+        source_urls = {source.id: _safe_http_url(source.url) for source in REGISTRY.values()}
+        features = []
+        removed: list[str] = []
+        for row in rows:
+            if parsed_bbox is not None:
+                west, south, east, north = parsed_bbox
+                if not (west <= row["lng"] <= east and south <= row["lat"] <= north):
+                    removed.append(str(row["id"]))
+                    continue
+            feature = _incident_feature(row, source_names, source_urls)
+            if feature is not None:
+                features.append(feature)
+        next_cursor = int(rows[-1]["seq"]) if rows else after
+        return {
+            "type": "FeatureCollection",
+            "features": features,
+            "removed": list(dict.fromkeys(removed)),
+            "count": len(features),
+            "cursor": next_cursor,
+            "has_more": len(rows) == limit,
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
     finally:
         conn.close()
 
 
-@router.post("/poll")
-async def poll_now(since: Optional[str] = Query(None)):
-    """Optional operator-triggered run; autonomous scheduling does not depend on it."""
-    results = await get_scheduler().run_all(since=since)
-    item_count = sum(int(result["count"]) for result in results if result.get("status") == "ok")
-    return {
-        "polled": item_count,
-        "inserted": item_count,
-        "since": since,
-        "results": results,
-    }
 
 @router.get("/status")
 def pollution_status():
@@ -229,6 +281,10 @@ def pollution_status():
             "attempts": sum(int(row.get("attempts") or 0) for row in rows),
             "successes": sum(int(row.get("successes") or 0) for row in rows),
             "items": sum(int(row.get("total_items") or 0) for row in rows),
+            "inserted": sum(int(row.get("total_inserted") or 0) for row in rows),
+            "updated": sum(int(row.get("total_updated") or 0) for row in rows),
+            "unchanged": sum(int(row.get("total_unchanged") or 0) for row in rows),
+            "stale": sum(1 for row in rows if row.get("stale")),
         },
         "sources": rows,
     }

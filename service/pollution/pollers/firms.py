@@ -9,12 +9,11 @@ import csv
 import io
 import math
 import os
-import urllib.error
-import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 from pathlib import Path
 from ..fields import FIELDS
+from ..net import fetch_text
 
 from ..models import PollutionIncident, PollutionSource
 from ..registry import SourceUnavailableError, register_source
@@ -26,7 +25,7 @@ SRC = PollutionSource(
     url="https://firms.modaps.eosdis.nasa.gov/api/area/csv",
     type="api",
     poll_method="GET /api/area/csv/{MAP_KEY}/{SOURCE}/47,36,55,47/{DAYS}[/{DATE}]",
-    update_freq="10m",
+    update_freq="30m",
 )
 
 # The four global near-real-time thermal products.  LANDSAT_NRT is excluded
@@ -95,17 +94,13 @@ def _map_key() -> str:
         return ""
 
 def _request_text(url: str, audit_url: Optional[str] = None) -> str:
-    request = urllib.request.Request(
+    return fetch_text(
         url,
         headers={"User-Agent": USER_AGENT, "Accept": "text/csv"},
+        timeout=20,
+        max_bytes=10 * 1024 * 1024,
+        audit_url=audit_url,
     )
-    try:
-        with urllib.request.urlopen(request, timeout=20) as response:
-            return response.read().decode("utf-8", errors="replace")
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise SourceUnavailableError(
-            f"NASA FIRMS request failed for {audit_url or url}: {exc}"
-        ) from exc
 
 
 def _fetch(key: str, dataset: str, days: int, start: Optional[date]) -> tuple[str, str]:
@@ -200,13 +195,22 @@ def poll(source: PollutionSource, since: Optional[str] = None) -> list[Pollution
 
     now = datetime.now(timezone.utc)
     cutoff, explicit = _parse_since(since, now)
-    availability = _availability(key) if explicit else {}
+    needs_archive_bounds = explicit and cutoff < now - timedelta(days=2)
+    availability = _availability(key) if needs_archive_bounds else {}
     out: list[PollutionIncident] = []
     seen: set[str] = set()
+    failures = 0
+    retry_after_seconds: float | None = None
 
     for dataset in DATASETS:
         for days, start in _windows(cutoff, now, explicit, availability.get(dataset)):
-            text, request_url = _fetch(key, dataset, days, start)
+            try:
+                text, request_url = _fetch(key, dataset, days, start)
+            except SourceUnavailableError as exc:
+                failures += 1
+                if exc.retry_after_seconds is not None:
+                    retry_after_seconds = max(retry_after_seconds or 0, exc.retry_after_seconds)
+                continue
             for row in csv.DictReader(io.StringIO(text)):
                 try:
                     lat_s = (row.get("latitude") or "").strip()
@@ -261,6 +265,12 @@ def poll(source: PollutionSource, since: Optional[str] = None) -> list[Pollution
                 )
                 incident.validate()
                 out.append(incident)
+    if failures:
+        raise SourceUnavailableError(
+            f"incomplete {source.id} scan: {failures} dataset requests failed",
+            retry_after_seconds=retry_after_seconds,
+            partial_incidents=out,
+        )
     return out
 
 

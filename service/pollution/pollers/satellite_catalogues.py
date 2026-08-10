@@ -7,12 +7,11 @@ creates :class:`PollutionIncident` objects.
 from __future__ import annotations
 
 import json
-import urllib.error
 import urllib.parse
-import urllib.request
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
+from ..net import fetch
 from ..models import PollutionIncident, PollutionSource
 from ..registry import SourceUnavailableError, register_source
 from ..scheduler import six_month_cutoff
@@ -47,15 +46,13 @@ LAST_EUMETSAT_STATUS: dict[str, Any] = {}
 
 
 def _get(url: str, accept: str, timeout: int = 20) -> tuple[bytes, str, int]:
-    request = urllib.request.Request(
+    response = fetch(
         url,
         headers={"User-Agent": USER_AGENT, "Accept": accept},
+        timeout=timeout,
+        max_bytes=10 * 1024 * 1024,
     )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return response.read(), response.geturl(), int(response.status)
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise SourceUnavailableError(f"satellite catalogue request failed for {url}: {exc}") from exc
+    return response.body, response.url, response.status
 
 
 def _cutoff(since: Optional[str], now: datetime) -> datetime:

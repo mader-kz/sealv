@@ -6,17 +6,16 @@ import os
 import re
 import time
 import xml.etree.ElementTree as ET
-import urllib.request
-import urllib.error
 import urllib.parse
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Optional
 
 from ..classifier import is_pollution_article
+from ..net import fetch_bytes
 from ..opencode_geocoder import geocode_via_opencode, is_water
 from ..models import PollutionIncident, PollutionSource
-from ..registry import register_source
+from ..registry import SourceUnavailableError, register_source
 
 # kept for reference; actual filtering via classifier prefilter + spill check
 _PATTERN = re.compile(r"разлив|утечка|пятно|Каспий|Кашаган|Аташ|Тенгиз", re.IGNORECASE)
@@ -54,14 +53,13 @@ _LADA_DATE_RE = re.compile(r'<span[^>]*class="[^"]*news__date[^"]*"[^>]*>(.*?)</
 _LADA_HREF_RE = re.compile(r'<a\s+href="(/aktau_news/ecology/[^"]+)"', re.IGNORECASE)
 
 
-def _fetch(url: str) -> bytes | None:
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "SEALv pollution poller"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return resp.read()
-    except Exception as exc:
-        print(f"[lada_rss] fetch_failed url={url!r} error={exc!r}")
-        return None
+def _fetch(url: str) -> bytes:
+    return fetch_bytes(
+        url,
+        headers={"User-Agent": "SEALv pollution poller"},
+        timeout=10,
+        max_bytes=5 * 1024 * 1024,
+    )
 
 
 def _fetch_text(url: str) -> str | None:
@@ -296,8 +294,7 @@ def _poll_single(source: PollutionSource, since: Optional[str] = None) -> list[P
     try:
         root = ET.fromstring(data)
     except Exception as exc:
-        print(f"[lada_rss] xml_parse_failed source={source.id} url={url!r} error={exc!r}")
-        return []
+        raise SourceUnavailableError(f"invalid Lada RSS XML: {exc}") from exc
 
     out: list[PollutionIncident] = []
     items = root.findall(".//item")
@@ -367,7 +364,14 @@ def _poll_lada_paginated(source: PollutionSource, since: Optional[str] = None, m
 
     for page in range(1, max_pages + 1):
         url = _lada_page_url(page)
-        html = _fetch_text(url)
+        try:
+            html = _fetch_text(url)
+        except SourceUnavailableError as exc:
+            raise SourceUnavailableError(
+                f"incomplete {source.id} scan: page {page} failed: {exc}",
+                retry_after_seconds=exc.retry_after_seconds,
+                partial_incidents=incidents,
+            ) from exc
         if html is None:
             if page == 1:
                 continue

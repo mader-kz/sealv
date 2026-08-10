@@ -13,11 +13,10 @@ import logging
 import os
 import re
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 
+from ..net import fetch_text
 try:
     from service.pollution.classifier import is_pollution_article  # type: ignore
 except ImportError:
@@ -32,7 +31,7 @@ except ImportError:
     from ..opencode_geocoder import extract_report_details, geocode_via_opencode  # type: ignore
 
 from ..models import PollutionIncident, PollutionSource
-from ..registry import register_source
+from ..registry import SourceUnavailableError, register_source
 
 _LOG = logging.getLogger(__name__)
 _USER_AGENT = "Sealv-Pollution/1.0 (+https://github.com/sealv; public Telegram preview)"
@@ -201,19 +200,18 @@ def _page_url(handle: str, before: int | None = None) -> str:
     return f"{base}?{urllib.parse.urlencode({'before': before})}"
 
 
-def _fetch_html(handle: str, before: int | None = None) -> tuple[str, str] | None:
+def _fetch_html(handle: str, before: int | None = None) -> tuple[str, str]:
     url = _page_url(handle, before)
-    request = urllib.request.Request(
+    html = fetch_text(
         url,
-        headers={"User-Agent": _USER_AGENT, "Accept": "text/html,application/xhtml+xml"},
+        headers={
+            "User-Agent": _USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml",
+        },
+        timeout=_FETCH_TIMEOUT_SECONDS,
+        max_bytes=5 * 1024 * 1024,
     )
-    try:
-        with urllib.request.urlopen(request, timeout=_FETCH_TIMEOUT_SECONDS) as response:
-            charset = response.headers.get_content_charset() or "utf-8"
-            return url, response.read().decode(charset, errors="replace")
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        _LOG.warning("telegram fetch failed url=%s error=%s", url, exc)
-        return None
+    return url, html
 
 
 def _strip_tags(fragment: str) -> str:
@@ -405,7 +403,14 @@ def telegram_poll(source: PollutionSource, since: str | None = None) -> list[Pol
     reached_cutoff = False
 
     for page_number in range(1, page_limit + 1):
-        fetched = _fetch_html(channel.handle, before)
+        try:
+            fetched = _fetch_html(channel.handle, before)
+        except SourceUnavailableError as exc:
+            raise SourceUnavailableError(
+                f"incomplete {source.id} scan: page {page_number} failed: {exc}",
+                retry_after_seconds=exc.retry_after_seconds,
+                partial_incidents=incidents,
+            ) from exc
         if fetched is None:
             break
         page_url, html = fetched

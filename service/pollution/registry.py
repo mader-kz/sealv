@@ -1,18 +1,49 @@
 """Single place to register sources. No magic, just a dict."""
 from __future__ import annotations
+import importlib
+import pkgutil
 
 from typing import Callable, Optional
 
 from .models import PollutionIncident, PollutionSource
 
 class SourceUnavailableError(RuntimeError):
-    """The source is intentionally unavailable, not a successful empty poll."""
+    """A source failed or returned an incomplete scan."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        retry_after_seconds: float | None = None,
+        partial_incidents: list[PollutionIncident] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
+        self.partial_incidents = partial_incidents
 
 # id -> PollutionSource
 REGISTRY: dict[str, PollutionSource] = {}
 # id -> poll function: async or sync (source, since) -> list[PollutionIncident]
 _POLLERS: dict[str, Callable] = {}
+_DISCOVERED = False
+
+
+def discover_pollers() -> None:
+    """Import each poller once so API and worker processes share discovery."""
+    global _DISCOVERED
+    if _DISCOVERED:
+        return
+    _DISCOVERED = True
+    try:
+        from . import pollers as pollers_package
+
+        for module in pkgutil.iter_modules(pollers_package.__path__):
+            try:
+                importlib.import_module(f"{pollers_package.__name__}.{module.name}")
+            except Exception as exc:
+                print(f"[pollution] poller module {module.name} unavailable: {exc}")
+    except Exception as exc:
+        print(f"[pollution] poller discovery unavailable: {exc}")
 
 
 def register_source(source: PollutionSource, poller: Optional[Callable] = None) -> PollutionSource:
@@ -52,5 +83,7 @@ async def poll_all(since: Optional[str] = None) -> list[PollutionIncident]:
 
 
 def clear_registry() -> None:
+    global _DISCOVERED
     REGISTRY.clear()
     _POLLERS.clear()
+    _DISCOVERED = False

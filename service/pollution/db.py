@@ -58,8 +58,13 @@ def list_source_health(conn: sqlite3.Connection) -> list[dict]:
         """SELECT s.*, COALESCE(h.status, 'never') AS status,
                   COALESCE(h.attempts, 0) AS attempts,
                   COALESCE(h.successes, 0) AS successes,
+                  COALESCE(h.consecutive_failures, 0) AS consecutive_failures,
                   COALESCE(h.total_items, 0) AS total_items,
+                  COALESCE(h.total_inserted, 0) AS total_inserted,
+                  COALESCE(h.total_updated, 0) AS total_updated,
+                  COALESCE(h.total_unchanged, 0) AS total_unchanged,
                   h.last_attempt_at, h.last_success_at, h.last_item_count,
+                  h.last_inserted_count, h.last_updated_count, h.last_unchanged_count,
                   h.last_error, h.last_duration_ms, h.next_poll_at,
                   h.lease_owner, h.lease_until, h.updated_at
            FROM pollution_source AS s
@@ -84,8 +89,9 @@ def claim_source_poll(
             """UPDATE pollution_source_health
                SET status = 'running', attempts = attempts + 1,
                    last_attempt_at = ?, last_item_count = NULL,
-                   last_error = NULL, last_duration_ms = NULL,
-                   lease_owner = ?, lease_until = ?, updated_at = ?
+                   last_inserted_count = NULL, last_updated_count = NULL,
+                   last_unchanged_count = NULL, last_error = NULL,
+                   last_duration_ms = NULL, lease_owner = ?, lease_until = ?, updated_at = ?
                WHERE source_id = ?
                  AND (lease_owner IS NULL OR lease_until IS NULL OR lease_until <= ?)""",
             (attempted_at, owner, lease_until, attempted_at, source_id, attempted_at),
@@ -105,20 +111,32 @@ def finish_source_poll(
     status: str,
     finished_at: str,
     item_count: Optional[int],
+    inserted_count: int = 0,
+    updated_count: int = 0,
+    unchanged_count: int = 0,
     error: Optional[str],
     duration_ms: int,
     next_poll_at: str,
     success: bool,
+    store_results: bool | None = None,
     release_lease: bool = True,
 ) -> bool:
     """Persist one terminal attempt without letting an expired owner overwrite a newer run."""
+    stored = success if store_results is None else store_results
     cur = conn.execute(
         """UPDATE pollution_source_health
            SET status = ?,
                successes = successes + ?,
+               consecutive_failures = CASE WHEN ? THEN 0 ELSE consecutive_failures + 1 END,
                total_items = total_items + ?,
+               total_inserted = total_inserted + ?,
+               total_updated = total_updated + ?,
+               total_unchanged = total_unchanged + ?,
                last_success_at = CASE WHEN ? THEN ? ELSE last_success_at END,
                last_item_count = ?,
+               last_inserted_count = ?,
+               last_updated_count = ?,
+               last_unchanged_count = ?,
                last_error = ?,
                last_duration_ms = ?,
                next_poll_at = ?,
@@ -129,10 +147,17 @@ def finish_source_poll(
         (
             status,
             1 if success else 0,
-            item_count if success and item_count is not None else 0,
+            1 if success else 0,
+            item_count if stored and item_count is not None else 0,
+            inserted_count if stored else 0,
+            updated_count if stored else 0,
+            unchanged_count if stored else 0,
             1 if success else 0,
             finished_at,
             item_count,
+            inserted_count if stored else None,
+            updated_count if stored else None,
+            unchanged_count if stored else None,
             error,
             duration_ms,
             next_poll_at,
@@ -146,29 +171,84 @@ def finish_source_poll(
     return cur.rowcount == 1
 
 
-def upsert_incident(conn: sqlite3.Connection, inc: PollutionIncident) -> None:
+def upsert_incident(conn: sqlite3.Connection, inc: PollutionIncident) -> str:
+    """Store an incident and return inserted, updated, or unchanged."""
     inc.validate()
-    conn.execute(
-        """INSERT INTO pollution_incident(id,source_id,observed_at,lat,lng,radius_m,geom,kind,area_km2,confidence,location_precision,raw)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-           ON CONFLICT(id) DO UPDATE SET observed_at=excluded.observed_at, lat=excluded.lat, lng=excluded.lng,
-             radius_m=excluded.radius_m, geom=excluded.geom, kind=excluded.kind, area_km2=excluded.area_km2,
-             confidence=excluded.confidence, location_precision=excluded.location_precision, raw=excluded.raw""",
-        (
-            inc.id,
-            inc.source_id,
-            inc.observed_at,
-            inc.lat,
-            inc.lng,
-            inc.radius_m,
-            json.dumps(inc.geom) if inc.geom is not None else None,
-            inc.kind,
-            inc.area_km2,
-            inc.confidence,
-            inc.location_precision,
-            json.dumps(inc.raw, ensure_ascii=False) if inc.raw else None,
-        ),
+    values = (
+        inc.source_id,
+        inc.observed_at,
+        inc.lat,
+        inc.lng,
+        inc.radius_m,
+        json.dumps(inc.geom) if inc.geom is not None else None,
+        inc.kind,
+        inc.area_km2,
+        inc.confidence,
+        inc.location_precision,
+        json.dumps(inc.raw, ensure_ascii=False) if inc.raw else None,
     )
+    existing = conn.execute(
+        """SELECT source_id,observed_at,lat,lng,radius_m,geom,kind,area_km2,
+                  confidence,location_precision,raw
+           FROM pollution_incident WHERE id = ?""",
+        (inc.id,),
+    ).fetchone()
+    if existing is not None and tuple(existing) == values:
+        return "unchanged"
+    if existing is None:
+        conn.execute(
+            """INSERT INTO pollution_incident(
+                   id,source_id,observed_at,lat,lng,radius_m,geom,kind,area_km2,
+                   confidence,location_precision,raw
+               ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (inc.id, *values),
+        )
+        action = "inserted"
+    else:
+        conn.execute(
+            """UPDATE pollution_incident
+               SET source_id=?, observed_at=?, lat=?, lng=?, radius_m=?, geom=?,
+                   kind=?, area_km2=?, confidence=?, location_precision=?, raw=?
+               WHERE id=?""",
+            (*values, inc.id),
+        )
+        action = "updated"
+    conn.execute(
+        "INSERT INTO pollution_change(incident_id, action) VALUES (?, ?)",
+        (inc.id, action),
+    )
+    return action
+
+def update_incident_raw(
+    conn: sqlite3.Connection,
+    incident_id: str,
+    raw: dict[str, Any],
+    *,
+    expected_raw: str | None,
+) -> bool:
+    """Replace incident evidence and publish the update through the same cursor."""
+    serialized = json.dumps(raw, ensure_ascii=False, separators=(",", ":"))
+    started = not conn.in_transaction
+    if started:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        cursor = conn.execute(
+            "UPDATE pollution_incident SET raw = ? WHERE id = ? AND raw IS ?",
+            (serialized, incident_id, expected_raw),
+        )
+        if cursor.rowcount == 1:
+            conn.execute(
+                "INSERT INTO pollution_change(incident_id, action) VALUES (?, 'updated')",
+                (incident_id,),
+            )
+        if started:
+            conn.execute("COMMIT")
+        return cursor.rowcount == 1
+    except Exception:
+        if started and conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+
 
 
 def list_incidents(
@@ -194,6 +274,68 @@ def list_incidents(
     args.append(limit)
     cur = conn.execute(sql, tuple(args))
     return [_row_to_incident(r) for r in cur.fetchall()]
+
+
+def list_changes(conn: sqlite3.Connection, after: int = 0, limit: int = 500) -> list[dict]:
+    rows = conn.execute(
+        """SELECT c.seq, c.action, c.changed_at, i.*
+           FROM pollution_change AS c
+           JOIN pollution_incident AS i ON i.id = c.incident_id
+           WHERE c.seq > ? ORDER BY c.seq LIMIT ?""",
+        (after, limit),
+    ).fetchall()
+    changes: list[dict] = []
+    for row in rows:
+        item = _row_to_incident(row)
+        item["seq"] = int(row["seq"])
+        item["action"] = str(row["action"])
+        item["changed_at"] = row["changed_at"]
+        changes.append(item)
+    return changes
+
+
+def latest_change_seq(conn: sqlite3.Connection) -> int:
+    row = conn.execute("SELECT COALESCE(MAX(seq), 0) FROM pollution_change").fetchone()
+    return int(row[0]) if row else 0
+
+
+def record_seen(conn: sqlite3.Connection, source_id: str, record_key: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM pollution_record_cache WHERE source_id=? AND record_key=?",
+        (source_id, record_key),
+    ).fetchone()
+    return row is not None
+
+
+def get_record(conn: sqlite3.Connection, source_id: str, record_key: str) -> dict | None:
+    row = conn.execute(
+        """SELECT source_id,record_key,content_hash,observed_at,outcome,updated_at
+           FROM pollution_record_cache WHERE source_id=? AND record_key=?""",
+        (source_id, record_key),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def mark_record(
+    conn: sqlite3.Connection,
+    source_id: str,
+    record_key: str,
+    *,
+    content_hash: Optional[str] = None,
+    observed_at: Optional[str] = None,
+    outcome: str,
+) -> None:
+    conn.execute(
+        """INSERT INTO pollution_record_cache(
+               source_id,record_key,content_hash,observed_at,outcome,updated_at
+           ) VALUES (?,?,?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+           ON CONFLICT(source_id,record_key) DO UPDATE SET
+               content_hash=excluded.content_hash,
+               observed_at=excluded.observed_at,
+               outcome=excluded.outcome,
+               updated_at=excluded.updated_at""",
+        (source_id, record_key, content_hash, observed_at, outcome),
+    )
 
 
 def count_incidents(conn: sqlite3.Connection) -> int:

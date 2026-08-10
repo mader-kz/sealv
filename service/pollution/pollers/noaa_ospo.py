@@ -9,13 +9,12 @@ import io
 import json
 import math
 import re
-import urllib.error
 import urllib.parse
-import urllib.request
 import zipfile
 from datetime import date, datetime, timedelta, timezone
 from html.parser import HTMLParser
 from typing import Any, Iterable, Optional
+from ..net import fetch
 
 from ..models import PollutionIncident, PollutionSource
 from ..registry import SourceUnavailableError, register_source
@@ -67,15 +66,13 @@ class _ArchiveRows(HTMLParser):
 
 
 def _get(url: str, accept: str, timeout: int = 20) -> tuple[bytes, str]:
-    request = urllib.request.Request(
+    response = fetch(
         url,
         headers={"User-Agent": USER_AGENT, "Accept": accept},
+        timeout=timeout,
+        max_bytes=25 * 1024 * 1024,
     )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return response.read(), response.geturl()
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise SourceUnavailableError(f"NOAA OSPO request failed for {url}: {exc}") from exc
+    return response.body, response.url
 
 
 def _cutoff(since: Optional[str], now: datetime) -> datetime:
@@ -280,13 +277,22 @@ def poll(source: PollutionSource, since: Optional[str] = None) -> list[Pollution
             reports[stem] = (txt_url, zip_url)
 
     incidents: list[PollutionIncident] = []
+    failures = 0
+    retry_after_seconds: float | None = None
     for stem, (txt_url, zip_url) in sorted(reports.items()):
-        txt_body, final_txt_url = _get(txt_url, "text/plain")
-        report_text = txt_body.decode("utf-8", errors="replace")
-        if not _txt_passes_prefilter(report_text):
+        try:
+            txt_body, final_txt_url = _get(txt_url, "text/plain")
+            report_text = txt_body.decode("utf-8", errors="replace")
+            if not _txt_passes_prefilter(report_text):
+                continue
+            zip_body, final_zip_url = _get(zip_url, "application/zip")
+            polygons = _zip_polygons(zip_body)
+        except SourceUnavailableError as exc:
+            failures += 1
+            if exc.retry_after_seconds is not None:
+                retry_after_seconds = max(retry_after_seconds or 0, exc.retry_after_seconds)
             continue
-        zip_body, final_zip_url = _get(zip_url, "application/zip")
-        for index, geometry in enumerate(_zip_polygons(zip_body)):
+        for index, geometry in enumerate(polygons):
             center = _geometry_center_radius(geometry)
             if center is None:
                 continue
@@ -313,6 +319,12 @@ def poll(source: PollutionSource, since: Optional[str] = None) -> list[Pollution
             )
             incident.validate()
             incidents.append(incident)
+    if failures:
+        raise SourceUnavailableError(
+            f"incomplete {source.id} scan: {failures} report requests failed",
+            retry_after_seconds=retry_after_seconds,
+            partial_incidents=incidents,
+        )
     return incidents
 
 

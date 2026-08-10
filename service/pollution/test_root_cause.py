@@ -4,21 +4,23 @@ from __future__ import annotations
 import json
 import os
 import unittest
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock, patch
 from datetime import datetime, timezone
 
 from service.pollution import api, opencode_geocoder
 
 from service.pollution.models import PollutionSource
 from service.pollution.pollers import lada_rss, news, telegram
+from service.pollution.net import HttpResponse
 
 class RootCauseExtractionTests(unittest.TestCase):
-    def _response(self, content: str) -> MagicMock:
-        response = MagicMock()
-        response.__enter__.return_value.read.return_value = json.dumps(
-            {"choices": [{"message": {"content": content}}]}
-        ).encode("utf-8")
-        return response
+    def _response(self, content: str) -> HttpResponse:
+        return HttpResponse(
+            body=json.dumps({"choices": [{"message": {"content": content}}]}).encode(),
+            url="https://geocoder.example/v1/chat/completions",
+            status=200,
+            charset="utf-8",
+        )
 
     def test_combined_completion_safely_parses_place_and_qualified_cause(self) -> None:
         urlopen = Mock(
@@ -32,7 +34,7 @@ class RootCauseExtractionTests(unittest.TestCase):
             "POLLUTION_GEOCODER_API_KEY": "test-key",
         }
         with patch.dict(os.environ, environment, clear=True), patch.object(
-            opencode_geocoder, "urlopen", urlopen
+            opencode_geocoder, "fetch", urlopen
         ):
             result = opencode_geocoder.geocode_via_opencode(
                 "Разлив у пляжа Аташ. Координаты 43.70000, 51.10000"
@@ -70,7 +72,7 @@ class RootCauseExtractionTests(unittest.TestCase):
             "POLLUTION_GEOCODER_API_KEY": "test-key",
         }
         with patch.dict(os.environ, environment, clear=True), patch.object(
-            opencode_geocoder, "urlopen", side_effect=TimeoutError("timed out")
+            opencode_geocoder, "fetch", side_effect=TimeoutError("timed out")
         ):
             result = opencode_geocoder.geocode_via_opencode(
                 "Oil pollution reported at 43.70000, 51.10000"
@@ -92,7 +94,7 @@ class RootCauseExtractionTests(unittest.TestCase):
             "POLLUTION_GEOCODER_API_KEY": "test-key",
         }
         with patch.dict(os.environ, environment, clear=True), patch.object(
-            opencode_geocoder, "urlopen", return_value=self._response(content)
+            opencode_geocoder, "fetch", return_value=self._response(content)
         ):
             extracted = opencode_geocoder.extract_report_details(
                 "Нефтяное загрязнение у неизвестного мыса"
@@ -228,7 +230,7 @@ class RootCauseApiTests(unittest.TestCase):
         ]
         with patch.object(api, "_conn", return_value=connection), patch.object(
             api.pol_db, "list_incidents", return_value=rows
-        ):
+        ), patch.object(api.pol_db, "latest_change_seq", return_value=0):
             collection = api.list_incidents(
                 bbox=None,
                 since=None,
@@ -242,6 +244,70 @@ class RootCauseApiTests(unittest.TestCase):
         self.assertEqual(first["root_cause"], "Reported pipeline leak released oil.")
         self.assertIsNone(second["root_cause"])
         connection.close.assert_called_once_with()
+
+    def test_changes_keep_cursor_progress_while_filtering_to_bbox(self) -> None:
+        connection = Mock()
+        base = {
+            "source_id": "test_source",
+            "observed_at": "2026-08-10T00:00:00+00:00",
+            "radius_m": 500.0,
+            "kind": "spill",
+            "area_km2": None,
+            "confidence": None,
+            "location_precision": "exact",
+            "raw": {"title": "Evidence"},
+            "action": "updated",
+            "changed_at": "2026-08-10T01:00:00+00:00",
+        }
+        rows = [
+            base | {"id": "inside", "seq": 4, "lat": 43.7, "lng": 51.1},
+            base | {"id": "outside", "seq": 5, "lat": 60.0, "lng": 10.0},
+        ]
+        with patch.object(api, "_conn", return_value=connection), patch.object(
+            api.pol_db, "list_changes", return_value=rows
+        ):
+            collection = api.pollution_changes(
+                after=3,
+                limit=10,
+                bbox="46,36,55,48",
+            )
+
+        self.assertEqual(
+            [feature["properties"]["id"] for feature in collection["features"]],
+            ["inside"],
+        )
+        self.assertEqual(collection["removed"], ["outside"])
+        self.assertEqual(collection["cursor"], 5)
+        self.assertFalse(collection["has_more"])
+        connection.close.assert_called_once_with()
+
+    def test_saturated_initial_snapshot_replays_changes_from_zero(self) -> None:
+        connection = Mock()
+        row = {
+            "id": "test:1",
+            "source_id": "test_source",
+            "observed_at": "2026-08-10T00:00:00+00:00",
+            "lat": 43.7,
+            "lng": 51.1,
+            "radius_m": 500.0,
+            "kind": "spill",
+            "area_km2": None,
+            "confidence": None,
+            "location_precision": "exact",
+            "raw": {"title": "Evidence"},
+        }
+        with patch.object(api, "_conn", return_value=connection), patch.object(
+            api.pol_db, "list_incidents", return_value=[row]
+        ), patch.object(api.pol_db, "latest_change_seq", return_value=99) as latest:
+            collection = api.list_incidents(
+                bbox=None,
+                since=None,
+                kind=None,
+                limit=1,
+            )
+
+        self.assertEqual(collection["cursor"], 0)
+        latest.assert_not_called()
 
 
 if __name__ == "__main__":

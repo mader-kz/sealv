@@ -166,6 +166,13 @@ def _widen(conn: sqlite3.Connection) -> None:
         # for an added REFERENCES column - and the only shape that is correct:
         # every existing run reaches its survey through its media.
         ("run", "survey_id", "ALTER TABLE run ADD COLUMN survey_id TEXT REFERENCES survey(id)"),
+        ("pollution_source_health", "consecutive_failures", "ALTER TABLE pollution_source_health ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0"),
+        ("pollution_source_health", "total_inserted", "ALTER TABLE pollution_source_health ADD COLUMN total_inserted INTEGER NOT NULL DEFAULT 0"),
+        ("pollution_source_health", "total_updated", "ALTER TABLE pollution_source_health ADD COLUMN total_updated INTEGER NOT NULL DEFAULT 0"),
+        ("pollution_source_health", "total_unchanged", "ALTER TABLE pollution_source_health ADD COLUMN total_unchanged INTEGER NOT NULL DEFAULT 0"),
+        ("pollution_source_health", "last_inserted_count", "ALTER TABLE pollution_source_health ADD COLUMN last_inserted_count INTEGER"),
+        ("pollution_source_health", "last_updated_count", "ALTER TABLE pollution_source_health ADD COLUMN last_updated_count INTEGER"),
+        ("pollution_source_health", "last_unchanged_count", "ALTER TABLE pollution_source_health ADD COLUMN last_unchanged_count INTEGER"),
     ):
         have = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
         if column not in have:

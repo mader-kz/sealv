@@ -17,9 +17,9 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Iterable, Optional
 from urllib.parse import quote, urljoin, urlsplit
-from urllib.request import Request, urlopen
 
 from ..classifier import is_pollution_article, lexical_prefilter
+from ..net import fetch_text
 try:
     from service.pollution.opencode_geocoder import geocode_via_opencode  # type: ignore
 except ImportError:
@@ -44,7 +44,7 @@ except ImportError:
             o.root_cause = None
             return o
 from ..models import PollutionIncident, PollutionSource
-from ..registry import register_source
+from ..registry import SourceUnavailableError, register_source
 
 logger = logging.getLogger(__name__)
 
@@ -103,16 +103,15 @@ def _max_pages(default: int) -> int:
 
 
 def _fetch(url: str) -> str:
-    request = Request(
+    return fetch_text(
         url,
         headers={
             "User-Agent": _USER_AGENT,
             "Accept": "text/html,application/rss+xml,application/xml;q=0.9,*/*;q=0.5",
         },
+        timeout=_timeout(),
+        max_bytes=10 * 1024 * 1024,
     )
-    with urlopen(request, timeout=_timeout()) as response:
-        charset = response.headers.get_content_charset() or "utf-8"
-        return response.read().decode(charset, errors="replace")
 
 
 def _text(markup: str) -> str:
@@ -325,6 +324,7 @@ def _incidents_from_record(
     radius_m = 500.0
     confidence_override: Optional[float] = None
     root_cause: Optional[str] = None
+    coords = _explicit_coordinates(text)
     if not coords:
         resolved = _resolve_named_place(text)
         if not resolved:
@@ -413,9 +413,13 @@ def _poll_transparent(source: PollutionSource, since: Optional[str]) -> list[Pol
     for _ in range(_max_pages(6)):
         try:
             markup = _fetch(url)
-        except Exception as exc:
-            logger.warning("[%s] fetch failed url=%s error=%s", source.id, url, exc)
-            break
+        except SourceUnavailableError as exc:
+            partial = _dedupe(source, records_by_id.values(), since)
+            raise SourceUnavailableError(
+                f"incomplete {source.id} scan: {url}: {exc}",
+                retry_after_seconds=exc.retry_after_seconds,
+                partial_incidents=partial,
+            ) from exc
         page_records, before = _telegram_records(markup)
         for record in page_records:
             records_by_id[str(record["external_id"])] = record
@@ -432,39 +436,43 @@ def _poll_transparent(source: PollutionSource, since: Optional[str]) -> list[Pol
     return _dedupe(source, records_by_id.values(), since)
 
 
-def _save_caspian_records(source: PollutionSource) -> Iterable[dict]:
-    try:
-        listing = _fetch(source.url)
-    except Exception as exc:
-        logger.warning("[%s] listing fetch failed url=%s error=%s", source.id, source.url, exc)
-        return []
+FetchFailure = tuple[str, float | None]
+
+
+def _save_caspian_records(source: PollutionSource) -> tuple[list[dict], list[FetchFailure]]:
+    listing = _fetch(source.url)
     detail_urls = [
         href.replace("http://savethecaspiansea.com", "https://savethecaspiansea.com")
         for _, href in _links(listing, source.url)
         if "/tpost/" in href
     ]
     records: list[dict] = []
+    errors: list[FetchFailure] = []
     for url in detail_urls[: 20 * _max_pages(2)]:
         try:
             markup = _fetch(url)
-        except Exception as exc:
-            logger.warning("[%s] detail fetch failed url=%s error=%s", source.id, url, exc)
+        except SourceUnavailableError as exc:
+            errors.append((f"{url}: {exc}", exc.retry_after_seconds))
             continue
         text = _text(markup)
         records.append({"url": url, "external_id": _external_id(url, "tpost"), "text": text})
-    return records
+    return records, errors
 
 
-def _rss_records(source: PollutionSource) -> Iterable[dict]:
+def _rss_records(source: PollutionSource) -> tuple[list[dict], list[FetchFailure]]:
     records: list[dict] = []
+    errors: list[FetchFailure] = []
     for page in range(1, _max_pages(3) + 1):
         url = source.url if page == 1 else f"{source.url}?paged={page}"
         try:
             markup = _fetch(url)
-            root = ET.fromstring(markup)
-        except Exception as exc:
-            logger.warning("[%s] RSS fetch/parse failed url=%s error=%s", source.id, url, exc)
+        except SourceUnavailableError as exc:
+            errors.append((f"{url}: {exc}", exc.retry_after_seconds))
             break
+        try:
+            root = ET.fromstring(markup)
+        except ET.ParseError as exc:
+            raise SourceUnavailableError(f"invalid RSS from {url}: {exc}") from exc
         items = root.findall(".//item")
         if not items:
             break
@@ -482,8 +490,8 @@ def _rss_records(source: PollutionSource) -> Iterable[dict]:
             if lexical_prefilter(text):
                 try:
                     text = f"{text}\n{_article_text(_fetch(link))}"
-                except Exception as exc:
-                    logger.warning("[%s] detail fetch failed url=%s error=%s", source.id, link, exc)
+                except SourceUnavailableError as exc:
+                    errors.append((f"{link}: {exc}", exc.retry_after_seconds))
             records.append(
                 {
                     "url": link,
@@ -492,11 +500,12 @@ def _rss_records(source: PollutionSource) -> Iterable[dict]:
                     "text": text,
                 }
             )
-    return records
+    return records, errors
 
 
-def _eco_mangystau_records(source: PollutionSource) -> Iterable[dict]:
+def _eco_mangystau_records(source: PollutionSource) -> tuple[list[dict], list[FetchFailure]]:
     records: list[dict] = []
+    errors: list[FetchFailure] = []
     urls = [source.url]
     pages = _max_pages(2)
     urls.extend(f"https://ecomangystau.kz/eko-kultura?page={page}" for page in range(1, pages + 1))
@@ -504,8 +513,8 @@ def _eco_mangystau_records(source: PollutionSource) -> Iterable[dict]:
     for listing_url in urls:
         try:
             markup = _fetch(listing_url)
-        except Exception as exc:
-            logger.warning("[%s] listing fetch failed url=%s error=%s", source.id, listing_url, exc)
+        except SourceUnavailableError as exc:
+            errors.append((f"{listing_url}: {exc}", exc.retry_after_seconds))
             continue
         for anchor_text, href in _links(markup, listing_url):
             if urlsplit(href).netloc != "ecomangystau.kz" or href.rstrip("/") == listing_url.rstrip("/"):
@@ -516,8 +525,8 @@ def _eco_mangystau_records(source: PollutionSource) -> Iterable[dict]:
     for url, listing_date in list(detail_urls.items())[: 20 * pages]:
         try:
             markup = _fetch(url)
-        except Exception as exc:
-            logger.warning("[%s] detail fetch failed url=%s error=%s", source.id, url, exc)
+        except SourceUnavailableError as exc:
+            errors.append((f"{url}: {exc}", exc.retry_after_seconds))
             continue
         records.append(
             {
@@ -527,7 +536,7 @@ def _eco_mangystau_records(source: PollutionSource) -> Iterable[dict]:
                 "text": _text(markup),
             }
         )
-    return records
+    return records, errors
 
 
 def _published_meta(markup: str) -> Optional[str]:
@@ -541,18 +550,15 @@ def _published_meta(markup: str) -> Optional[str]:
     return _report_time(match.group(1), match.group(1)) if match else None
 
 
-def _eco_citizens_records(source: PollutionSource) -> Iterable[dict]:
-    try:
-        markup = _fetch(source.url)
-    except Exception as exc:
-        logger.warning("[%s] map fetch failed url=%s error=%s", source.id, source.url, exc)
-        return []
+def _eco_citizens_records(source: PollutionSource) -> tuple[list[dict], list[FetchFailure]]:
+    markup = _fetch(source.url)
     marker_re = re.compile(
         r"L\.marker\(\[\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\].*?"
         r"marker\.bindPopup\([\"'](?:<a\s+href=[\"']([^\"']+)[\"']>)?([^<\"']+)",
         re.IGNORECASE | re.DOTALL,
     )
     records: list[dict] = []
+    errors: list[FetchFailure] = []
     for match in marker_re.finditer(markup):
         title = html_lib.unescape(match.group(4)).strip()
         if not _POLLUTION_TITLE_RE.search(title):
@@ -562,8 +568,8 @@ def _eco_citizens_records(source: PollutionSource) -> Iterable[dict]:
             continue
         try:
             detail = _fetch(url)
-        except Exception as exc:
-            logger.warning("[%s] hotspot detail failed url=%s error=%s", source.id, url, exc)
+        except SourceUnavailableError as exc:
+            errors.append((f"{url}: {exc}", exc.retry_after_seconds))
             continue
         records.append(
             {
@@ -574,7 +580,7 @@ def _eco_citizens_records(source: PollutionSource) -> Iterable[dict]:
                 "coordinates": [(float(match.group(1)), float(match.group(2)), 0)],
             }
         )
-    return records
+    return records, errors
 
 
 def _dedupe(source: PollutionSource, records: Iterable[dict], since: Optional[str]) -> list[PollutionIncident]:
@@ -587,19 +593,36 @@ def _dedupe(source: PollutionSource, records: Iterable[dict], since: Optional[st
                 by_key[key] = incident
     return sorted(by_key.values(), key=lambda incident: (incident.observed_at or "", incident.id), reverse=True)
 
+def _finish_records(
+    source: PollutionSource,
+    result: tuple[list[dict], list[FetchFailure]],
+    since: Optional[str],
+) -> list[PollutionIncident]:
+    records, errors = result
+    incidents = _dedupe(source, records, since)
+    retry_values = [retry for _, retry in errors if retry is not None]
+    if errors:
+        raise SourceUnavailableError(
+            f"incomplete {source.id} scan: {len(errors)} fetch failures",
+            retry_after_seconds=max(retry_values, default=None),
+            partial_incidents=incidents,
+        )
+    return incidents
+
+
 
 def poll(source: PollutionSource, since: Optional[str] = None) -> list[PollutionIncident]:
     """Poll one NGO source using the stable ``(source, since)`` contract."""
     if source.id == "transparent_world":
         return _poll_transparent(source, since)
     if source.id == "save_caspian":
-        return _dedupe(source, _save_caspian_records(source), since)
+        return _finish_records(source, _save_caspian_records(source), since)
     if source.id == "crude_accountability":
-        return _dedupe(source, _rss_records(source), since)
+        return _finish_records(source, _rss_records(source), since)
     if source.id == "eco_mangystau":
-        return _dedupe(source, _eco_mangystau_records(source), since)
+        return _finish_records(source, _eco_mangystau_records(source), since)
     if source.id == "eco_citizens_hotspots":
-        return _dedupe(source, _eco_citizens_records(source), since)
+        return _finish_records(source, _eco_citizens_records(source), since)
     return []
 
 

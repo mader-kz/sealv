@@ -17,6 +17,9 @@ import { Button } from "@/components/ui/primitives";
 import { setMode } from "@/lib/modes";
 import {
   fetchPollution,
+  fetchPollutionChanges,
+  fetchPollutionStatus,
+  mergePollution,
   pollutionAgeBucket,
   pollutionDisplay,
   pollutionUncertainty,
@@ -259,14 +262,12 @@ export type SiteChip = {
    SiteChip it came from, copied flat so sameChips can diff without walking. */
 type ColonyChip = SiteChip & { x: number; y: number; ay: number };
 
-/* Push overlapping chips apart vertically. Two sites a couple of kilometres
-   apart project onto the same pixels at basin zoom, and the upper chip then
-   swallows the lower one's clicks — the site card behind it was unreachable,
-   which the smoke run proved with a 30-second click timeout. The estimate is
-   deliberately rough (a chip is ~52px tall plus its band line and spark);
-   roughness only costs a few extra pixels of separation, never a swallowed
-   click. `ay` keeps the true anchor so a displaced chip can draw a stalk back
-   to the coordinate it actually claims. */
+/* Push overlapping markers apart vertically. Two sites a couple of kilometres
+   apart project onto the same pixels at basin zoom, and the upper marker then
+   swallows the lower one's clicks. The estimate matches the compact icon/count
+   marker; a few extra pixels of separation cost less than an unreachable site.
+   `ay` keeps the true anchor so a displaced marker can draw a stalk back to the
+   coordinate it actually claims. */
 /* How far past the canvas edge a chip may still be worth rendering. Inside
    this margin a chip is partly on screen (the layer clips the rest, which is
    the correct reading — the count is sliding off the edge); beyond it there
@@ -279,17 +280,15 @@ const offCanvas = (x: number, y: number, rect: { width: number; height: number }
   y < -CHIP_CULL_MARGIN || y > rect.height + CHIP_CULL_MARGIN;
 
 function separateChips(chips: ColonyChip[]) {
-  const H = (c: ColonyChip) =>
-    52 + (c.low != null && c.high != null && c.low !== c.high ? 14 : 0) +
-    (c.spark.length > 1 ? SPARK_H + 5 : 0);
-  const W = 132;
+  const H = 44;
+  const W = 88;
   const byY = [...chips].sort((a, b) => a.y - b.y);
   for (let pass = 0; pass < 3; pass++) {
     for (let i = 1; i < byY.length; i++) {
       for (let j = 0; j < i; j++) {
         const a = byY[j], b = byY[i];
         if (Math.abs(a.x - b.x) >= W) continue;
-        const need = (H(a) + H(b)) / 2 + 4;
+        const need = H + 4;
         const gap = b.y - a.y;
         if (gap < need) b.y = a.y + need;
       }
@@ -297,40 +296,9 @@ function separateChips(chips: ColonyChip[]) {
   }
 }
 
-/* A figure that must not spend the signal colour: a counted zero, and a site
-   with no standing count at all. One declaration for both — the chip sets
-   `color` on itself and .chip-best inherits, so turning the colour down
-   here mutes the figure without touching anything else. Everything the chip is
-   — the flat plate, the square corners, the left hairline, the translate
-   centring, the hover scale, the selected rule — stays in globals.css, so a
-   zero moves, hovers and selects exactly like every other chip. It differs
-   only in that it does not spend the signal colour on nothing.
-
-   The pill, the second background and the shadow stack are gone with the rest
-   of the boxes; the reason the old style had to re-state `selected` (an inline
-   box-shadow outranking the .selected rule) went with them. */
-const ZERO_CHIP_BEST: React.CSSProperties = { fontSize: 13, fontWeight: 500 };
-const ZERO_CHIP_STYLE: React.CSSProperties = { color: "var(--ink-3)" };
-
-/* The sparkline drawn inside a multi-visit chip: one polyline over the site's
-   counted visits, oldest first. Not a chart — it has no axis and states no
-   value; it says "this place has been flown before, and this is the shape of
-   it". The numbers themselves are in the site card, one click away, where they
-   can be read properly with their bands and their dates. */
-const SPARK_W = 92;
-const SPARK_H = 16;
-
-function sparkPoints(vals: number[]): string {
-  const max = Math.max(...vals);
-  const min = Math.min(...vals);
-  const range = max - min || 1;
-  return vals
-    .map((v, i) => {
-      const x = (i / (vals.length - 1)) * (SPARK_W - 2) + 1;
-      const y = SPARK_H - 1 - ((v - min) / range) * (SPARK_H - 3);
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    })
-    .join(" ");
+/* The exact supplied artwork, with only its connected navy background removed. */
+function SealMarkerIcon() {
+  return <span className="seal-marker-icon" aria-hidden="true" />;
 }
 
 /* A tracked group's dated observations are not sortie totals. They get their
@@ -464,6 +432,7 @@ export default function CaspianMap({
   const [zoomNow, setZoomNow] = useState<number | null>(null);
   const [pollution, setPollution] = useState<PollutionFC>({ type: "FeatureCollection", features: [] });
   const [pollutionError, setPollutionError] = useState(false);
+  const [pollutionHealth, setPollutionHealth] = useState<{ failed: number; stale: number } | null>(null);
   const [showPollution, setShowPollution] = useState(true);
   const [selectedPollutionId, setSelectedPollutionId] = useState<string | null>(null);
   const tipRef = useRef<HTMLDivElement>(null);
@@ -947,18 +916,77 @@ export default function CaspianMap({
     ) setSelectedPollutionId(null);
   },[pollutionDisplayData.features,selectedPollutionId]);
 
-  /* Load the evidence once. The selected population checkpoint filters future
-     reports locally, so moving the crosshair does not turn into network churn. */
+  /* Initial evidence arrives once; cursor-based deltas refresh only while this
+     tab is visible. Updating the GeoJSON source preserves camera, layers,
+     checkpoint, and inspector selection. */
   useEffect(()=>{
     const controller = new AbortController();
-    setPollutionError(false);
-    fetchPollution({ bbox: "46,36,55,48", limit: 2000, signal: controller.signal })
-      .then(setPollution)
-      .catch(error => {
-        if (error instanceof DOMException && error.name === "AbortError") return;
+    let stopped = false;
+    let loading = false;
+    let initialized = false;
+    let cursor = 0;
+    const refreshEvidence = async () => {
+      if(stopped || loading || document.visibilityState !== "visible") return;
+      loading = true;
+      try {
+        if(!initialized){
+          const collection = await fetchPollution({
+            bbox: "46,36,55,48",
+            limit: 2000,
+            signal: controller.signal,
+          });
+          if(stopped) return;
+          cursor = collection.cursor ?? 0;
+          initialized = true;
+          setPollution(collection);
+        } else {
+          let hasMore = true;
+          while(hasMore && !stopped){
+            const changes = await fetchPollutionChanges(cursor, {
+              bbox: "46,36,55,48",
+              limit: 500,
+              signal: controller.signal,
+            });
+            cursor = changes.cursor ?? cursor;
+            hasMore = Boolean(changes.has_more);
+            setPollution(current => mergePollution(current, changes));
+          }
+        }
+        setPollutionError(false);
+      } catch(error) {
+        if(error instanceof DOMException && error.name === "AbortError") return;
         setPollutionError(true);
-      });
-    return () => controller.abort();
+      } finally {
+        loading = false;
+      }
+    };
+    const refreshHealth = async () => {
+      if(stopped || document.visibilityState !== "visible") return;
+      try {
+        const status = await fetchPollutionStatus(controller.signal);
+        const statuses = status.summary.statuses;
+        setPollutionHealth({
+          failed: (statuses.error ?? 0) + (statuses.unavailable ?? 0) + (statuses.partial ?? 0),
+          stale: status.summary.stale ?? 0,
+        });
+      } catch(error) {
+        if(error instanceof DOMException && error.name === "AbortError") return;
+      }
+    };
+    const refreshVisible = () => {
+      void refreshEvidence();
+      void refreshHealth();
+    };
+    setPollutionError(false);
+    refreshVisible();
+    const interval = window.setInterval(refreshVisible, 60_000);
+    document.addEventListener("visibilitychange", refreshVisible);
+    return () => {
+      stopped = true;
+      controller.abort();
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", refreshVisible);
+    };
   },[]);
 
   /* Reported points, analyst polygons, and metre-based uncertainty are three
@@ -1833,12 +1861,7 @@ export default function CaspianMap({
                   zIndex:point.selected ? 100 : point.expanded ? 10+point.index : undefined,
                 }}
               >
-                <span className="movement-card-location tnum">{point.lat.toFixed(3)}, {point.lng.toFixed(3)}</span>
-                {point.expanded && (
-                  <span className="movement-card-date">
-                    {new Date(point.observedAt).toLocaleDateString(localeFor(lang),{day:"2-digit",month:"short",year:"2-digit"})}
-                  </span>
-                )}
+                <SealMarkerIcon />
                 <span className="movement-card-count tnum">{point.size}</span>
               </button>
             ))}
@@ -1846,13 +1869,11 @@ export default function CaspianMap({
         </>
       )}
 
-      {/* Site chips — the only coloured thing on screen, now that the basemap
-          is monochrome and the hulls are ink. One per PLACE: its name, its
-          standing count, the band under it, and a spark when the place has
-          been flown more than once. In pin mode they step back and stop
-          catching clicks meant for the anchor.
-          `chipLayerRef` is load-bearing, not decoration: the wheel over a chip
-          used to zoom the map underneath it. */}
+      {/* Site markers — the transparent seal/target icon from the product mark
+          plus the standing count. Names, ranges and visit history stay in the
+          accessible title and site card instead of competing with the map.
+          `chipLayerRef` is load-bearing: it prevents a wheel event over the
+          marker from zooming the map underneath it. */}
       <div ref={chipLayerRef} className={`chip-layer absolute inset-0 z-[6] pointer-events-none ${pinMode ? "colony-chips-dimmed" : ""}`}>
         {overlayChips.map(c=>{
           const isSel = c.key===selectedSiteKey;
@@ -1902,42 +1923,12 @@ export default function CaspianMap({
               ].join(" · ")}
               aria-label={t("site.open")}
               className={`colony-chip ${isSel ? "selected z-10" : ""}`}
-              style={{ left:c.x, top:c.y, ...(muted ? ZERO_CHIP_STYLE : null) }}
+              style={{ left:c.x, top:c.y, color: muted ? "var(--ink-3)" : undefined }}
             >
-              {/* The name, above the figure and a step quieter than it. It is
-                  how you tell two chips apart; the number is why you looked. */}
-              <span
-                className="block max-w-[176px] truncate"
-                style={{ fontSize: 10.5, lineHeight: 1.3, color: "var(--ink-3)", marginBottom: 3 }}
-              >
-                {label}
-              </span>
-              <span className="chip-best tnum" style={muted ? ZERO_CHIP_BEST : undefined}>
+              <SealMarkerIcon />
+              <span className="chip-best tnum">
                 {c.count ?? "—"}
               </span>
-              {band && (
-                <span className="chip-range tnum">{c.low}–{c.high}</span>
-              )}
-              {/* A place flown more than once says so on the chip itself. The
-                  values are not labelled here on purpose — this is a shape, and
-                  the numbers behind it are one click away in the site card. */}
-              {c.spark.length > 1 && (
-                <svg
-                  width={SPARK_W}
-                  height={SPARK_H}
-                  viewBox={`0 0 ${SPARK_W} ${SPARK_H}`}
-                  aria-hidden="true"
-                  style={{ display: "block", marginTop: 5 }}
-                >
-                  <polyline
-                    points={sparkPoints(c.spark)}
-                    fill="none"
-                    stroke="var(--ink-4)"
-                    strokeWidth={1}
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              )}
             </button>
             </span>
           );
@@ -2017,6 +2008,13 @@ export default function CaspianMap({
               </span>
             ))}
           </div>
+          {pollutionHealth && (pollutionHealth.failed > 0 || pollutionHealth.stale > 0) && (
+            <div className="mt-1.5 border-t border-line pt-1.5 text-2xs text-warn">
+              {pollutionHealth.failed} {t("pollution.sourcesFailed")}
+              <span className="mx-1.5 text-ink3">·</span>
+              {pollutionHealth.stale} {t("pollution.sourcesStale")}
+            </div>
+          )}
         </div>
       )}
 
