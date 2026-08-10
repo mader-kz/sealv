@@ -1,4 +1,19 @@
 "use client";
+/* TriageTable — every animal of the season as a row.
+ *
+ * This file was the Детекции DIALOG: a 940px drawer that slid over the map and
+ * that Escape threw away. The drawer is gone. What it contained is not: it is
+ * the "таблица" half of Проверка, sitting in the mode's own region with no
+ * scrim, no focus trap and nothing to close.
+ *
+ * Which is a demotion in chrome and a promotion in role. The frame workspace
+ * next door is where a review HAPPENS — one photograph, one animal, one key.
+ * This table is what that workspace cannot do: bulk verdicts, a filter across
+ * every sortie at once, the undo of a mass mistake, the CSV. Deleting it with
+ * the dialog would have taken all of that with it.
+ *
+ * Everything below the toolbar — the windowing, the kept rows, the confirm
+ * step, the undo, the retry — is unchanged. */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useFootageStore } from "@/store/useFootageStore";
 import {
@@ -8,7 +23,6 @@ import {
 } from "@/store/useReviewStore";
 import { isAggregateMarker, reviewStats, seasonReviewStats } from "@/lib/analytics/review";
 import { Button, IconButton, Field, Pill } from "@/components/ui/primitives";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { csvCell, downloadText } from "@/lib/export/animals";
 import type { Detection, Footage } from "@/lib/types";
 import { useT } from "@/lib/i18n";
@@ -52,48 +66,15 @@ const restoreTo = (prev: Status): Status => (prev === "false_positive" ? "false_
  *  the UI at all. */
 const shortRun = (f: Footage): string => (f.runId ?? f.id.replace(/^run-/, "")).slice(0, 8);
 
-/* The drawer subscribes to nothing while it is shut. It used to derive the
-   filtered list, an id array and the select-all flag on every store change
-   even when closed — three full passes over every detection of the season for
-   a component that then rendered null. Radix owns the shell: Escape, the
-   focus trap, aria-modal, outside-click and focus restore come from there
-   instead of from a hand-rolled backdrop div with an onClick.
+/* The table is mounted only while Проверка is showing its "таблица" half, so
+   it still subscribes to nothing the rest of the time — the old reason for the
+   dialog's mount discipline (three full passes over every detection of the
+   season for a component that then rendered null) survives the move.
 
-   The pass itself is no longer in here. Escape unmounts this body, and with it
-   used to go the filter, the sort, the scroll offset and the reviewer's place
-   in 1473 animals — one reflex keystroke, a whole session's bearings. It lives
-   in useReviewStore now; this component only draws it. */
-export default function Workbench({ open, onClose }: { open?: boolean; onClose?: () => void }) {
-  const storeOpen = useReviewStore((s) => s.open);
-  const openReview = useReviewStore((s) => s.openReview);
-  const closeReview = useReviewStore((s) => s.close);
-
-  /* Two ways in: the rail button (a boolean on the page) and openReview() from
-     anywhere else. The prop is mirrored into the store rather than or-ed with
-     it, or the rail's toggle would stop being able to close a drawer that the
-     store had opened. */
-  const prevProp = useRef(Boolean(open));
-  useEffect(() => {
-    const v = Boolean(open);
-    if (v === prevProp.current) return;
-    prevProp.current = v;
-    if (v) openReview();
-    else closeReview();
-  }, [open, openReview, closeReview]);
-
-  const handleClose = useCallback(() => {
-    closeReview();
-    onClose?.();
-  }, [closeReview, onClose]);
-
-  return (
-    <Dialog open={storeOpen} onOpenChange={(v) => { if (!v) handleClose(); }}>
-      {storeOpen && <WorkbenchBody onClose={handleClose} />}
-    </Dialog>
-  );
-}
-
-function WorkbenchBody({ onClose }: { onClose: () => void }) {
+   The pass itself is not in here. It lives in useReviewStore, so switching to
+   the map and back does not cost the filter, the sort, the scroll offset or
+   the reviewer's place in 1473 animals; this component only draws it. */
+export default function TriageTable() {
   const { t } = useT();
   const footages = useFootageStore((s) => s.footages);
   const detections = useFootageStore((s) => s.detections);
@@ -487,17 +468,16 @@ function WorkbenchBody({ onClose }: { onClose: () => void }) {
     const lat = Number.isFinite(d.lat) ? d.lat : f?.center.lat;
     const lng = Number.isFinite(d.lng) ? d.lng : f?.center.lng;
     select(d.footageId);
-    /* `flyto` on document is the app's one camera channel. `zoom` is a hint:
-       a listener that ignores it still lands on the animal. */
+    /* `flyto` on document is the app's one camera channel, and it is now the
+       whole of this button: the shell listens, switches to Карта and replays
+       the event until the map answers. This screen does not have to know that
+       it is leaving, and it costs the pass nothing — the filter, the sort, the
+       scroll offset and the queue cursor are in useReviewStore, so coming back
+       lands on the same row rather than at the top of seventy-three screens.
+       `zoom` is a hint: a listener that ignores it still lands on the animal. */
     if (lat != null && lng != null) {
       document.dispatchEvent(new CustomEvent("flyto", { detail: { lat, lng, zoom: 11 } }));
     }
-    /* The drawer does close — it is a modal over an opaque scrim, and aiming
-       the camera at an animal nobody can see would be a button that does
-       nothing. What it no longer costs is the pass: the filter, the sort, the
-       scroll offset and the walk cursor are in useReviewStore, so reopening
-       lands on the same row rather than at the top of seventy-three screens. */
-    onClose();
   };
 
   /* Column heads are plain-case labels, not letter-spaced small caps: the
@@ -514,15 +494,10 @@ function WorkbenchBody({ onClose }: { onClose: () => void }) {
     : t("wb.reviewProgress", { n: stats.verified, m: stats.reviewable, pct: Math.round(stats.pct) });
 
   return (
-    <DialogContent
-      aria-describedby={undefined}
-      className="left-auto right-0 top-0 translate-x-0 translate-y-0 h-full w-[94vw] max-w-[940px] p-0 gap-0 flex flex-col overflow-hidden bg-surface border-0 border-l border-line rounded-none sm:rounded-none shadow-pop"
-    >
-      <DialogHeader className="h-11 shrink-0 border-b border-line flex-row items-center text-left space-y-0 px-4 pr-12 gap-3">
-        {/* The drawer's one large word. Everything else in the header steps
-            down to 11px, which is what lets a 17px title do the work a rule
-            and a fill used to. */}
-        <DialogTitle className="text-title font-semibold text-ink">{t("nav.detections")}</DialogTitle>
+    /* The mode's region, not a panel inside it: no border, no shadow, no
+       rounding. The screen's title is in the mode header above this. */
+    <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+      <div className="h-9 shrink-0 border-b border-line flex items-center px-4 gap-3">
         <span className="text-xs text-ink3 tnum">
           {t("wb.ofTotal", { a: total, b: scopeDetections.length })}
           {selected.size > 0 && ` · ${t("wb.selected", { n: selected.size })}`}
@@ -533,7 +508,7 @@ function WorkbenchBody({ onClose }: { onClose: () => void }) {
         {saving && <span className="text-xs text-ink3">{t("wb.saving")}</span>}
         <div className="flex-1" />
         <Button icon="download" onClick={exportCSV}>{t("btn.exportCsv")}</Button>
-      </DialogHeader>
+      </div>
 
       {/* How much of what is in scope a human has actually ruled on, and how
           much of it this build cannot show a human at all. */}
@@ -835,6 +810,6 @@ function WorkbenchBody({ onClose }: { onClose: () => void }) {
           </tbody>
         </table>
       </div>
-    </DialogContent>
+    </div>
   );
 }
