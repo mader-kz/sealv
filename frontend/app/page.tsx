@@ -217,15 +217,20 @@ export default function Page(){
                     them against each other; the chip exists for the state
                     where the panel is closed and nothing else says the total. */}
                 {!empty && !showLeft && (
+                  /* The standing estimate is the one number this whole tool
+                     exists to produce, so it is the one number allowed to be
+                     large and the one allowed the signal colour. The sortie
+                     count beside it is context and steps down hard — same
+                     baseline, half the size, plain ink. */
                   <div
-                    className="bg-surface border border-line rounded px-2.5 py-[3px] shadow-pop"
+                    className="plate px-2.5 py-1.5"
                     title={t("est.observedSub", { n: est.observed, m: brushed.length })}
                   >
                     <div className="flex items-baseline gap-1.5">
-                      <span className="text-sm tnum text-ink">{est.current}</span>
+                      <span className="text-title tnum text-accent">{est.current}</span>
                       {!mapNarrow && <span className="text-2xs text-ink3">{tp(est.current, "unit.seals")}</span>}
-                      <span className="text-line px-0.5">·</span>
-                      <span className="text-sm tnum text-ink">{brushed.length}</span>
+                      <span className="text-ink4 px-0.5">·</span>
+                      <span className="text-base tnum text-ink">{brushed.length}</span>
                       {!mapNarrow && <span className="text-2xs text-ink3">{tp(brushed.length, "unit.sorties")}</span>}
                     </div>
                     {/* The demoted raw total, kept visible rather than deleted:
@@ -250,8 +255,11 @@ export default function Page(){
                   title={ingestNeedsYou ? t("ingest.needsYou", { n: ingestNeedsYou }) : undefined}
                 >
                   {t("page.ingest")}
+                  {/* Running is live and takes the signal colour; a queue
+                      waiting on a person is plain ink in italic, the way every
+                      "needs you" state in this design reads. */}
                   {(ingestBusy>0 || ingestNeedsYou>0) && (
-                    <span className={`tnum text-2xs ${ingestNeedsYou>0 ? "text-accent" : "text-ink3"}`}>
+                    <span className={`tnum text-2xs ${ingestNeedsYou>0 ? "text-ink italic" : "text-accent"}`}>
                       {ingestNeedsYou>0 ? `· ${ingestNeedsYou}!` : `· ${ingestBusy}`}
                     </span>
                   )}
@@ -261,7 +269,7 @@ export default function Page(){
               {/* What the archive did not give us. A season shown short is a
                   season shown wrong unless it says by how much. */}
               {(partial || hydrateSkipped>0) && (
-                <div className="bg-surface border border-line rounded px-2 py-1 text-2xs text-ink3 shadow-pop max-w-[260px] text-right">
+                <div className="plate px-2 py-1.5 text-2xs text-ink3 tnum max-w-[260px] text-right">
                   {partial && <div>{t("est.showingOf", { n: loadedRuns, m: totalRuns })}</div>}
                   {hydrateSkipped>0 && <div>{t("est.loadFailedN", { n: hydrateSkipped })}</div>}
                 </div>
@@ -270,7 +278,7 @@ export default function Page(){
               {/* Ingests the service recorded as failed, reachable WITHOUT
                   opening the Ingest panel — a failure nobody can find is a
                   failure the archive is quietly missing a count for. */}
-              <div className="w-[300px] max-w-[80vw] text-left empty:hidden bg-surface border border-line rounded p-2 shadow-pop">
+              <div className="w-[300px] max-w-[80vw] text-left empty:hidden plate px-2.5 py-2">
                 <FailedIngests compact />
               </div>
             </div>
@@ -288,9 +296,14 @@ export default function Page(){
                  The extra 40 px land entirely on the frames (≈132 px each).
                  Capped to the viewport so a narrow screen gets a panel, not a
                  horizontal scrollbar. */
-              <div className="absolute top-[52px] right-3 z-30 w-[360px] max-w-[calc(100vw-24px)] max-h-[calc(100%-64px)] bg-surface border border-line rounded-lg shadow-pop overflow-hidden flex flex-col">
+              /* Solid, not a translucent plate: this is a working surface a
+                 person types into over whatever the map happens to be showing,
+                 and 7% of a satellite tile coming through the metadata form is
+                 dirt. Square, one border, no elevation stack — the reference's
+                 own floating card. */
+              <div className="absolute top-[52px] right-3 z-30 w-[360px] max-w-[calc(100vw-24px)] max-h-[calc(100%-64px)] bg-bg border border-line overflow-hidden flex flex-col">
                 <div className="h-9 shrink-0 px-3 pr-1.5 flex items-center justify-between border-b border-line">
-                  <span className="label">{t("page.ingestFootage")}</span>
+                  <span className="hd">{t("page.ingestFootage")}</span>
                   <IconButton name="close" onClick={()=> setShowUpload(false)} title={t("btn.close")} />
                 </div>
                 <div className="p-3 overflow-y-auto min-h-0">
@@ -312,13 +325,13 @@ export default function Page(){
                   {restoring ? (
                     <>
                       <Icon name="download" size={22} className="text-ink3 mx-auto" />
-                      <h2 className="text-lead text-ink mt-3">{t("est.restoring")}…</h2>
+                      <h2 className="text-title text-ink font-medium mt-3">{t("est.restoring")}…</h2>
                       <p className="text-sm text-ink2 mt-1.5 leading-relaxed">{t("est.restoringBody")}</p>
                     </>
                   ) : unreachable ? (
                     <>
                       <Icon name="alert" size={22} className="text-bad mx-auto" />
-                      <h2 className="text-lead text-ink mt-3">{t("est.unreachable")}</h2>
+                      <h2 className="text-title text-ink font-medium mt-3">{t("est.unreachable")}</h2>
                       <p className="text-sm text-ink2 mt-1.5 leading-relaxed">{t("est.unreachableBody")}</p>
                       <div className="flex items-center justify-center gap-1.5 mt-4">
                         <Button variant="primary" onClick={()=> { void hydrate(); }}>{t("btn.retry")}</Button>
@@ -333,18 +346,23 @@ export default function Page(){
                        the file types it can actually read. */
                     <>
                       <Icon name="upload" size={22} className="text-ink3 mx-auto" />
-                      <h2 className="text-lead text-ink mt-3">{t("page.emptyTitle")}</h2>
+                      <h2 className="text-title text-ink font-medium mt-3">{t("page.emptyTitle")}</h2>
                       <p className="text-sm text-ink2 mt-1.5 leading-relaxed">
                         {t("page.emptyBody")}
                       </p>
-                      <ol className="mt-4 space-y-2 text-left">
+                      {/* Three steps, three hairlines. They used to be three
+                          bordered grey cards each carrying a circled numeral —
+                          a ring drawn around a digit that a vertical list has
+                          already ordered. The rule between them does the
+                          grouping and the numeral just counts, quietly. */}
+                      <ol className="mt-4 text-left">
                         {([
                           { n: 1, icon: "upload" as const, title: t("first.uploadTitle"), body: t("first.uploadBody") },
                           { n: 2, icon: "check" as const, title: t("first.reviewTitle"), body: t("first.reviewBody") },
                           { n: 3, icon: "download" as const, title: t("first.reportTitle"), body: t("first.reportBody") },
                         ]).map(step=>(
-                          <li key={step.n} className="flex items-start gap-2.5 rounded border border-line-soft bg-surface px-2.5 py-2">
-                            <span className="w-5 h-5 shrink-0 grid place-items-center rounded-full border border-line text-2xs text-ink3 tnum mt-0.5">
+                          <li key={step.n} className="flex items-start gap-2.5 border-t border-hair first:border-t-0 py-2">
+                            <span className="w-3 shrink-0 text-2xs text-ink4 tnum mt-0.5">
                               {step.n}
                             </span>
                             <span className="min-w-0">
@@ -380,8 +398,8 @@ export default function Page(){
         {analyticsOpen && <Dashboard onClose={()=> setAnalyticsOpen(false)} />}
         {showInspector && (
           <div className="shrink-0 flex flex-col border-l border-line">
-            <div className="h-9 shrink-0 flex items-center justify-between pl-4 pr-1.5 border-b border-line bg-surface">
-              <span className="label">{t("sec.sortie")}</span>
+            <div className="h-9 shrink-0 flex items-center justify-between pl-4 pr-1.5 border-b border-line bg-bg">
+              <span className="hd">{t("sec.sortie")}</span>
               <IconButton name="close" onClick={closeInspector} title={t("btn.close")} />
             </div>
             <RightInspector compact />

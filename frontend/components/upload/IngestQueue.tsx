@@ -37,12 +37,16 @@ function humanBytes(n: number): string {
 }
 
 /** A thin honest bar. No indeterminate animation: a bar that moves without a
- *  measurement is decoration pretending to be information. */
+ *  measurement is decoration pretending to be information.
+ *
+ *  Two hairlines thick, on the hairline grey, filled in the signal colour —
+ *  it only ever runs while something genuinely is. At this weight it reads as
+ *  a scale mark under the filename rather than as a progress widget. */
 function Bar({ value }: { value: number | null }) {
   if (value === null) return null;
   const pct = Math.max(0, Math.min(100, Math.round(value * 100)));
   return (
-    <div className="h-[3px] rounded bg-surface2 overflow-hidden mt-1.5">
+    <div className="h-[2px] bg-hair overflow-hidden mt-1.5">
       <div className="h-full bg-accent transition-[width] duration-200" style={{ width: `${pct}%` }} />
     </div>
   );
@@ -60,8 +64,9 @@ function Details({ text, label }: { text: string; label: string }) {
       </button>
       {open && (
         /* The raw service text — a full ffprobe argv, a stack line. It belongs
-           behind a disclosure, never in a toast that scrolls past. */
-        <pre className="mt-1 text-2xs text-ink3 bg-surface2 border border-line rounded p-1.5 max-h-28 overflow-auto whitespace-pre-wrap break-all">
+           behind a disclosure, never in a toast that scrolls past. Held by one
+           rule down its left edge: a quoted machine voice, not a grey box. */
+        <pre className="mt-1 text-2xs text-ink3 border-l border-line pl-2 max-h-28 overflow-auto whitespace-pre-wrap break-all">
           {text}
         </pre>
       )}
@@ -164,19 +169,30 @@ function Row({ item, queuePos, queueTotal }: { item: IngestItem; queuePos: numbe
         ? (item.frameDone ?? 0) / item.frameTotal
         : null;
 
-  const tone =
+  /* Four registers, and only one of them is coloured for effect. Running is
+     genuinely live, which is one of the two things this design spends the
+     signal colour on. A failure is semantic red. A card waiting on a person is
+     plain ink set in italic — it stands out by being the only italic on the
+     screen, not by adding a third hue. Everything settled, DONE INCLUDED,
+     steps back to grey: a finished ingest is history, and painting it green
+     was the accent being spent on an event nobody has to act on. */
+  const toneColor =
     item.phase === "failed"
       ? "text-bad"
-      : item.phase === "done"
-        ? "text-good"
+      : needsYou
+        ? "text-ink"
         : isRunning(item.phase)
           ? "text-accent"
           : "text-ink3";
+  const tone = needsYou ? `${toneColor} italic` : toneColor;
 
   const owningPin = pinTarget === item.id;
 
   return (
-    <div ref={cardRef} className="rounded border border-line bg-surface2 px-2.5 py-2">
+    /* No card. A hairline above each row and the shared left edge below the
+       icon are the whole structure — which is also why the row can now afford
+       a filename at reading size. */
+    <div ref={cardRef} className="border-t border-hair first:border-t-0 py-2.5">
       <div className="flex items-start gap-2">
         <Icon
           name={
@@ -189,29 +205,40 @@ function Row({ item, queuePos, queueTotal }: { item: IngestItem; queuePos: numbe
                   : "upload"
           }
           size={13}
-          className={`${tone} mt-0.5 shrink-0`}
+          className={`${toneColor} mt-0.5 shrink-0`}
         />
         <div className="flex-1 min-w-0">
           <div className="flex items-baseline gap-2">
             {/* The REAL filename. The old grouping keyed on a lowercased stem
-                and printed that, so DJI_0001.MP4 was reported as "dji_0001". */}
-            <span className="text-xs text-ink truncate" title={item.fileName}>
+                and printed that, so DJI_0001.MP4 was reported as "dji_0001".
+                Inter with tabular figures, not a typewriter face: a filename is
+                read, not compared character by character. */}
+            <span className="flex-1 min-w-0 text-base font-medium text-ink truncate" title={item.fileName}>
               {item.fileName}
             </span>
-            <span className="text-2xs text-ink3 tnum shrink-0">{humanBytes(item.bytes)}</span>
+            {/* The state, where the instrument keeps states: at the far end of
+                the line it belongs to. Capped at just over half the row and
+                allowed to wrap, so "waiting for the counting engine" in three
+                languages cannot squeeze the filename down to an ellipsis. */}
+            <span className={`shrink-0 max-w-[56%] text-right text-xs ${tone}`}>{label}</span>
           </div>
-          <div className={`text-2xs ${tone} mt-0.5`}>{label}</div>
-          {item.quickCount && (
-            <div className="text-2xs text-ink3 mt-0.5">
-              {t("ingest.quickFrom", { name: item.quickCount.fromVideo, s: item.quickCount.atSeconds })}
-            </div>
-          )}
+          <Bar value={progress} />
+          {/* The honest numbers, in one quiet row. They are facts, so they sit
+              at the readable floor rather than on the decoration step. */}
+          <div className="flex flex-wrap items-baseline gap-x-3 text-2xs text-ink3 tnum mt-1.5">
+            <span>{humanBytes(item.bytes)}</span>
+            {item.quickCount && (
+              <span>
+                {t("ingest.quickFrom", { name: item.quickCount.fromVideo, s: item.quickCount.atSeconds })}
+              </span>
+            )}
+          </div>
           {item.note && item.phase !== "skipped" && (
-            <div className="text-2xs text-ink3 mt-0.5 leading-relaxed">{item.note}</div>
+            <div className="text-2xs text-ink3 mt-1 leading-relaxed">{item.note}</div>
           )}
-          {reason && <div className="text-2xs text-ink2 mt-0.5 leading-relaxed">{reason}</div>}
+          {reason && <div className="text-2xs text-ink2 mt-1 leading-relaxed">{reason}</div>}
           {item.result && (
-            <div className="text-2xs text-ink2 mt-0.5 tnum">
+            <div className="text-2xs text-ink2 mt-1 tnum">
               {item.result.best ?? "?"} {tp(item.result.best ?? 0, "unit.seals")}
               {item.result.low != null && item.result.high != null && item.result.low !== item.result.high
                 ? ` (${t("misc.range", { low: item.result.low, high: item.result.high })})`
@@ -219,7 +246,6 @@ function Row({ item, queuePos, queueTotal }: { item: IngestItem; queuePos: numbe
               {item.result.unplaced ? ` · ${t("insp.withoutCoords", { n: item.result.unplaced })}` : ""}
             </div>
           )}
-          <Bar value={progress} />
           {item.detail && <Details text={item.detail} label={t("ingest.details")} />}
 
           {/* ---------------------------------------------- the duplicate */}
@@ -344,14 +370,14 @@ function FailedJobRow({ job }: { job: FailedJob }) {
   const retryJob = useIngestStore((s) => s.retryJob);
   const dismissJob = useIngestStore((s) => s.dismissJob);
   return (
-    <div className="rounded border border-line bg-surface2 px-2.5 py-2">
+    <div className="border-t border-hair first:border-t-0 py-2">
       <div className="flex items-start gap-2">
         <Icon name="alert" size={13} className="text-bad mt-0.5 shrink-0" />
         <div className="flex-1 min-w-0">
-          <div className="text-xs text-ink truncate" title={job.filename ?? job.job_id}>
+          <div className="text-base font-medium text-ink truncate" title={job.filename ?? job.job_id}>
             {job.filename ?? job.job_id}
           </div>
-          <div className="text-2xs text-ink3 mt-0.5">
+          <div className="text-2xs text-ink3 tnum mt-0.5">
             {job.state === "retrying" ? t("ingest.retrying") : t("ingest.jobFailed")}
             {job.created_at ? ` · ${new Date(job.created_at.replace(" ", "T")).toLocaleString()}` : ""}
           </div>
@@ -388,8 +414,8 @@ export function FailedIngests({ compact = false }: { compact?: boolean }) {
   const supported = useIngestStore((s) => s.failedJobsSupported);
   if (!supported || jobs.length === 0) return null;
   return (
-    <div className={compact ? "space-y-1.5" : "space-y-1.5 pt-1"}>
-      <div className="label">{t("ingest.failedSection", { n: jobs.length })}</div>
+    <div className={compact ? "" : "pt-1"}>
+      <div className="hd">{t("ingest.failedSection", { n: jobs.length })}</div>
       {jobs.map((j) => (
         <FailedJobRow key={j.job_id} job={j} />
       ))}
@@ -417,16 +443,16 @@ export default function IngestQueue() {
   if (!items.length) return null;
 
   return (
-    <div className="space-y-1.5">
-      <div className="flex items-center justify-between gap-2">
-        <span className="label">{t("ingest.listTitle", { n: items.length })}</span>
+    <div className="pt-3">
+      <div className="flex items-baseline justify-between gap-2 pb-1">
+        <span className="hd">{t("ingest.listTitle", { n: items.length })}</span>
         {finished > 0 && (
-          <button onClick={clearFinished} className="text-2xs text-ink3 hover:text-ink">
+          <button onClick={clearFinished} className="text-xs text-ink3 hover:text-ink">
             {t("ingest.clearFinished")}
           </button>
         )}
       </div>
-      <div className="space-y-1.5 max-h-[46vh] overflow-y-auto pr-0.5">
+      <div className="max-h-[46vh] overflow-y-auto pr-0.5">
         {items.map((item) => (
           <Row
             key={item.id}
