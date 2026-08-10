@@ -1015,7 +1015,20 @@
     "env.map.noThickness": "Мұз қалыңдығы бұл сәтке жиналмаған",
     "env.map.iceEdge": "Мұз шеті",
     "env.map.basin": "Бүкіл бассейн бойынша",
-    "env.map.legend": "Шартты белгілер"
+    "env.map.legend": "Шартты белгілер",
+    "anom.look": "Мұнда назар аудару керек",
+    "anom.dropTitle": "Өткен ұшуға қарағанда азайған",
+    "anom.vsExpected": "күтілгеннен",
+    "anom.odds": "Кездейсоқ мұндай құлдырау {pct}% жағдайда болады — шамамен {n} ұшудың біреуінде",
+    "anom.pctOnly": "Кездейсоқ мұндай құлдырау {pct}% жағдайда болады",
+    "anom.areaSame": "Түсірілген аудан бірдей",
+    "anom.areaAdj": "Аудан ескерілген: өткен ұшудың {pct}%",
+    "anom.reviewAdj": "адам алып тастаған нүктелер шегерілді",
+    "anom.weather": "Ауа райы өзгерді: {what}",
+    "anom.weatherHolds": "— сондықтан бұл кетуден ажыратылмайды.",
+    "anom.basis": "Ықтималдық — санақ статистикасынан, {p} шегі. Ауа райының әсері әлі өлшенбеген.",
+    "anom.sinceLast": "Өткен ұшудан бері",
+    "anom.noDrop": "Азаю жоқ — тексеретін ештеңе жоқ. Ықтималдық тек құлдырауға есептеледі."
   },
   "ru": {
     "brand.sub": "Учёт каспийского тюленя",
@@ -2033,7 +2046,20 @@
     "env.map.noThickness": "Толщина льда не собрана на этот момент",
     "env.map.iceEdge": "Кромка льда",
     "env.map.basin": "По всему бассейну",
-    "env.map.legend": "Легенда"
+    "env.map.legend": "Легенда",
+    "anom.look": "Здесь стоит присмотреться",
+    "anom.dropTitle": "Меньше, чем в прошлый визит",
+    "anom.vsExpected": "к ожидаемому",
+    "anom.odds": "Случайно такое падение бывает в {pct}% случаев — примерно раз на {n} съёмок",
+    "anom.pctOnly": "Случайно такое падение бывает в {pct}% случаев",
+    "anom.areaSame": "Площадь съёмки та же",
+    "anom.areaAdj": "Учтена площадь: {pct}% от прошлой съёмки",
+    "anom.reviewAdj": "вычтены отклонённые человеком точки",
+    "anom.weather": "Погода изменилась: {what}",
+    "anom.weatherHolds": "— поэтому отличить это от ухода пока нельзя.",
+    "anom.basis": "Вероятность — из статистики счёта, порог {p}. Влияние погоды пока не измерено.",
+    "anom.sinceLast": "С прошлого визита",
+    "anom.noDrop": "Падения нет — проверять нечего. Вероятность считается только для падения."
   },
   "en": {
     "brand.sub": "Caspian seal survey",
@@ -3051,6 +3077,19 @@
     "env.map.noThickness": "Ice thickness was not collected for this moment",
     "env.map.iceEdge": "Ice edge",
     "env.map.basin": "Whole basin",
-    "env.map.legend": "Legend"
+    "env.map.legend": "Legend",
+    "anom.look": "Worth a look here",
+    "anom.dropTitle": "Fewer than last visit",
+    "anom.vsExpected": "vs expected",
+    "anom.odds": "A drop this big happens by chance in {pct}% of cases — about 1 survey in {n}",
+    "anom.pctOnly": "A drop this big happens by chance in {pct}% of cases",
+    "anom.areaSame": "Same ground surveyed",
+    "anom.areaAdj": "Area accounted for: {pct}% of last survey",
+    "anom.reviewAdj": "human rejections removed",
+    "anom.weather": "Weather changed: {what}",
+    "anom.weatherHolds": "— so this cannot yet be told apart from a departure.",
+    "anom.basis": "Probability from counting statistics, threshold {p}. The weather's effect is not measured yet.",
+    "anom.sinceLast": "Since the last visit",
+    "anom.noDrop": "No drop — nothing to test. The probability is computed for drops only."
   }
 }

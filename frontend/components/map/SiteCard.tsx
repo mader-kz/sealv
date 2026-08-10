@@ -63,6 +63,8 @@ import { createSite, fetchSites, renameSite } from "@/lib/api";
 import { formatDate } from "@/lib/analytics/brush";
 import { reviewStats } from "@/lib/analytics/review";
 import { SITE_RADIUS_M, siteSeries, type Site } from "@/lib/analytics/surveys";
+import { explainChange, oneInN, ALARM_P } from "@/lib/analytics/anomaly";
+import { envKeyOf } from "@/store/useFootageStore";
 import { basisText, useT } from "@/lib/i18n";
 import type { Footage } from "@/lib/types";
 import { useFootageStore } from "@/store/useFootageStore";
@@ -521,6 +523,18 @@ export default function SiteCard({
           )}
         </div>
 
+        {/* WHAT CHANGED SINCE LAST TIME, and whether it is worth a drive.
+
+            The number is a real tail probability, not a score somebody chose:
+            counting a colony twice never gives the same figure, the spread of
+            a count is known, and this asks how often a fall this big turns up
+            when nothing about the place has changed. Everything we CAN divide
+            out is divided out first — ground photographed, detections a person
+            rejected — and the one thing we cannot yet divide out, the weather,
+            is printed beside the verdict instead of being quietly absorbed
+            into it. */}
+        <AnomalyLine series={series} />
+
         {/* The place, as it was actually photographed. A card that talks about
             700 animals without ever showing one is a spreadsheet about a coast;
             the frame the standing count was measured on belongs at the top of
@@ -709,5 +723,117 @@ export default function SiteCard({
         </div>
       </div>
     </aside>
+  );
+}
+
+/* ------------------------------------------------------ what changed here */
+function AnomalyLine({ series }: { series: ReturnType<typeof siteSeries> }) {
+  const { t, lang } = useT();
+  const env = useFootageStore((st) => st.env);
+
+  /* The last two visits that produced a count. Two is the minimum this test
+     needs and the most a first season usually has. */
+  const pair = useMemo(() => {
+    const counted = series.filter((e) => e.best != null);
+    if (counted.length < 2) return null;
+    return { prev: counted[counted.length - 2], curr: counted[counted.length - 1] };
+  }, [series]);
+
+  const verdict = useMemo(() => {
+    if (!pair) return null;
+    const asVisit = (e: (typeof pair)["curr"]) => {
+      const f = e.footage as { id: string; areaM2?: number | null };
+      const key = envKeyOf(f as never);
+      const at = key ? env[key]?.data : null;
+      /* Flatten the samples the archive holds for that visit into one lookup:
+         one value per variable, first source that measured it. Two sources for
+         one quantity is a fact the conditions panel shows in full; here the
+         question is only "did the wind move", which either answers. */
+      const flat: Record<string, number> = {};
+      for (const s of at?.samples ?? []) {
+        for (const [k, v] of Object.entries(s.values ?? {})) {
+          if (typeof v === "number" && !(k in flat)) flat[k] = v;
+        }
+      }
+      return { count: e.best, areaM2: f.areaM2 ?? null, env: flat };
+    };
+    return explainChange(asVisit(pair.prev), asVisit(pair.curr));
+  }, [pair, env]);
+
+  if (!pair || !verdict) return null;
+
+  /* A rise, or no change at all, is not tested — but it IS reported. The card
+     should always be able to answer "what happened since last time"; going
+     silent on good news teaches the reader that silence means nothing to see,
+     which is exactly the wrong lesson for the one line that will some day go
+     red. Only the DROP carries a probability, because only the drop was
+     tested. */
+  if (verdict.p == null) {
+    if (verdict.skipped === "no-count" || verdict.skipped === "no-previous") return null;
+    const gain = Math.round(verdict.observed - verdict.expected);
+    return (
+      <div className="px-4 pb-4">
+        <div className="border-l-2 border-hair pl-3">
+          <div className="flex items-baseline gap-2">
+            <span className="text-sm text-ink2">{t("anom.sinceLast")}</span>
+            <span className="text-2xs text-ink3 tnum ml-auto">
+              {gain > 0 ? `+${gain}` : "0"}
+            </span>
+          </div>
+          <p className="text-2xs text-ink3 mt-1 leading-relaxed">{t("anom.noDrop")}</p>
+        </div>
+      </div>
+    );
+  }
+
+  const odds = oneInN(verdict.p);
+  const pct = verdict.p < 0.001 ? "<0,1" : (verdict.p * 100).toFixed(1).replace(".", ",");
+  const drop = Math.round(verdict.expected - verdict.observed);
+
+  return (
+    <div className="px-4 pb-4">
+      <div className={`border-l-2 pl-3 ${verdict.alarm ? "border-bad" : "border-hair"}`}>
+        <div className="flex items-baseline gap-2">
+          <span className={`text-sm ${verdict.alarm ? "text-bad" : "text-ink2"}`}>
+            {verdict.alarm ? t("anom.look") : t("anom.dropTitle")}
+          </span>
+          <span className="text-2xs text-ink3 tnum ml-auto">
+            −{drop} {t("anom.vsExpected")}
+          </span>
+        </div>
+
+        {/* The probability, twice: as a percentage for the report and as odds
+            for the person reading it at a desk. Same number. */}
+        <p className="text-2xs text-ink2 tnum mt-1">
+          {odds ? t("anom.odds", { pct, n: odds }) : t("anom.pctOnly", { pct })}
+        </p>
+
+        {/* What was taken out of the comparison before the test ran. */}
+        <p className="text-2xs text-ink3 mt-1 leading-relaxed">
+          {verdict.areaFactor != null && Math.abs(verdict.areaFactor - 1) > 0.02
+            ? t("anom.areaAdj", { pct: Math.round(verdict.areaFactor * 100) })
+            : t("anom.areaSame")}
+          {verdict.reviewAdjusted ? ` · ${t("anom.reviewAdj")}` : ""}
+        </p>
+
+        {/* The alternative explanation, when there is one. */}
+        {verdict.weatherShift.length > 0 && (
+          <p className="text-2xs text-ink3 mt-1 leading-relaxed">
+            {t("anom.weather", {
+              what: verdict.weatherShift
+                .map((w) => `${t(("env.var." + w.key) as never)} ${w.from} → ${w.to}`)
+                .join(", "),
+            })}
+            {!verdict.alarm && verdict.weatherShift.some((w) => w.ratio >= 1.5)
+              ? ` ${t("anom.weatherHolds")}`
+              : ""}
+          </p>
+        )}
+
+        <p className="text-2xs text-ink4 mt-1 leading-relaxed">
+          {t("anom.basis", { p: String(ALARM_P) })}
+        </p>
+      </div>
+    </div>
   );
 }
