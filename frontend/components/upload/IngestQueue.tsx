@@ -126,6 +126,12 @@ function Row({ item, queuePos, queueTotal }: { item: IngestItem; queuePos: numbe
     claimPin(item.id);
     setPinMode(true);
     setPinPoints([]);
+    /* And go where the pinning is. The map is the only screen a point can be
+       placed on, so asking for a location and staying on the queue costs the
+       operator a mode switch they cannot have wanted — the crosshair is armed,
+       the map is elsewhere, and the card they are looking at can do nothing
+       until they leave it. PinBar carries the confirm across. */
+    setMode("map");
   }, [item.phase, item.id, pinTarget, claimPin, setPinMode, setPinPoints]);
 
   const reason = item.reason ? t(item.reason.key, item.reason.vars) : null;

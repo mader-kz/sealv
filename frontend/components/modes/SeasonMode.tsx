@@ -40,6 +40,7 @@
 import { useEffect, useMemo, useState } from "react";
 import CaspianMap, { type SiteChip } from "@/components/map/CaspianMap";
 import SiteCard from "@/components/map/SiteCard";
+import PinBar from "@/components/map/PinBar";
 import Icon from "@/components/ui/Icon";
 import { formatArea, totalAreaM2 } from "@/lib/analytics/area";
 
@@ -474,6 +475,11 @@ export default function SeasonMode() {
             </div>
           </div>
         )}
+
+        {/* The pin flow's confirm/cancel, on the screen where the pinning
+            happens. Without it, walking here from Загрузка to place a point
+            left an armed crosshair and no way to finish or leave. */}
+        <PinBar />
 
         {openSite && (
           <SiteCard
