@@ -81,7 +81,6 @@ function metresBetween(
 export default function SeasonMode() {
   const { t, tp, lang } = useT();
   const [, setMode] = useMode();
-  const pinMode = useFootageStore((s) => s.pinMode);
   const footages = useFootageStore((s) => s.footages);
   const timeRange = useFootageStore((s) => s.timeRange);
   const hydrating = useFootageStore((s) => s.hydrating);
