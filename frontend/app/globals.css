@@ -4,49 +4,28 @@
 @tailwind utilities;
 
 /* ---------------------------------------------------------------
-   Type, self-hosted. This ships as a static export served by the
-   same container as the API, and it has to come up on a field
-   hotspot that is associated but has no route out — a render-
-   blocking <link> to fonts.googleapis.com meant first paint waited
-   for that connection to time out before anything appeared.
+   Type.
 
-   Inter is Google's VARIABLE file: one download per subset covers
-   400/500/600 (hence `font-weight: 100 900` — the three static
-   instances were byte-identical files).
+   Inter is wired in app/layout.tsx through next/font/google, which
+   downloads latin + cyrillic + cyrillic-ext at BUILD time and emits
+   them into /_next/static/media. Nothing is fetched from Google at
+   runtime, so the original constraint still holds: this ships as a
+   static export served by the same container as the API and has to
+   come up on a field hotspot that is associated but has no route
+   out. next/font also inlines a metric-matched local fallback, so
+   the swap no longer shifts the layout.
 
-   The Cyrillic subsets are NOT optional here. The UI is Kazakh by
-   default and Russian across the sector; Kazakh's ә ғ қ ң ө ү һ
-   live in cyrillic-ext and ұ/і in cyrillic. Ship latin only and
-   every non-Latin string silently falls to a different typeface.
+   The Cyrillic subsets are NOT optional. The UI is Kazakh by
+   default and Russian across the sector: ә ғ қ ң ө ұ ү і live in
+   cyrillic / cyrillic-ext, and shipping latin only drops every
+   non-Latin string onto some other typeface.
 
-   font-display: swap — text is readable from the first frame and
-   reflows into Inter when the file lands, which on a second visit
-   is out of cache anyway.
+   IBM Plex Mono stays self-hosted but is now OPT-IN, used through
+   `.hash` (or `font-hash`) and nowhere else. In this design numbers,
+   filenames, coordinates and timestamps are Inter with tabular
+   figures; a monospace face is reserved for run/survey id hashes,
+   where character-by-character comparison is the actual job.
    --------------------------------------------------------------- */
-@font-face {
-  font-family: 'Inter';
-  font-style: normal;
-  font-weight: 100 900;
-  font-display: swap;
-  src: url('/fonts/inter-var-latin.woff2') format('woff2');
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
-}
-@font-face {
-  font-family: 'Inter';
-  font-style: normal;
-  font-weight: 100 900;
-  font-display: swap;
-  src: url('/fonts/inter-var-cyrillic.woff2') format('woff2');
-  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
-}
-@font-face {
-  font-family: 'Inter';
-  font-style: normal;
-  font-weight: 100 900;
-  font-display: swap;
-  src: url('/fonts/inter-var-cyrillic-ext.woff2') format('woff2');
-  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
-}
 @font-face {
   font-family: 'IBM Plex Mono';
   font-style: normal;
@@ -97,51 +76,84 @@
 }
 
 /* ---------------------------------------------------------------
-   SEALv design tokens — one neutral ramp, one accent. Nothing else.
-   Chrome stays quiet so the data on the map is the only loud thing.
+   SEALv design tokens — direction «Прибор» (Instrument).
 
-   Dark, not black: the ramp sits on a cool blue-grey so panels, bg
-   and borders separate into visible LEVELS and EDGES instead of one
-   pool of near-black. Measured WCAG contrast (relative luminance):
+   An instrument panel, not an app chrome: near-monochrome, dense
+   leading, large tabular numbers as the only heroes. Grouping comes
+   from alignment and hairlines, never from a filled rounded box.
 
-     ink    #f2f4f7 on surface  15.2:1   (on bg 16.5:1)   body ≥7 ✓
-     ink-2  #aab3bf on surface   7.9:1   (on surface-2 7.1:1)  ≥7 ✓
-     ink-3  #7e8898 on bg        5.1:1   (on surface 4.7:1) ≥4.5 ✓
-     accent #e0a13c on surface   7.4:1;  accent-ink on accent 8.3:1
-     good   #74b294 on bg        7.4:1
-     bad    #d47d72 on bg        6.0:1
-     line     vs surface  3.3x luminance — edges read at a glance
-     line-soft vs surface 2.0x luminance — hairlines, still visible
-     surface vs bg 1.6x, surface-2 vs surface 1.6x — three levels
+   ONE signal colour, --accent, a cold green. It is allowed on the
+   standing estimate figures and on genuinely live/primary states.
+   Nothing else. --bad is the verdict "no" in review (and hard
+   failures); it is semantic, not decoration. Zeros stay muted.
+
+   The neutral ramp, measured against --bg (relative luminance,
+   WCAG contrast):
+
+     ink    #e9edf2  17.1:1   body, figures
+     ink-2  #9ba4af   7.7:1   secondary text, section heads
+     ink-3  #737c88   4.6:1   labels, captions, quiet facts — FLOOR
+     ink-4  #5a636d   3.2:1   DECORATION ONLY: rules, tick marks,
+                              disabled affordances, redundant echoes.
+                              Never the sole carrier of a fact.
+     accent #3fd8a3  10.7:1
+     bad    #e0685e   5.9:1
+     line   #242a32  edges you are meant to see
+     hair   #171b21  hairlines that only group
+
+   ink-3 and ink-4 sit one step lighter than the prototype's
+   #646d77 / #424a52, which measured 3.7:1 and 2.2:1 — a prototype
+   can render label text below the readable floor, a field tool
+   used on a laptop in daylight cannot. Everything else is the
+   prototype's value verbatim.
+
+   --surface is deliberately IDENTICAL to --bg. The uniform grey
+   rounded panel is gone; a panel that must float over the map is a
+   flat dark plate held by a border, and one that sits in the page
+   is held by a hairline and its own alignment. --surface-2 is the
+   single quiet fill left, used for hover and for inputs that need
+   a body.
    --------------------------------------------------------------- */
 :root {
-  --bg: #13161b;
-  --surface: #1a1e24;
-  --surface-2: #22272f;
-  --line: #333a44;
-  --line-soft: #272d35;
+  --bg: #0b0d10;
+  --surface: #0b0d10;
+  --surface-2: #161a20;
+  --hover: var(--surface-2);
 
-  --ink: #f2f4f7;
-  --ink-2: #aab3bf;
-  --ink-3: #7e8898;
+  --line: #242a32;
+  --hair: #171b21;
+  --line-soft: var(--hair);
 
-  --accent: #e0a13c;
-  --accent-soft: #e0a13c24;
-  --accent-ink: #17120a;
+  --ink: #e9edf2;
+  --ink-2: #9ba4af;
+  --ink-3: #737c88;
+  --ink-4: #5a636d;
 
-  --good: #74b294;
-  --bad: #d47d72;
+  --accent: #3fd8a3;
+  --accent-soft: #3fd8a333;
+  --accent-ink: #05100c;
+
+  --good: var(--accent);
+  --bad: #e0685e;
+
+  /* Type stacks. --font-inter is published by next/font on <html>.
+     --num is not a separate face: figures are Inter with tabular,
+     slashed-zero settings (see .tnum), which is what an instrument
+     scale needs and what a monospace face was standing in for. */
+  --sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --num: var(--sans);
+  --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 
   /* shadcn/ui semantic tokens, aliased onto the tokens above so library
      components inherit this design system instead of shipping their own.
-     `accent` is deliberately NOT bridged: here it is the amber brand colour,
-     while shadcn uses the same word for a quiet hover surface - the generated
+     `accent` is deliberately NOT bridged: here it is the one signal colour,
+     while shadcn uses the same word for a quiet hover surface — the generated
      components were pointed at `muted` instead. */
   --background: var(--bg);
   --foreground: var(--ink);
   --card: var(--surface);
   --card-foreground: var(--ink);
-  --popover: var(--surface-2);
+  --popover: var(--surface);
   --popover-foreground: var(--ink);
   --primary: var(--accent);
   --primary-foreground: var(--accent-ink);
@@ -153,8 +165,10 @@
   --destructive-foreground: #ffffff;
   --border: var(--line);
   --input: var(--line);
-  --ring: var(--accent);
-  --radius: 0.5rem;
+  --ring: var(--ink-2);
+  /* Square. The instrument has no rounded corners; `rounded-full` is
+     kept in Tailwind for the handful of things that are actually dots. */
+  --radius: 0;
 }
 
 * {
@@ -170,25 +184,81 @@ body {
 body {
   background: var(--bg);
   color: var(--ink);
-  font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
-  font-size: 13px;
-  line-height: 1.45;
+  font-family: var(--sans);
+  font-size: 12.5px;
+  line-height: 1.32;
+  letter-spacing: -0.006em;
   overflow: hidden;
-  letter-spacing: -0.005em;
+  font-feature-settings: 'cv05' 1;
 }
 
-/* Tabular numerals everywhere numbers matter — no jitter on live counters */
+h1,
+h2,
+h3 {
+  letter-spacing: -0.022em;
+}
+
+/* Numbers are the instrument's scale: tabular so columns and live
+   counters never jitter, slashed zero so 0 and O are not a guess,
+   optically tightened because figures set wider than lowercase. */
 .tnum {
+  font-family: var(--num);
   font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1, 'zero' 1;
+  letter-spacing: -0.012em;
 }
 
-/* The one label style. Used once per section, never stacked. */
+/* The one label style — and it is plain case. No small-caps, no
+   letter-spacing, no colour of its own beyond the quiet step.
+   Hierarchy is size, weight, colour and proximity; a self-evident
+   number should carry no label at all. */
 .label {
-  font-size: 10px;
-  line-height: 1;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
+  font-size: 11px;
+  line-height: 1.45;
+  letter-spacing: 0;
+  text-transform: none;
   color: var(--ink-3);
+}
+
+/* Section head: weight, not size, and never a caps rule. */
+.hd {
+  display: block;
+  font-size: 11.5px;
+  line-height: 1.45;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink-2);
+}
+
+/* A quiet inline marker, which is what the pill badges become. It is
+   a word sitting next to the thing it qualifies, not a chip. */
+.mark {
+  font-size: 11px;
+  line-height: 1.45;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink-3);
+  border: 0;
+  background: none;
+  padding: 0;
+  border-radius: 0;
+}
+
+/* Opt-in monospace. Run and survey id hashes only — the one place
+   where reading character by character is the point. */
+.hash {
+  font-family: var(--mono);
+  font-size: 0.92em;
+  letter-spacing: 0;
+}
+
+/* A panel that floats over the map: flat dark plate, one border, no
+   radius, no shadow stack. Panels inside the page use a hairline. */
+.plate {
+  background: rgb(11 13 16 / 0.93);
+  border: 1px solid var(--line);
+  border-radius: 0;
 }
 
 input,
@@ -197,14 +267,16 @@ select,
 textarea {
   font: inherit;
   color: inherit;
+  font-family: var(--sans);
 }
 
 button:focus-visible,
 input:focus-visible,
 select:focus-visible,
+textarea:focus-visible,
 a:focus-visible {
-  outline: 1px solid var(--accent);
-  outline-offset: 1px;
+  outline: 1px solid var(--ink-2);
+  outline-offset: 2px;
 }
 
 ::selection {
@@ -212,21 +284,28 @@ a:focus-visible {
   color: var(--ink);
 }
 
+/* Sonner draws its own capsule radius from a library variable the Tailwind
+   config cannot reach. Square it, so a toast is the same object as the rest
+   of the panel. */
+[data-sonner-toast] {
+  border-radius: 0;
+}
+
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 9px;
+  height: 9px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #39414d;
-  border-radius: 4px;
-  border: 2px solid transparent;
+  background: #272d35;
+  border-radius: 0;
+  border: 3px solid transparent;
   background-clip: padding-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #4a5462;
+  background: #39414b;
   background-clip: padding-box;
 }
 
@@ -235,19 +314,19 @@ a:focus-visible {
    trackpad user had no discoverable zoom affordance, and the Carto /
    OpenStreetMap / Esri credits declared on the tile sources appeared nowhere
    on screen — a licence problem, not only a UX one. They render now, restyled
-   onto the app tokens so they read as part of the chart, not as a library.
-   z-index lifts them over the track/chip overlays (z-5 / z-6) so a chip can
-   never swallow a click meant for the zoom buttons. */
+   onto the app tokens so they read as part of the instrument, not as a
+   library. z-index lifts them over the track/chip overlays (z-5 / z-6) so a
+   chip can never swallow a click meant for the zoom buttons. */
 .maplibregl-ctrl-bottom-right,
 .maplibregl-ctrl-bottom-left {
   z-index: 7;
 }
 .maplibregl-ctrl-group,
 .maplibregl-ctrl-group:not(:empty) {
-  background: var(--surface);
+  background: rgb(11 13 16 / 0.9);
   border: 1px solid var(--line);
-  border-radius: 6px;
-  box-shadow: 0 2px 6px rgb(0 0 0 / 0.4);
+  border-radius: 0;
+  box-shadow: none;
   overflow: hidden;
 }
 .maplibregl-ctrl-group button {
@@ -255,19 +334,19 @@ a:focus-visible {
   height: 26px;
 }
 .maplibregl-ctrl-group button + button {
-  border-top: 1px solid var(--line-soft);
+  border-top: 1px solid var(--hair);
 }
 .maplibregl-ctrl-group button:hover {
-  background: var(--surface-2);
+  background: var(--hover);
 }
 /* MapLibre bakes its glyphs in as dark SVG data-URIs. Inverting them is one
    line; shipping recoloured copies of someone else's icons is not. */
 .maplibregl-ctrl-group button .maplibregl-ctrl-icon {
   filter: invert(1);
-  opacity: 0.7;
+  opacity: 0.5;
 }
 .maplibregl-ctrl-group button:hover .maplibregl-ctrl-icon {
-  opacity: 1;
+  opacity: 0.9;
 }
 /* Replace the library's blue glow with this app's one focus ring. */
 .maplibregl-ctrl-group button:focus,
@@ -276,19 +355,20 @@ a:focus-visible {
 }
 .maplibregl-ctrl-group button:focus-visible,
 .maplibregl-ctrl-attrib-button:focus-visible {
-  outline: 1px solid var(--accent);
+  outline: 1px solid var(--ink-2);
   outline-offset: -1px;
 }
 .maplibregl-ctrl.maplibregl-ctrl-attrib {
-  background: rgb(26 30 36 / 0.82); /* --surface, translucent over tiles */
-  border: 1px solid var(--line-soft);
-  border-radius: 12px;
-  color: var(--ink-3);
+  background: rgb(11 13 16 / 0.82);
+  border: 0;
+  border-radius: 0;
+  color: var(--ink-4);
+  font-family: var(--sans);
   font-size: 10px;
   line-height: 16px;
 }
 .maplibregl-ctrl-attrib a {
-  color: var(--ink-2);
+  color: var(--ink-3);
 }
 .maplibregl-ctrl-attrib a:hover {
   color: var(--ink);
@@ -296,73 +376,82 @@ a:focus-visible {
 .maplibregl-ctrl-attrib-button {
   background-color: transparent;
   filter: invert(1);
-  opacity: 0.55;
+  opacity: 0.45;
 }
 .maplibregl-ctrl-attrib-button:hover {
   opacity: 0.9;
 }
 .maplibregl-popup-content {
-  background: var(--surface) !important;
+  background: rgb(11 13 16 / 0.95) !important;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 0;
   padding: 8px 10px;
   color: var(--ink);
-  font-size: 12px;
-  box-shadow: 0 8px 24px rgb(0 0 0 / 0.5);
+  font-size: 11.5px;
+  box-shadow: none;
 }
 .maplibregl-popup-tip {
-  border-top-color: var(--surface) !important;
+  border-top-color: var(--line) !important;
 }
 
 /* Colony chip: one per sortie — the count, and under it the honest low–high
    band. A DOM element, deliberately not a GL symbol layer: DOM renders under
    every GL backend (headless/software included) and never loses its glyphs.
-   The translate(-50%,-50%) centring lives IN the transform so the hover
-   scale can compose with it instead of knocking the chip off its anchor. */
+
+   Instrument form: a flat dark plate, square, anchored by a single hairline
+   down its left edge — no fill, no pill, no shadow stack. The count is the
+   one green figure on the map; the band under it steps far down.
+
+   The geometry is untouched on purpose. The translate(-50%,-50%) centring
+   lives IN the transform so the hover scale composes with it instead of
+   knocking the chip off its anchor, and CaspianMap positions chips against
+   exactly that centring.
+
+   Colour is set on the CHIP, not on .chip-best, so a caller that turns one
+   chip down (the counted zero, which sets `color` inline) mutes the figure
+   with it instead of fighting a more specific rule. */
 .colony-chip {
   position: absolute;
   transform: translate(-50%, -50%);
   display: flex;
   flex-direction: column;
-  align-items: center;
-  padding: 5px 11px 6px;
-  border-radius: 10px;
-  background: var(--accent);
-  color: var(--accent-ink);
-  /* On the lifted bg shadows finally have something to fall on — a soft
-     two-layer elevation (tight contact + wide ambient) plus the hairline. */
-  box-shadow:
-    0 0 0 1px rgb(0 0 0 / 0.35),
-    0 2px 5px rgb(0 0 0 / 0.35),
-    0 10px 24px rgb(0 0 0 / 0.4);
+  align-items: flex-start;
+  text-align: left;
+  min-width: 104px;
+  padding: 4px 10px 5px;
+  border: 0;
+  border-left: 1px solid var(--ink-4);
+  border-radius: 0;
+  background: rgb(11 13 16 / 0.93);
+  color: var(--accent);
+  box-shadow: none;
   cursor: pointer;
   pointer-events: auto;
   line-height: 1;
-  transition: transform 0.12s ease, box-shadow 0.12s ease;
+  transition: transform 0.12s linear, background 0.12s linear, border-color 0.12s linear;
 }
 .colony-chip:hover {
-  transform: translate(-50%, -50%) scale(1.06);
-  box-shadow:
-    0 0 0 1px rgb(0 0 0 / 0.35),
-    0 4px 8px rgb(0 0 0 / 0.4),
-    0 14px 30px rgb(0 0 0 / 0.45);
+  transform: translate(-50%, -50%) scale(1.04);
+  background: rgb(22 26 32 / 0.96);
+  border-left-color: var(--ink-2);
 }
 .colony-chip.selected {
-  box-shadow:
-    0 0 0 2px #fff,
-    0 3px 8px rgb(0 0 0 / 0.4),
-    0 12px 28px rgb(0 0 0 / 0.45);
+  border-left-color: var(--accent);
+  background: rgb(22 26 32 / 0.96);
 }
 .colony-chip .chip-best {
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
+  font-size: 21px;
+  line-height: 1;
+  font-weight: 500;
+  letter-spacing: -0.025em;
+  color: inherit;
 }
 .colony-chip .chip-range {
-  font-size: 9px;
-  font-weight: 500;
-  margin-top: 2px;
-  opacity: 0.75;
+  font-size: 10px;
+  line-height: 1.2;
+  font-weight: 400;
+  margin-top: 3px;
+  color: var(--ink-3);
 }
 /* Pin mode: the anchor is the loudest thing on the chart — chips step back
    and must not swallow the click that places it. */
@@ -373,25 +462,30 @@ a:focus-visible {
 
 /* Pin-mode anchor: a DOM marker, deliberately not a WebGL layer. DOM survives
    every GL quirk (software renderers included), can pulse via CSS, and is
-   always exactly where MapLibre projects it. */
+   always exactly where MapLibre projects it. Placing a pin is a live state,
+   which is one of the two things allowed to use the signal colour — but it
+   is a small square sight, not a lamp. */
 .pin-anchor-marker {
-  width: 18px; height: 18px; border-radius: 50%;
+  width: 11px;
+  height: 11px;
+  border-radius: 0;
   background: var(--accent);
-  border: 3px solid #fff;
-  /* The dark ring keeps the white border contrasty on the lifted map;
-     the drop shadow seats the anchor on it. */
+  border: 0;
   box-shadow:
-    0 0 0 2px rgba(0,0,0,.55),
-    0 3px 8px rgba(0,0,0,.45);
+    0 0 0 1px var(--bg),
+    0 0 0 2px rgb(0 0 0 / 0.5);
   position: relative;
 }
 .pin-anchor-marker::before {
-  content: ""; position: absolute; inset: -14px; border-radius: 50%;
-  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  content: "";
+  position: absolute;
+  inset: -9px;
+  border: 1px solid var(--accent);
+  border-radius: 0;
   animation: pin-pulse 1.6s ease-out infinite;
 }
 @keyframes pin-pulse {
-  0%   { transform: scale(.6); opacity: .9; }
+  0%   { transform: scale(.6); opacity: .8; }
   70%  { transform: scale(1.15); opacity: 0; }
   100% { transform: scale(1.15); opacity: 0; }
 }
