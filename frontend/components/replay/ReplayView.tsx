@@ -430,11 +430,15 @@ function ReplayStage({ f }: { f: Footage }) {
         map.fitBounds(b, { padding: 70, maxZoom: 15.5, duration: 0 });
         mapReadyRef.current = true;
         mapKRef.current = -1;
-        /* The dialog is still animating open when `load` fires; measure the
-           pane again once it has settled. */
+        /* The dialog is still animating open when `load` fires, so the first
+           fit was computed against a half-sized pane and can leave the colony
+           off-screen entirely. Resizing alone does not re-aim the camera —
+           measure again once the dialog has settled AND refit. */
         setTimeout(() => {
-          if (!disposed) map.resize();
-        }, 250);
+          if (disposed) return;
+          map.resize();
+          map.fitBounds(b, { padding: 70, maxZoom: 15.5, duration: 0 });
+        }, 300);
         sync();
       });
     })();
