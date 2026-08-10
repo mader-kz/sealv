@@ -367,14 +367,35 @@ a:focus-visible {
   font-size: 10px;
   line-height: 16px;
 }
+/* The attribution's COMPACT form is a 12px capsule with a round info button,
+   and it wins the corners on specificity alone: MapLibre states them through
+   `.maplibregl-ctrl-attrib.maplibregl-compact` and, worse, through
+   `.maplibregl-ctrl-bottom-left > .maplibregl-ctrl-attrib.maplibregl-compact-show`
+   — three classes and a combinator against the two above. So the block above
+   won the background, the ink and the face, and the map still carried the one
+   pill left in the whole instrument, floating over the flat plates. These
+   selectors are deliberately over-specific for that reason; they exist to
+   out-rank a vendor stylesheet this app does not control, not to say anything
+   the rule above does not already say. */
+.maplibregl-ctrl-bottom-left > .maplibregl-ctrl-attrib.maplibregl-compact,
+.maplibregl-ctrl-bottom-right > .maplibregl-ctrl-attrib.maplibregl-compact,
+.maplibregl-ctrl-bottom-left > .maplibregl-ctrl-attrib.maplibregl-compact-show,
+.maplibregl-ctrl-bottom-right > .maplibregl-ctrl-attrib.maplibregl-compact-show,
+.maplibregl-ctrl-top-left > .maplibregl-ctrl-attrib.maplibregl-compact-show,
+.maplibregl-ctrl-top-right > .maplibregl-ctrl-attrib.maplibregl-compact-show {
+  border-radius: 0;
+}
 .maplibregl-ctrl-attrib a {
   color: var(--ink-3);
 }
 .maplibregl-ctrl-attrib a:hover {
   color: var(--ink);
 }
+.maplibregl-ctrl-attrib.maplibregl-compact .maplibregl-ctrl-attrib-button,
+.maplibregl-ctrl-attrib.maplibregl-compact-show .maplibregl-ctrl-attrib-button,
 .maplibregl-ctrl-attrib-button {
   background-color: transparent;
+  border-radius: 0;
   filter: invert(1);
   opacity: 0.45;
 }
