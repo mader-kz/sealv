@@ -30,11 +30,11 @@ import sqlite3
 import uuid
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import fields as dc_fields
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, BinaryIO, Iterator, Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -44,7 +44,7 @@ from PIL import Image
 
 from la_studio import frames as frames_mod
 
-from . import db, geo, preflight
+from . import db, env, geo, preflight
 from .contract import ConsensusParams, JobParams, Sampling, auto_tile_px
 # Pollution — encapsulated, additive only (service/pollution/*). No existing routes touched.
 # Import is guarded so a broken poller never takes the whole API down.
@@ -2812,6 +2812,355 @@ async def stats(
                 "latest_runs_offset": runs_offset,
                 "latest_per_survey": bool(latest_per_survey),
             }
+
+    return await asyncio.to_thread(load)
+
+
+# ----------------------------------------------------------------- environment
+#
+# Three read endpoints over `env_sample`, all additive - nothing above changes
+# shape. They share one rule, which is the whole reason this data is stored the
+# way it is: a value never travels without its SOURCE, its MEASURED_AT and how
+# far both are from what the caller asked for. "26.8 °C" is not something this
+# API is willing to say; "26.8 °C, MUR 1 km, slice of 2026-08-08, 46 h before
+# the moment you asked about" is.
+#
+# They read the archive rather than the network. Filling it is the job of
+# `service/env_worker.py` (every 3 h) and `tools/env_backfill.py` (past
+# sorties); a handler that went to ERDDAP would hold a request open for the
+# length of eight third-party round trips and would hammer a free public
+# service once per page view. `?live=1` on /v1/env/at is the deliberate
+# exception, for the one case - a survey just entered at a new coordinate -
+# where waiting is better than an empty card.
+
+#: How far from the asked-for point a stored cell may be and still describe it.
+#: 60 km is a little over half a degree: wide enough to catch the basin grid's
+#: 0.5° sampling, narrow enough that a Tyuleniy card can never be answered with
+#: a cell from the other side of the sea.
+ENV_RADIUS_KM = 60.0
+
+#: How stale a value may be before a source is left out of a point answer
+#: entirely. Three days clears the ~2-day satellite lag with room to spare;
+#: past it, the source has nothing to say about that moment and saying so is
+#: more useful than the nearest thing it happens to hold.
+ENV_MAX_GAP_H = 72.0
+
+#: The grid is drawn from daily products, so a slice up to ten days from the
+#: requested moment is still the honest answer for "the ice on that date" out
+#: of season. Every layer reports its own gap, so a stale one is visible.
+ENV_GRID_MAX_GAP_H = 240.0
+
+#: The same bound for a basin-scale figure, on the clock that product actually
+#: runs at. Altimetric sea level is one number per TEN DAYS, six days behind,
+#: so judging it by the satellite bound above would hide it from most surveys -
+#: not because the level is unknown, but because the wrong ruler was used.
+ENV_MAX_GAP_BASIN_H = 15 * 24.0
+
+ENV_MAX_CELLS = 20000
+ENV_MAX_SERIES = 20000
+
+
+def _env_time(value: Optional[str], field: str = "time") -> str:
+    """The moment to describe, defaulting to now.
+
+    Unlike `_iso_or_400` this ACCEPTS a future timestamp: the atmospheric feeds
+    here are forecasts, and asking what the wind will be at a planned sortie
+    time is a real question. What it will not accept is a string that is not a
+    time, because that would silently become "now" and answer a question
+    nobody asked.
+    """
+    text = _clean(value, field)
+    if text is None:
+        return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(
+            400, f"{field} must be an ISO8601 date or datetime, got {text!r}"
+        ) from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _env_point(lat: Optional[float], lng: Optional[float]) -> tuple[float, float]:
+    if lat is None or lng is None:
+        raise HTTPException(400, "lat and lng are both required")
+    patch = {"lat": _number(lat, "lat"), "lng": _number(lng, "lng")}
+    _latlng(patch)
+    return patch["lat"], patch["lng"]
+
+
+def _env_list(raw: Optional[str], field: str) -> Optional[list[str]]:
+    if raw is None:
+        return None
+    items = [part.strip() for part in str(raw).split(",") if part.strip()]
+    if not items:
+        raise HTTPException(400, f"{field} was given but empty")
+    return items
+
+
+def _env_catalogue() -> list[dict]:
+    """Every source this service can collect, whether or not it has yet.
+
+    Served with each answer so a client can render "no value" for a source it
+    has never seen a row from - which is the difference between a layer that is
+    missing and a layer that does not exist. Without it, a feed that has been
+    broken since the first cycle is simply invisible.
+    """
+    return [
+        {
+            "source": name,
+            "dataset": meta["dataset"],
+            "vars": list(meta["vars"]),
+            "resolution_m": meta["resolution_m"],
+            "resolution": meta["resolution"],
+            "scope": meta["scope"],
+            "latency_note": meta["latency_note"],
+        }
+        for name, meta in sorted(env.SOURCES.items())
+    ]
+
+
+@app.get("/v1/env/at")
+async def env_at(
+    lat: Optional[float] = None,
+    lng: Optional[float] = None,
+    time: Optional[str] = None,
+    radius_km: float = ENV_RADIUS_KM,
+    max_gap_h: float = ENV_MAX_GAP_H,
+    max_gap_basin_h: float = ENV_MAX_GAP_BASIN_H,
+    live: bool = False,
+):
+    """Conditions at one point and moment, every source separately.
+
+    This is what a survey card and the PDF act read. There is no "the
+    temperature" in the answer and there will not be one: MUR at 1 km two days
+    old and CoralTemp at 5 km from the same day disagree, and choosing between
+    them is a scientific judgement that does not belong in a display layer.
+    The client shows both with their sources, or shows the one it can explain.
+
+    `missing` names every source that has no value here, which the UI renders
+    as an explicit gap. A missing value shown as missing is the product; a
+    missing value hidden, or defaulted to zero, is the failure.
+
+    `live=1` fetches from the sources instead of reading the archive - slow
+    (eight third-party round trips, some of them seconds), rate-spaced and
+    cached, and it also stores what it gets. It is for a coordinate the
+    collector has never visited, not for page loads.
+    """
+    lat, lng = _env_point(lat, lng)
+    when = _env_time(time)
+    radius = max(1.0, min(float(radius_km), 500.0))
+    gap = max(0.0, float(max_gap_h))
+    basin_gap = max(0.0, float(max_gap_basin_h))
+
+    def load() -> dict:
+        stored_problems: list[dict] = []
+        with _conn() as conn:
+            if live:
+                samples, problems = env.collect_point(lat, lng, when)
+                # Stored, then read back rather than answered with directly: the
+                # archive is what every other caller sees, and an answer that
+                # differed from it would hide a storage bug for exactly one page.
+                receipt = db.insert_env_samples(conn, samples)
+                stored_problems = [
+                    {"source": p["source"], "reason": p["error"]} for p in problems
+                ]
+                for reason in receipt["skipped"]:
+                    stored_problems.append({"source": "_store", "reason": reason})
+            found = db.env_at(
+                conn, lat, lng, when,
+                radius_km=radius, max_gap_h=gap or None,
+                max_gap_basin_h=basin_gap or None,
+            )
+        have = {s["source"] for s in found}
+        reasons = {p["source"]: p["reason"] for p in stored_problems}
+        # The two atmospheric feeds cover different eras of the same variable
+        # and only one of them is ever asked about a given date. Saying "no
+        # value" about the one that correctly stood aside would send somebody
+        # to debug a working source.
+        stood_aside = {"openmeteo_icon_eu", "openmeteo_era5"} - {
+            env.weather_source_for(when)
+        }
+        for name in stood_aside:
+            reasons.setdefault(
+                name,
+                "not used for this date - the other atmospheric source covers it "
+                f"({env.weather_source_for(when)})",
+            )
+        missing = [
+            {
+                "source": name,
+                "vars": list(env.SOURCES[name]["vars"]),
+                # Precisely what the archive knows, and no more. Without a
+                # live fetch this service cannot tell "never asked" from
+                # "asked, and the sky was closed" - so it says the one thing
+                # that is true either way rather than guessing, and `live=1`
+                # replaces this with the source's own sentence.
+                "reason": reasons.get(
+                    name,
+                    "no stored value for this point and time"
+                    if not live else "reached the source; it has no value here",
+                ),
+            }
+            for name in sorted(env.SOURCES)
+            if name not in have
+        ]
+        return {
+            "point": {"lat": lat, "lng": lng},
+            "time": when,
+            "radius_km": radius,
+            "max_gap_h": gap,
+            "max_gap_basin_h": basin_gap,
+            "live": bool(live),
+            "samples": found,
+            "missing": missing,
+            "sources": _env_catalogue(),
+        }
+
+    return await asyncio.to_thread(load)
+
+
+@app.get("/v1/env/grid")
+async def env_grid(
+    time: Optional[str] = None,
+    vars: Optional[str] = None,
+    max_gap_h: float = ENV_GRID_MAX_GAP_H,
+    limit: int = 4000,
+):
+    """The map layer: one layer per (source, variable), each at its own scale.
+
+    Deliberately NOT a single field. The basin is described by a 1 km SST, a
+    9 km chlorophyll and a 1 km ice chart, and interpolating those into one
+    smooth picture would show a biologist something nobody measured. Each layer
+    therefore carries:
+
+      resolution_m  how wide one measured cell actually is;
+      spacing_deg   how far apart the cells we hold are (the collector samples
+                    the basin at half a degree - real product cells, spaced
+                    out, never a resampling);
+      measured_at   the slice, shared by every cell in the layer;
+      gap_hours     how far that slice is from the moment asked about.
+
+    A renderer that draws each layer as its own cells at its own size is
+    telling the truth. One that blurs them together is not, which is why the
+    two numbers are separate fields rather than one "resolution".
+
+    `vars` is a comma-separated list of measurables (`sst_c,ice_class`);
+    omitted, every variable the archive holds is returned.
+    """
+    when = _env_time(time)
+    columns = _env_list(vars, "vars")
+    per_layer = max(1, min(int(limit), ENV_MAX_CELLS))
+    gap = max(0.0, float(max_gap_h))
+
+    def load() -> dict:
+        with _conn() as conn:
+            try:
+                layers = db.env_grid(
+                    conn, when, columns=columns,
+                    max_gap_h=gap or None, limit_per_layer=per_layer,
+                )
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+        drawn = {l["var"] for l in layers}
+        asked = columns or list(db.ENV_VALUE_COLUMNS)
+        return {
+            "time": when,
+            "vars": asked,
+            "max_gap_h": gap,
+            "layers": layers,
+            "missing": [
+                {"var": name, "reason": "no stored slice within max_gap_h of that moment"}
+                for name in asked if name not in drawn
+            ],
+            "sources": _env_catalogue(),
+        }
+
+    return await asyncio.to_thread(load)
+
+
+@app.get("/v1/env/series")
+async def env_series(
+    lat: Optional[float] = None,
+    lng: Optional[float] = None,
+    start: Optional[str] = Query(None, alias="from"),
+    end: Optional[str] = Query(None, alias="to"),
+    sources: Optional[str] = None,
+    radius_km: float = ENV_RADIUS_KM,
+    limit: int = 5000,
+):
+    """One site's history of conditions, grouped by source, oldest first.
+
+    The series a future model needs, and the only honest way to look at a
+    trend: within a group every point comes from the same product at the same
+    cell size and the same lag, so the line means one thing along its whole
+    length. Splicing MUR onto CoralTemp to make a longer line would put a step
+    in it at the join that is an artefact of the join.
+
+    `from`/`to` are ISO8601; `from` defaults to 30 days before `to`, and `to`
+    defaults to now.
+    """
+    lat, lng = _env_point(lat, lng)
+    end_at = _env_time(end, "to")
+    if start is None:
+        start_at = (
+            datetime.fromisoformat(end_at.replace("Z", "+00:00")) - timedelta(days=30)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    else:
+        start_at = _env_time(start, "from")
+    if start_at > end_at:
+        raise HTTPException(400, f"from ({start_at}) is after to ({end_at})")
+    wanted = _env_list(sources, "sources")
+    if wanted:
+        unknown = [s for s in wanted if s not in env.SOURCES]
+        if unknown:
+            raise HTTPException(
+                400,
+                f"no such source(s): {unknown}; known: {sorted(env.SOURCES)}",
+            )
+    cap = max(1, min(int(limit), ENV_MAX_SERIES))
+
+    def load() -> dict:
+        with _conn() as conn:
+            rows = db.env_series(
+                conn, lat, lng, start_at, end_at,
+                radius_km=max(1.0, min(float(radius_km), 500.0)),
+                sources=wanted, limit=cap,
+            )
+        grouped: dict[str, dict] = {}
+        for row in rows:
+            group = grouped.setdefault(row["source"], {
+                "source": row["source"],
+                "dataset": row.get("dataset"),
+                "resolution_m": row.get("resolution_m"),
+                "resolution": row.get("resolution"),
+                "scope": row.get("scope"),
+                "latency_note": row.get("latency_note"),
+                "points": [],
+            })
+            group["points"].append({
+                "measured_at": row["measured_at"],
+                "lat": row["lat"],
+                "lng": row["lng"],
+                "values": row["values"],
+            })
+        series = sorted(grouped.values(), key=lambda g: g["source"])
+        for group in series:
+            group["count"] = len(group["points"])
+        return {
+            "point": {"lat": lat, "lng": lng},
+            "from": start_at,
+            "to": end_at,
+            "radius_km": radius_km,
+            # A window is a window. A caller that asked for a year and got the
+            # cap has to be told, or it will read the first 5000 rows as the
+            # whole history of the site.
+            "truncated": len(rows) >= cap,
+            "series": series,
+            "sources": _env_catalogue(),
+        }
 
     return await asyncio.to_thread(load)
 

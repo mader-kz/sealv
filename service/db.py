@@ -26,6 +26,7 @@ a 25% spread across four frames 1.5s apart on animals that barely moved.
 from __future__ import annotations
 
 import json
+import math
 import os
 import sqlite3
 import uuid
@@ -42,6 +43,32 @@ TERMINAL_JOB_STATUSES = ("done", "failed", "cancelled")
 POINT_STATUSES = ("auto", "validated", "false_positive")
 MEDIA_KINDS = ("image", "video")
 EDIT_OPS = ("add", "remove", "reinstate")
+
+# Every measurable `env_sample` can hold, in the order the table declares them.
+# Duplicated deliberately from `env.VALUE_COLUMNS` rather than imported: this
+# module is a pure data layer with no knowledge of HTTP, and importing the
+# source clients to learn a column list would drag urllib and a live-request
+# module into the worker's import path. The selftest asserts the two lists are
+# identical, so the duplication cannot drift silently.
+ENV_VALUE_COLUMNS = (
+    "wind_ms", "wind_dir", "gust_ms", "air_t", "pressure", "cloud",
+    "wave_m", "wave_period_s",
+    "sst_c", "sst_anomaly_c",
+    "ice_class", "ice_conc", "ice_thickness_m",
+    "chl_a", "sea_level_m",
+)
+
+# Provenance columns that travel with the measurement.
+ENV_META_COLUMNS = ("dataset", "resolution_m", "resolution", "scope", "latency_note")
+
+# Coordinates are rounded to this many places before they are written, and the
+# same rounding is applied to anything looked up. The unique key is
+# (source, measured_at, lat, lng) over REAL columns, so two spellings of the
+# same cell centre - 44.85 from one response and 44.849999999 from another -
+# would be two rows for one measurement and would draw the same cell twice.
+# Four places is ~11 m, finer than the finest product here (1 km) by two orders
+# of magnitude, so it can never merge two genuinely different cells.
+ENV_COORD_PLACES = 4
 
 # Columns held as JSON text, per table. Callers pass and receive dicts.
 _JSON_COLUMNS: dict[str, tuple[str, ...]] = {
@@ -173,8 +200,28 @@ def _widen(conn: sqlite3.Connection) -> None:
         ("pollution_source_health", "last_inserted_count", "ALTER TABLE pollution_source_health ADD COLUMN last_inserted_count INTEGER"),
         ("pollution_source_health", "last_updated_count", "ALTER TABLE pollution_source_health ADD COLUMN last_updated_count INTEGER"),
         ("pollution_source_health", "last_unchanged_count", "ALTER TABLE pollution_source_health ADD COLUMN last_unchanged_count INTEGER"),
+    ) + tuple(
+        # Every measurable of `env_sample`, ensured one by one rather than
+        # trusted to the CREATE TABLE. A new environmental variable is exactly
+        # the kind of additive change this table will keep taking - a second
+        # wave parameter, an ice stage, a dust load - and the archive that must
+        # not need recreating for it is the one on the boat. Keeping the list
+        # here means adding a column is one line in two places, and a database
+        # made against any earlier version grows into the current shape on the
+        # next start rather than failing a query nobody can explain.
+        ("env_sample", column, f"ALTER TABLE env_sample ADD COLUMN {column} {kind}")
+        for column, kind in (
+            ("dataset", "TEXT"),
+            *((name, "REAL") for name in ENV_VALUE_COLUMNS),
+            ("resolution_m", "REAL"),
+            ("resolution", "TEXT"),
+            ("scope", "TEXT"),
+            ("latency_note", "TEXT"),
+        )
     ):
         have = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if not have:
+            continue  # the table itself is not there yet - schema.sql makes it
         if column not in have:
             conn.execute(ddl)
     # The column above is worth nothing without the index: the duplicate check
@@ -1186,6 +1233,390 @@ def get_point(conn: sqlite3.Connection, point_id: int) -> Optional[dict]:
     return _row(
         conn.execute("SELECT * FROM point WHERE id = ?", (point_id,)).fetchone(), "point"
     )
+
+
+# --------------------------------------------------------------------------
+# environment
+# --------------------------------------------------------------------------
+
+_ENV_INSERT = f"""
+INSERT INTO env_sample
+       (source, dataset, measured_at, lat, lng, {', '.join(ENV_VALUE_COLUMNS)},
+        resolution_m, resolution, scope, latency_note, fetched_at)
+VALUES ({', '.join(['?'] * (5 + len(ENV_VALUE_COLUMNS) + 5))})
+ON CONFLICT(source, measured_at, lat, lng) DO UPDATE SET
+       dataset      = excluded.dataset,
+       {', '.join(f'{c} = COALESCE(excluded.{c}, {c})' for c in ENV_VALUE_COLUMNS)},
+       resolution_m = excluded.resolution_m,
+       resolution   = excluded.resolution,
+       scope        = excluded.scope,
+       latency_note = excluded.latency_note,
+       fetched_at   = excluded.fetched_at
+"""
+
+
+def _env_row(sample: Any) -> tuple:
+    """One normalised sample -> the INSERT tuple. Raises on anything unusable.
+
+    `values` is filtered, not defaulted. A key this table has no column for is
+    refused rather than dropped, because silently discarding a measurement is
+    the failure this whole layer exists to prevent; a key whose value is None
+    is left NULL, which is the honest spelling of "this source did not measure
+    that here".
+    """
+    d = dict(sample)
+    source = (d.get("source") or "").strip()
+    if not source:
+        raise ValueError("env sample needs a source")
+    measured_at = (d.get("measured_at") or "").strip()
+    if not measured_at:
+        # Without it the row is "some temperature, some time" - which is
+        # precisely what the product promises never to show anyone.
+        raise ValueError(f"env sample from {source!r} has no measured_at")
+    lat = _as_float(d.get("lat"), "env.lat")
+    lng = _as_float(d.get("lng"), "env.lng")
+    if lat is None or lng is None:
+        raise ValueError(f"env sample from {source!r} has no coordinate")
+
+    values = dict(d.get("values") or {})
+    unknown = set(values) - set(ENV_VALUE_COLUMNS)
+    if unknown:
+        raise ValueError(
+            f"env sample from {source!r} carries {sorted(unknown)}, which "
+            f"env_sample has no column for - add the column rather than dropping it"
+        )
+    measured = [_as_float(values.get(c), f"env.{c}") for c in ENV_VALUE_COLUMNS]
+    if all(v is None for v in measured):
+        # A row whose only content is a source name and a time reads on a chart
+        # exactly like a zero. env.py already refuses to build one; this is the
+        # store refusing to hold one.
+        raise ValueError(f"env sample from {source!r} measured nothing")
+
+    return (
+        source, d.get("dataset"), measured_at,
+        round(lat, ENV_COORD_PLACES), round(lng, ENV_COORD_PLACES),
+        *measured,
+        _as_float(d.get("resolution_m"), "env.resolution_m"),
+        d.get("resolution"), d.get("scope"), d.get("latency_note"),
+        _utcnow(),
+    )
+
+
+def insert_env_samples(conn: sqlite3.Connection, samples: Iterable[Any]) -> dict:
+    """Store normalised samples, deduping on (source, measured_at, lat, lng).
+
+    Returns {"written": n, "new": k, "skipped": [reasons]}. `new` is how many
+    rows the table did not already hold - a backfill rerun therefore reports
+    `written` equal to the input and `new` zero, which is the difference
+    between "it worked twice" and "it collected twice as much".
+
+    A repeat of the same slice UPDATEs rather than replaces: values are merged
+    with COALESCE so a second source-run that measured only concentration
+    cannot blank a thickness the first one already stored. `fetched_at` moves,
+    because it is the answer to "when did we last ask", not to "when was this
+    measured".
+
+    Bad samples are skipped with a reason rather than aborting the batch: one
+    malformed chlorophyll response must not cost the wind that came with it.
+    """
+    rows, skipped = [], []
+    for sample in samples:
+        try:
+            rows.append(_env_row(sample))
+        except (ValueError, TypeError) as exc:
+            skipped.append(str(exc))
+    if not rows:
+        return {"written": 0, "new": 0, "skipped": skipped}
+
+    keys = {(r[0], r[2], r[3], r[4]) for r in rows}
+    with _tx(conn, "IMMEDIATE"):
+        before = _env_have(conn, keys)
+        conn.executemany(_ENV_INSERT, rows)
+    return {"written": len(rows), "new": len(keys) - before, "skipped": skipped}
+
+
+def _env_have(conn: sqlite3.Connection, keys: set[tuple]) -> int:
+    """How many of these (source, measured_at, lat, lng) the table already holds.
+
+    Counted rather than inferred from `cursor.rowcount`, which an upsert
+    reports as one for both an insert and an update and so cannot tell the two
+    apart - and "how much of this is new" is the only number that says whether
+    a collection cycle is actually accumulating a series.
+    """
+    found = 0
+    for source, measured_at, lat, lng in keys:
+        found += bool(conn.execute(
+            "SELECT 1 FROM env_sample WHERE source = ? AND measured_at = ? "
+            "AND lat = ? AND lng = ? LIMIT 1",
+            (source, measured_at, lat, lng),
+        ).fetchone())
+    return found
+
+
+def _env_payload(row: dict) -> dict:
+    """A stored row back in the sample shape the clients produce.
+
+    Same keys in, same keys out, so a value read from the archive and a value
+    just fetched are indistinguishable to a caller - and `values` holds only
+    what was actually measured, never a NULL column padded to zero.
+    """
+    return {
+        "source": row["source"],
+        "dataset": row.get("dataset"),
+        "measured_at": row["measured_at"],
+        "lat": row["lat"],
+        "lng": row["lng"],
+        "values": {c: row[c] for c in ENV_VALUE_COLUMNS if row.get(c) is not None},
+        "resolution_m": row.get("resolution_m"),
+        "resolution": row.get("resolution"),
+        "scope": row.get("scope"),
+        "latency_note": row.get("latency_note"),
+        "fetched_at": row.get("fetched_at"),
+    }
+
+
+#: Degrees of latitude per kilometre. Longitude is narrower away from the
+#: equator, and at 45 N - the whole survey area - a degree of longitude is
+#: cos(45) = 0.707 of a degree of latitude. The searches below use a box in
+#: degrees scaled that way rather than a true great-circle distance: at basin
+#: scale the error is under a percent, and it keeps the filter something the
+#: (lat, lng, measured_at) index can actually use.
+_DEG_PER_KM = 1.0 / 111.32
+
+
+def _env_box(lat: float, lng: float, radius_km: float) -> tuple[float, float, float, float]:
+    dlat = radius_km * _DEG_PER_KM
+    dlng = dlat / max(0.2, math.cos(math.radians(lat)))
+    return lat - dlat, lat + dlat, lng - dlng, lng + dlng
+
+
+# Nearest in TIME first, then nearest in space. That order is deliberate: a
+# temperature from the right day two cells away describes a survey far better
+# than the right cell from a fortnight later, and a reader shown the second
+# would have no way to tell.
+#
+# `scope = 'basin'` escapes the box, and that is not a loophole - it is the
+# difference between a measurement OF a cell and a measurement of the whole
+# sea. Sea level is one altimetric figure for the entire Caspian, stored
+# against the crossing where the pass is taken (41.97/50.385) because a value
+# has to live somewhere; it describes Tyuleniy, 320 km away, exactly as well
+# as it describes its own coordinate. Filtering it by distance would silently
+# drop the one variable the research doc says must join to every survey from
+# the first day (§7.4: the sea is falling 1.63 m per decade over water 2-5 m
+# deep, so the geography of the haul-outs is being rewritten, not drifting).
+_ENV_NEAREST_SQL = """
+SELECT *, ABS(julianday(measured_at) - julianday(?)) * 24.0 AS gap_hours
+  FROM env_sample
+ WHERE source = ?
+   AND (scope = 'basin'
+        OR (lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?))
+ ORDER BY gap_hours,
+          (lat - ?) * (lat - ?) + (lng - ?) * (lng - ?)
+ LIMIT 1
+"""
+
+
+def env_sources(conn: sqlite3.Connection) -> list[str]:
+    """Every source the archive holds a sample from, in a stable order."""
+    return [r[0] for r in conn.execute(
+        "SELECT DISTINCT source FROM env_sample ORDER BY source")]
+
+
+def env_at(
+    conn: sqlite3.Connection,
+    lat: float,
+    lng: float,
+    when: str,
+    radius_km: float = 60.0,
+    max_gap_h: float | None = 72.0,
+    sources: Sequence[str] | None = None,
+    max_gap_basin_h: float | None = 15 * 24.0,
+) -> list[dict]:
+    """The nearest stored sample to one point and time, from EVERY source.
+
+    One row per source, never a merge. Six feeds describing the same moment is
+    not an inconsistency to be resolved - the reader is entitled to see that
+    MUR says 27.4 from two days ago at 1 km while CoralTemp says 27.7 from the
+    same day at 5 km, and any code that picks one of them has made a scientific
+    judgement in a display layer.
+
+    Each result carries `gap_hours` (how far the slice is from the moment
+    asked about) and `distance_km` (how far the cell centre is from the point),
+    because "26.8 °C" without those two is a number the operator cannot check.
+
+    `max_gap_h` is the honesty bound: past it, the source has nothing to say
+    about this moment and is left out entirely rather than answering with the
+    nearest thing it happens to have. None disables it, which is what a series
+    view wants and a survey card does not.
+
+    `max_gap_basin_h` is the same bound for a basin-scale figure, and it is
+    separate because the products publish on different clocks: three days is
+    generous for a daily satellite pass and absurd for altimetry that produces
+    one number every ten days. Judging sea level by the satellite bound would
+    hide it from most surveys - not because it is unknown, but because the
+    wrong ruler was used.
+    """
+    lat, lng = float(lat), float(lng)
+    lat0, lat1, lng0, lng1 = _env_box(lat, lng, radius_km)
+    out = []
+    for source in (sources if sources is not None else env_sources(conn)):
+        row = _row(
+            conn.execute(
+                _ENV_NEAREST_SQL,
+                (when, source, lat0, lat1, lng0, lng1, lat, lat, lng, lng),
+            ).fetchone(),
+            "env_sample",
+        )
+        if row is None:
+            continue
+        gap = row.pop("gap_hours", None)
+        bound = max_gap_basin_h if row.get("scope") == "basin" else max_gap_h
+        if bound is not None and gap is not None and gap > bound:
+            continue
+        payload = _env_payload(row)
+        payload["gap_hours"] = None if gap is None else round(gap, 2)
+        payload["distance_km"] = round(
+            math.hypot(row["lat"] - lat,
+                       (row["lng"] - lng) * math.cos(math.radians(lat))) / _DEG_PER_KM,
+            2,
+        )
+        out.append(payload)
+    out.sort(key=lambda s: (s["source"],))
+    return out
+
+
+def env_series(
+    conn: sqlite3.Connection,
+    lat: float,
+    lng: float,
+    start: str,
+    end: str,
+    radius_km: float = 60.0,
+    sources: Sequence[str] | None = None,
+    limit: int = 5000,
+) -> list[dict]:
+    """Every stored sample near one point between two times, oldest first.
+
+    Grouped by source by the caller, not here - this returns flat rows so the
+    API can shape them once. The window is inclusive at both ends and ordered
+    by `measured_at`, which is the axis a chart of conditions is drawn on;
+    `fetched_at` would order the same measurements by when we happened to ask.
+    """
+    lat0, lat1, lng0, lng1 = _env_box(float(lat), float(lng), radius_km)
+    # Basin-scale rows escape the box for the reason spelled out on
+    # _ENV_NEAREST_SQL: they describe the whole sea, so a site's history of
+    # conditions includes the sea level whatever the site's coordinate is.
+    where = ["(scope = 'basin' OR (lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?))",
+             "measured_at >= ?", "measured_at <= ?"]
+    args: list[Any] = [lat0, lat1, lng0, lng1, start, end]
+    if sources:
+        where.append(f"source IN ({', '.join('?' * len(sources))})")
+        args.extend(sources)
+    rows = _rows(
+        conn.execute(
+            f"SELECT * FROM env_sample WHERE {' AND '.join(where)} "
+            "ORDER BY measured_at, source, id LIMIT ?",
+            (*args, max(1, int(limit))),
+        ),
+        "env_sample",
+    )
+    return [_env_payload(r) for r in rows]
+
+
+def env_grid(
+    conn: sqlite3.Connection,
+    when: str,
+    columns: Sequence[str] | None = None,
+    max_gap_h: float | None = 240.0,
+    limit_per_layer: int = 4000,
+) -> list[dict]:
+    """The map layer: for each (source, variable), ONE slice and all its cells.
+
+    A slice, not a window. Every cell in a returned layer shares one
+    `measured_at`, because a "grid at time T" assembled from two days of
+    passes would draw a seam down the basin that nothing measured - and the
+    seam would look exactly like a front.
+
+    Each layer reports its own `resolution_m` and the `spacing_deg` the cells
+    were actually sampled at, which are two different facts and both are
+    needed: the first is how wide the measurement is, the second is how far
+    apart the ones we hold are. A 9 km chlorophyll cell and a 1 km SST cell
+    must be drawn at their own sizes, never blurred into one field, so the
+    numbers that make that possible travel with the data.
+    """
+    wanted = tuple(columns) if columns else ENV_VALUE_COLUMNS
+    unknown = set(wanted) - set(ENV_VALUE_COLUMNS)
+    if unknown:
+        raise ValueError(f"no such environmental variable(s): {sorted(unknown)}")
+
+    layers = []
+    for column in wanted:
+        pairs = conn.execute(
+            f"""SELECT source, measured_at,
+                       ABS(julianday(measured_at) - julianday(?)) * 24.0 AS gap_hours
+                  FROM env_sample
+                 WHERE {column} IS NOT NULL
+              GROUP BY source, measured_at""",
+            (when,),
+        ).fetchall()
+        best: dict[str, tuple[str, float]] = {}
+        for source, measured_at, gap in pairs:
+            gap = float(gap if gap is not None else 1e9)
+            if max_gap_h is not None and gap > max_gap_h:
+                continue
+            if source not in best or gap < best[source][1]:
+                best[source] = (measured_at, gap)
+
+        for source, (measured_at, gap) in sorted(best.items()):
+            cells = _rows(
+                conn.execute(
+                    f"""SELECT lat, lng, {column} AS value, dataset, resolution_m,
+                               resolution, scope, latency_note
+                          FROM env_sample
+                         WHERE source = ? AND measured_at = ? AND {column} IS NOT NULL
+                      ORDER BY lat, lng LIMIT ?""",
+                    (source, measured_at, max(1, int(limit_per_layer))),
+                )
+            )
+            if not cells:
+                continue
+            head = cells[0]
+            layers.append({
+                "source": source,
+                "dataset": head.get("dataset"),
+                "var": column,
+                "measured_at": measured_at,
+                "gap_hours": round(gap, 2),
+                "resolution_m": head.get("resolution_m"),
+                "resolution": head.get("resolution"),
+                "scope": head.get("scope"),
+                "latency_note": head.get("latency_note"),
+                "spacing_deg": _env_spacing([c["lat"] for c in cells]),
+                "count": len(cells),
+                "cells": [
+                    {"lat": c["lat"], "lng": c["lng"], "value": c["value"]} for c in cells
+                ],
+            })
+    return layers
+
+
+def _env_spacing(lats: Sequence[float]) -> Optional[float]:
+    """Median gap between consecutive distinct rows of a grid, in degrees.
+
+    What a renderer needs to know how far apart the cells it has been given
+    actually are - which is NOT the product's cell size. The basin grid samples
+    a 1 km product every half a degree; drawing those cells 1 km wide would
+    show a nearly empty map, and drawing them half a degree wide would claim a
+    50 km measurement. The layer carries both numbers so the map can draw the
+    real cell and say what the spacing between them is.
+
+    None for a single row, where there is no spacing to measure.
+    """
+    uniq = sorted({round(float(v), 6) for v in lats})
+    if len(uniq) < 2:
+        return None
+    gaps = sorted(b - a for a, b in zip(uniq, uniq[1:]))
+    return round(gaps[len(gaps) // 2], 6)
 
 
 # --------------------------------------------------------------------------
@@ -2699,12 +3130,206 @@ if __name__ == "__main__":
         check("population link verdict is durable",
               list_population_link_reviews(conn)[0]["decision"] == "confirmed")
 
+        # --- environment ------------------------------------------------
+        # The column list is duplicated from env.VALUE_COLUMNS to keep this
+        # module free of the HTTP clients; that duplication is only safe if
+        # something fails when the two drift apart.
+        import env as env_mod  # same sys.path insert as `contract` above
+
+        check("env column list matches the source clients",
+              ENV_VALUE_COLUMNS == env_mod.VALUE_COLUMNS,
+              # A source that starts measuring something the table has no
+              # column for would otherwise be silently refused, one variable at
+              # a time, with the loss visible only as an empty chart.
+              f"db={len(ENV_VALUE_COLUMNS)} env={len(env_mod.VALUE_COLUMNS)}")
+        check("every env column actually exists in the table",
+              {r["name"] for r in conn.execute("PRAGMA table_info(env_sample)")}
+              >= set(ENV_VALUE_COLUMNS) | set(ENV_META_COLUMNS)
+              | {"source", "measured_at", "lat", "lng", "fetched_at"})
+
+        def env_sample(source, measured_at, lat, lng, **values):
+            meta = {
+                "mur": (1000, "0.01° (~1 km)", "point"),
+                "openmeteo_icon_eu": (6500, "6.5 km (ICON-EU)", "point"),
+                "gwm_sea_level": (None, "whole basin", "basin"),
+                "viirs_chl": (9000, "9 km", "point"),
+            }.get(source, (1000, "1 km", "point"))
+            return {
+                "source": source, "dataset": f"{source}-dataset",
+                "measured_at": measured_at, "lat": lat, "lng": lng,
+                "values": values,
+                "resolution_m": meta[0], "resolution": meta[1], "scope": meta[2],
+                "latency_note": f"{source} lag",
+            }
+
+        first = insert_env_samples(conn, [
+            env_sample("mur", "2026-08-08T09:00:00Z", 44.85, 50.35, sst_c=27.418),
+            env_sample("coraltemp", "2026-08-08T12:00:00Z", 44.825, 50.325,
+                       sst_c=27.7, sst_anomaly_c=3.9),
+            env_sample("openmeteo_icon_eu", "2026-08-10T07:00:00Z", 44.875, 50.375,
+                       wind_ms=3.16, wind_dir=288.0, gust_ms=6.2, air_t=29.8),
+        ])
+        check("insert_env_samples writes every source as its own row",
+              first == {"written": 3, "new": 3, "skipped": []}, first)
+
+        again = insert_env_samples(conn, [
+            env_sample("mur", "2026-08-08T09:00:00Z", 44.85, 50.35, sst_c=27.418),
+        ])
+        check("re-storing the same slice dedupes instead of accumulating",
+              again["written"] == 1 and again["new"] == 0
+              and conn.execute("SELECT COUNT(*) FROM env_sample WHERE source='mur'"
+                               ).fetchone()[0] == 1,
+              again)
+
+        # A second run of a source that measured only ONE of a pair must not
+        # blank the other: VIIRS publishes concentration daily and thickness as
+        # a 4-day composite, so the two halves of one row arrive separately.
+        insert_env_samples(conn, [
+            env_sample("viirs_ice", "2026-02-10T00:00:00Z", 45.8, 49.5, ice_conc=1.0),
+        ])
+        insert_env_samples(conn, [
+            env_sample("viirs_ice", "2026-02-10T00:00:00Z", 45.8, 49.5,
+                       ice_thickness_m=1.1076),
+        ])
+        merged = conn.execute(
+            "SELECT ice_conc, ice_thickness_m FROM env_sample WHERE source='viirs_ice'"
+        ).fetchone()
+        check("a partial re-store merges rather than blanking what it did not measure",
+              tuple(merged) == (1.0, 1.1076), tuple(merged))
+
+        raises("a sample that measured nothing is refused", ValueError,
+               _env_row, {"source": "mur", "measured_at": "2026-08-08T09:00:00Z",
+                          "lat": 1.0, "lng": 1.0, "values": {}})
+        raises("a sample with no measured_at is refused", ValueError,
+               _env_row, {"source": "mur", "lat": 1.0, "lng": 1.0,
+                          "values": {"sst_c": 3.0}})
+        raises("a value with no column is refused, never dropped", ValueError,
+               _env_row, {"source": "mur", "measured_at": "2026-08-08T09:00:00Z",
+                          "lat": 1.0, "lng": 1.0, "values": {"salinity_psu": 12.8}})
+        bad = insert_env_samples(conn, [
+            {"source": "broken", "lat": 1.0, "lng": 1.0, "values": {"sst_c": 1.0}},
+            env_sample("mur", "2026-08-07T09:00:00Z", 44.85, 50.35, sst_c=26.9),
+        ])
+        check("one bad sample does not cost the good one it arrived with",
+              bad["written"] == 1 and bad["new"] == 1 and len(bad["skipped"]) == 1,
+              bad)
+
+        # A zero is a measurement and must survive; only None means "not
+        # measured". This is the whole GFS-Wave lesson in one assertion.
+        insert_env_samples(conn, [
+            env_sample("openmeteo_mfwam", "2026-08-10T07:00:00Z", 44.875, 50.375,
+                       wave_m=0.0, wave_period_s=2.9),
+        ])
+        calm = conn.execute(
+            "SELECT wave_m, sst_c FROM env_sample WHERE source='openmeteo_mfwam'"
+        ).fetchone()
+        check("a measured zero is stored as zero and an unmeasured value as NULL",
+              calm["wave_m"] == 0.0 and calm["sst_c"] is None)
+
+        at = env_at(conn, 44.85, 50.35, "2026-08-10T07:00:00Z")
+        by_source = {s["source"]: s for s in at}
+        check("env_at answers with one row per source, never a merge",
+              len(at) == len(by_source) and "mur" in by_source
+              and "openmeteo_icon_eu" in by_source,
+              sorted(by_source))
+        check("env_at carries the provenance of each value",
+              by_source["mur"]["values"] == {"sst_c": 27.418}
+              and by_source["mur"]["measured_at"] == "2026-08-08T09:00:00Z"
+              and by_source["mur"]["resolution_m"] == 1000
+              and by_source["mur"]["latency_note"] == "mur lag")
+        check("env_at reports how stale and how far away each value is",
+              abs(by_source["mur"]["gap_hours"] - 46.0) < 0.01
+              and by_source["mur"]["distance_km"] == 0.0,
+              by_source["mur"]["gap_hours"])
+        check("env_at picks the slice nearest the moment asked about",
+              by_source["mur"]["values"]["sst_c"] == 27.418)
+        check("env_at leaves out a source with nothing to say about that moment",
+              all(s["source"] != "mur"
+                  for s in env_at(conn, 44.85, 50.35, "2026-01-01T00:00:00Z")))
+        check("env_at ignores a cell on the other side of the sea",
+              env_at(conn, 39.0, 50.0, "2026-08-10T07:00:00Z") == [])
+
+        series = env_series(conn, 44.85, 50.35,
+                            "2026-08-01T00:00:00Z", "2026-08-11T00:00:00Z")
+        stamps = [s["measured_at"] for s in series if s["source"] == "mur"]
+        check("env_series returns both mur slices, oldest first",
+              stamps == ["2026-08-07T09:00:00Z", "2026-08-08T09:00:00Z"], stamps)
+        check("env_series honours the window",
+              env_series(conn, 44.85, 50.35,
+                         "2026-08-09T00:00:00Z", "2026-08-11T00:00:00Z",
+                         sources=["mur"]) == [])
+
+        # Two cells of one product at one slice: a layer, not a point.
+        insert_env_samples(conn, [
+            env_sample("mur", "2026-08-08T09:00:00Z", 45.35, 50.35, sst_c=26.1),
+            env_sample("viirs_chl", "2026-08-08T12:00:00Z", 44.875, 50.375, chl_a=11.2764),
+        ])
+        grid = env_grid(conn, "2026-08-10T00:00:00Z", ["sst_c", "chl_a"])
+        sst_layers = [l for l in grid if l["var"] == "sst_c"]
+        mur_layer = next(l for l in sst_layers if l["source"] == "mur")
+        check("env_grid keeps every source as its own layer",
+              {(l["source"], l["var"]) for l in grid}
+              == {("mur", "sst_c"), ("coraltemp", "sst_c"), ("viirs_chl", "chl_a")},
+              {(l["source"], l["var"]) for l in grid})
+        check("a layer is ONE slice, so its cells share a measured_at",
+              mur_layer["measured_at"] == "2026-08-08T09:00:00Z"
+              and mur_layer["count"] == 2)
+        check("a layer states its true cell size and its sampled spacing apart",
+              mur_layer["resolution_m"] == 1000
+              and abs(mur_layer["spacing_deg"] - 0.5) < 1e-6,
+              # 1 km cells half a degree apart: drawing them at the spacing
+              # would claim a 50 km measurement, drawing them at the cell size
+              # would show an empty map. Both numbers, or neither is honest.
+              mur_layer["spacing_deg"])
+        check("a 9 km layer is never folded into the 1 km one",
+              next(l for l in grid if l["var"] == "chl_a")["resolution_m"] == 9000)
+        raises("env_grid refuses a variable that is not measured here", ValueError,
+               env_grid, conn, "2026-08-10T00:00:00Z", ["salinity_psu"])
+
+        # The whole point of storing the basin figure against the altimetry
+        # crossing rather than the survey: it is not a measurement of the
+        # survey's cell and must not read as one.
+        insert_env_samples(conn, [
+            env_sample("gwm_sea_level", "2026-08-04T12:31:00Z", 41.97, 50.385,
+                       sea_level_m=-28.46),
+        ])
+        basin = env_at(conn, 41.97, 50.385, "2026-08-10T00:00:00Z",
+                       max_gap_h=None, sources=["gwm_sea_level"])
+        check("a basin-scale figure keeps its own scope and coordinate",
+              len(basin) == 1 and basin[0]["scope"] == "basin"
+              and basin[0]["resolution_m"] is None
+              and basin[0]["values"] == {"sea_level_m": -28.46})
+        # 320 km from where the altimetry pass is taken, and six days old on a
+        # ten-day product. Under the point rules it would be excluded twice
+        # over - and it is exactly the variable the research doc says must
+        # reach every survey, because the islands are joining the mainland.
+        far = env_at(conn, 44.85, 50.35, "2026-08-10T00:00:00Z",
+                     sources=["gwm_sea_level"])
+        check("the basin figure reaches a survey 300 km from the altimetry pass",
+              len(far) == 1 and far[0]["values"] == {"sea_level_m": -28.46}
+              and far[0]["distance_km"] > 300, far)
+        check("but it is still bounded - a year later it is not this survey's level",
+              env_at(conn, 44.85, 50.35, "2027-08-10T00:00:00Z",
+                     sources=["gwm_sea_level"]) == [])
+        check("a point-scale source is NOT let out of the box by the same rule",
+              env_at(conn, 41.97, 50.385, "2026-08-10T00:00:00Z",
+                     sources=["mur"]) == [])
+
+        env_rows_before = conn.execute("SELECT COUNT(*) FROM env_sample").fetchone()[0]
+        init_db(conn)  # again, with data in the table
+        check("init_db is idempotent over a populated env_sample",
+              conn.execute("SELECT COUNT(*) FROM env_sample").fetchone()[0]
+              == env_rows_before, env_rows_before)
+
         conn.close()
 
         # --- durability ------------------------------------------------
         reopened = connect(db_file)
         check("edits survive a reconnect", verified_count(reopened, run_id) == 5)
         check("job rows survive a reconnect", get_job(reopened, job_id)["status"] == "done")
+        check("env samples survive a reconnect",
+              env_at(reopened, 44.85, 50.35, "2026-08-10T07:00:00Z",
+                     sources=["mur"])[0]["values"]["sst_c"] == 27.418)
         reopened.close()
 
     finally:

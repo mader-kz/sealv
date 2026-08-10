@@ -174,6 +174,75 @@ CREATE TABLE IF NOT EXISTS point (
 );
 CREATE INDEX IF NOT EXISTS ix_point_run ON point(run_id);
 
+-- One measurement of the environment, from ONE source, at ONE point and time.
+--
+-- The key is (source, measured_at, lat, lng) and the source is part of it on
+-- purpose. A single coordinate and moment is described by five or six feeds
+-- with different cell sizes and different lags - MUR at 1 km two days back,
+-- chlorophyll at 9 km reconstructed through cloud, sea level as one figure for
+-- the whole basin ten days wide - and folding them into one row would force a
+-- choice of "the" temperature and throw the rest away. So a point-time gets
+-- several rows, one per source, and every value carries its own provenance all
+-- the way to the screen (research doc §7.6).
+--
+-- Every measurable column is NULLable and stays NULL when the source did not
+-- measure it. NULL here means "not measured", never zero: NCEP GFS-Wave answers
+-- HTTP 200 with a full series of exact 0.0 over a basin where it has no grid
+-- nodes at all, and a pipeline that stored those would learn that the Caspian
+-- is always calm. service/env.py refuses fill values before they reach this
+-- table; the schema keeps that refusal representable.
+--
+-- `measured_at` is the SLICE's own time - when the satellite passed or the
+-- model step is valid for - and `fetched_at` is when we asked. The distance
+-- between them is the latency the operator has to be told about, so both are
+-- stored rather than collapsed into one "timestamp".
+CREATE TABLE IF NOT EXISTS env_sample (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    source        TEXT NOT NULL,        -- stable id, see env.SOURCES
+    dataset       TEXT,                 -- exact product id the value came from
+    measured_at   TEXT NOT NULL,        -- ISO8601 Z, the slice's time
+    lat           REAL NOT NULL,        -- the CELL's coordinate, not the ask
+    lng           REAL NOT NULL,
+    -- atmosphere
+    wind_ms         REAL,
+    wind_dir        REAL,               -- degrees, meteorological (from)
+    gust_ms         REAL,
+    air_t           REAL,               -- degrees C
+    pressure        REAL,               -- hPa at the surface
+    cloud           REAL,               -- percent
+    -- sea state
+    wave_m          REAL,               -- significant wave height
+    wave_period_s   REAL,
+    -- water
+    sst_c           REAL,
+    sst_anomaly_c   REAL,               -- against the long baseline
+    -- ice. class is IMS (1 sea, 2 land, 3 sea ice, 4 snow-covered land);
+    -- conc and thickness come from a different product at a different lag,
+    -- which is why they are separate columns and usually separate rows.
+    ice_class       REAL,
+    ice_conc        REAL,
+    ice_thickness_m REAL,
+    -- biology proxy and the basin-scale figure
+    chl_a           REAL,               -- mg/m3
+    sea_level_m     REAL,               -- EGM2008 datum
+    -- provenance of the measurement itself, stored beside it so a reader never
+    -- has to look up what "mur" means to know the cell was 1 km wide.
+    resolution_m  REAL,                 -- NULL for a basin-wide figure
+    resolution    TEXT,                 -- human form of the same fact
+    scope         TEXT,                 -- point | basin
+    latency_note  TEXT,
+    fetched_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+-- The dedupe key. A backfill rerun, an overlapping worker cycle and a manual
+-- probe all produce the same row for the same slice; without this they would
+-- produce three, and a series would show one measurement as three events.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_env_sample
+    ON env_sample(source, measured_at, lat, lng);
+-- Nearest-in-time for one place (the survey card, the series) and the grid
+-- slice for one moment (the map layer). Both are the whole read pattern.
+CREATE INDEX IF NOT EXISTS ix_env_sample_cell ON env_sample(lat, lng, measured_at);
+CREATE INDEX IF NOT EXISTS ix_env_sample_slice ON env_sample(source, measured_at);
+
 -- Append-only. Who corrected a count and when is survey evidence, so edits are
 -- never a destructive update of `point`.
 CREATE TABLE IF NOT EXISTS edit (
