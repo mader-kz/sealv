@@ -23,13 +23,18 @@ export default function Rail({ onWorkbench, onToggleLeft, onToggleAnalytics, lef
     { icon: "table", label: t("nav.detections"), active: false, onClick: onWorkbench },
   ];
 
+  /* A row is a line of text on the rail's own gutter, not a filled tab. The
+     one you are on is stated three ways at once — full ink, the icon at full
+     strength, and a 2px rule on the rail's edge — and none of them is the
+     signal colour: green here is the standing estimate, not "you clicked
+     this". No hover fill either; the colour step is the hover. */
   const row = (active?: boolean) =>
-    `relative h-9 rounded flex items-center transition-colors shrink-0 ${
-      open ? "mx-1.5 px-2.5 gap-2.5 justify-start" : "w-9 mx-auto justify-center"
-    } ${active ? "text-ink bg-surface2" : "text-ink3 hover:text-ink2 hover:bg-surface"}`;
+    `relative h-8 flex items-center transition-colors shrink-0 ${
+      open ? "px-5 gap-2.5 justify-start" : "w-8 mx-auto justify-center"
+    } ${active ? "text-ink" : "text-ink3 hover:text-ink2"}`;
 
   return (
-    <div className={`${open ? "w-44" : "w-12"} shrink-0 bg-bg border-r border-line flex flex-col py-2 gap-0.5 overflow-hidden transition-[width] duration-150`}>
+    <div className={`${open ? "w-44" : "w-12"} shrink-0 bg-bg border-r border-hair flex flex-col py-3 overflow-hidden transition-[width] duration-150`}>
       {items.map(it=>(
         <button
           key={it.icon}
@@ -38,9 +43,9 @@ export default function Rail({ onWorkbench, onToggleLeft, onToggleAnalytics, lef
           aria-label={it.label}
           className={row(it.active)}
         >
-          {it.active && <span className="absolute left-0 top-2 bottom-2 w-px bg-accent" />}
-          <Icon name={it.icon} size={16} className="shrink-0" />
-          {open && <span className="text-sm truncate">{it.label}</span>}
+          {it.active && <span className="absolute left-0 top-1 bottom-1 w-0.5 bg-ink" />}
+          <Icon name={it.icon} size={15} className={`shrink-0 ${it.active ? "" : "opacity-50"}`} />
+          {open && <span className="text-base truncate">{it.label}</span>}
         </button>
       ))}
 
@@ -53,12 +58,15 @@ export default function Rail({ onWorkbench, onToggleLeft, onToggleAnalytics, lef
         aria-expanded={open}
         className={row(false)}
       >
-        <Icon name={open ? "chevronLeft" : "chevronRight"} size={16} className="shrink-0" />
-        {open && <span className="text-sm truncate">{t("rail.collapse")}</span>}
+        <Icon name={open ? "chevronLeft" : "chevronRight"} size={15} className="shrink-0 opacity-50" />
+        {open && <span className="text-base truncate">{t("rail.collapse")}</span>}
       </button>
 
       {/* single source of truth: package.json, gated against the git tag at release */}
-      <span className={`text-2xs text-ink3 pt-1 pb-0.5 shrink-0 ${open ? "px-4" : "text-center"}`}>v{pkg.version}</span>
+      {/* nowrap: collapsed, the rule is 40px wide and "v0.3.0" is ~34 — one
+          more digit in the version and it would break across two lines inside
+          an `overflow-hidden` rail, i.e. disappear. */}
+      <span className={`text-2xs text-ink3 tnum whitespace-nowrap mt-3 pt-2.5 shrink-0 border-t border-hair ${open ? "mx-5" : "mx-1 text-center"}`}>v{pkg.version}</span>
     </div>
   );
 }

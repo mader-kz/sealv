@@ -96,7 +96,7 @@ export default function Timeline({ minimal }: { minimal?: boolean }){
 
   return (
     <div
-      className="shrink-0 flex items-center gap-3 px-3 bg-bg border-t border-line select-none"
+      className="shrink-0 flex items-center gap-4 px-5 bg-bg border-t border-line select-none"
       style={{ height: h }}
     >
       <span className="label shrink-0 whitespace-nowrap">{filteredOut ? t("time.filtered") : t("time.all")}</span>
@@ -108,24 +108,29 @@ export default function Timeline({ minimal }: { minimal?: boolean }){
         onPointerLeave={onPointerUp}
         className="flex-1 relative h-full flex items-end gap-px py-2"
       >
+        {/* Square bars. The window is stated by the bars themselves — inside it
+            they stand in ink, outside they drop to the rule colour — and by the
+            two handles. There used to be a translucent scrim over the excluded
+            ends as well, `bg-bg/70`: Tailwind cannot apply an opacity modifier
+            to a colour declared as a bare `var()`, so it emitted no rule at all
+            and the scrim has never once rendered. Two invisible boxes are not
+            worth hardcoding the background colour to revive — the bar step is
+            the honest signal, and it is the one the reader has actually been
+            using. */}
         {bins.map((v,i)=>{
           const pct = (i/(bins.length-1))*100;
           const inRange = pct >= left && pct <= right;
           return (
             <div
               key={i}
-              className="flex-1 rounded-[1px] transition-colors"
+              className="flex-1 transition-colors"
               style={{
                 height: `${Math.max(2, (v/maxV)*100)}%`,
-                background: v===0 ? "var(--line-soft)" : inRange ? "var(--ink-2)" : "var(--line)",
+                background: v===0 ? "var(--hair)" : inRange ? "var(--ink-2)" : "var(--line)",
               }}
             />
           );
         })}
-
-        {/* brush: dim what's excluded rather than tint what's included */}
-        {left > 0 && <div className="absolute inset-y-0 left-0 bg-bg/70 pointer-events-none" style={{ width:`${left}%` }} />}
-        {right < 100 && <div className="absolute inset-y-0 right-0 bg-bg/70 pointer-events-none" style={{ width:`${100-right}%` }} />}
 
         <Handle
           pct={left}
@@ -191,8 +196,12 @@ function Handle({
       className="absolute inset-y-0 w-6 -ml-3 cursor-ew-resize group outline-none touch-none"
       style={{ left: `${pct}%` }}
     >
-      <div className="absolute inset-y-0 left-1/2 w-px bg-accent" />
-      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-1.5 h-4 rounded-sm bg-accent opacity-70 group-hover:opacity-100 group-focus-visible:opacity-100 group-focus-visible:ring-1 group-focus-visible:ring-accent group-focus-visible:ring-offset-1 group-focus-visible:ring-offset-bg transition-opacity" />
+      {/* Ink, not the signal colour. The brush is a position a person parked
+          the instrument at — a selection marker, the same object as the rail's
+          active rule and the list's selected row — and the green is spent on
+          the standing estimate. Square: this is a sight, not a knob. */}
+      <div className="absolute inset-y-0 left-1/2 w-px bg-ink2 group-hover:bg-ink transition-colors" />
+      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-1 h-3.5 bg-ink2 group-hover:bg-ink group-focus-visible:bg-ink group-focus-visible:ring-1 group-focus-visible:ring-ink2 group-focus-visible:ring-offset-1 group-focus-visible:ring-offset-bg transition-colors" />
     </div>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 import { useFootageStore } from "@/store/useFootageStore";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Row, SectionHead, Pill } from "@/components/ui/primitives";
 import Icon from "@/components/ui/Icon";
 import EvidenceView, { EvidenceFrame } from "@/components/evidence/EvidenceView";
@@ -178,9 +178,12 @@ export default function RightInspector({ compact }: { compact?: boolean }){
       {/* A retired sortie says so before it says anything else: every number
           below it is still true and none of it is in the season's estimate. */}
       {retired && (
+        /* The lamp is gone. An amber alert glyph in the one accent colour said
+           "warning" in the same green the standing estimate is set in; the
+           sentence already says what happened, and the quiet fill is enough to
+           mark the block as a state rather than a fact. */
         <div className="px-4 py-2.5 border-b border-line bg-surface2">
           <div className="flex items-baseline gap-2">
-            <Icon name="alert" size={12} className="text-accent shrink-0" />
             <span className="text-xs text-ink2 flex-1">
               {t("rec.retire.banner", { when: formatDate(retired, lang) })}
             </span>
@@ -216,14 +219,23 @@ export default function RightInspector({ compact }: { compact?: boolean }){
             <div className="text-2xs text-ink3 mt-1 break-words">{f.error}</div>
           </div>
         ) : f.status === "processing" ? (
-          <div className="flex items-baseline gap-2">
-            <span className="text-hero tnum font-medium leading-none text-ink3 animate-pulse">…</span>
-            <span className="text-sm text-ink2">{t("insp.counting")}</span>
+          /* Counting right now, said in words and one colour — the same way the
+             list row says it, and the way the reference marks a live state. The
+             ellipsis used to pulse: a shimmer is a decorative lamp for an event
+             a word already states, and it made the quiet placeholder the loudest
+             thing on the panel. It holds the hero's height and nothing else. */
+          <div className="flex items-baseline gap-2.5">
+            <span className="text-hero tnum font-medium leading-none text-ink4">…</span>
+            <span className="text-sm text-accent">{t("insp.counting")}</span>
           </div>
         ) : (
-          <div className="flex items-baseline gap-2">
-            <span className="text-hero tnum font-medium leading-none">{totalSeals}</span>
-            <span className="text-sm text-ink2">{tp(totalSeals, "insp.sealsCounted")}</span>
+          <div className="flex items-baseline gap-2.5">
+            {/* The standing count for this sortie — the one figure the signal
+                colour exists for. A zero drops to the quiet step: "this survey
+                found nothing" and "this survey found six hundred" must not
+                arrive at the same volume. */}
+            <span className={`text-hero tnum font-medium leading-none ${totalSeals>0 ? "text-accent" : "text-ink3"}`}>{totalSeals}</span>
+            <span className="text-xs text-ink3 leading-tight">{tp(totalSeals, "insp.sealsCounted")}</span>
             <span className="flex-1" />
             {/* The count is the one number a reviewer cannot fix from the
                 review queue: ruling on animals moves the verified share, not
@@ -246,7 +258,10 @@ export default function RightInspector({ compact }: { compact?: boolean }){
         )}
 
         {correctOpen && (
-          <div className="mt-3 space-y-2 rounded border border-line bg-surface2 p-2.5">
+          /* Held by the rule down its left edge, not by a filled panel: this is
+             an action nested under the figure it changes, and the fields are
+             ruled lines rather than boxes. */
+          <div className="mt-3 space-y-2 border-l border-line pl-3">
             {/* Said before the field, not after it. What this does is replace
                 the number the whole product reports for this sortie — and the
                 sentence has to promise only what the archive actually does:
@@ -263,7 +278,7 @@ export default function RightInspector({ compact }: { compact?: boolean }){
                 value={draft}
                 onChange={(e) => { setDraft(e.currentTarget.value); setCorrectError(null); }}
                 aria-label={t("rec.correct.countLabel")}
-                className="w-full bg-bg border border-line rounded px-2 py-1 text-sm tnum text-ink outline-none focus:border-accent"
+                className="w-full bg-transparent border-b border-line px-0 py-1 text-lead tnum text-ink focus:border-ink2 transition-colors"
               />
             </label>
             <input
@@ -276,7 +291,7 @@ export default function RightInspector({ compact }: { compact?: boolean }){
               onChange={(e) => setWhy(e.currentTarget.value)}
               placeholder={t("rec.correct.reasonPlaceholder")}
               aria-label={t("rec.correct.reasonLabel")}
-              className="w-full bg-bg border border-line rounded px-2 py-1 text-2xs text-ink outline-none focus:border-accent"
+              className="w-full bg-transparent border-b border-line px-0 py-1 text-xs text-ink placeholder:text-ink4 focus:border-ink2 transition-colors"
             />
             {correctError && <p className="text-2xs text-bad leading-relaxed">{correctError}</p>}
             <div className="flex items-center gap-2">
@@ -316,59 +331,71 @@ export default function RightInspector({ compact }: { compact?: boolean }){
             and a single integer would be false precision. Test data has no
             band, so this strip only appears over a real count. */}
         {hasRange && (
-          <div className="mt-3">
-            <div className="relative h-1.5 rounded-full bg-surface2">
-              <div className={`absolute inset-y-0 rounded-full ${bandBroken ? "bg-line" : "bg-accent-soft"}`}
+          /* A 2px rule and a tick, not a capsule meter. The span is the
+              uncertainty and stays decoration — the two numbers under it are
+              what a reader actually takes away — and the tick on the standing
+              estimate is the only thing here allowed the signal colour. */
+          <div className="mt-3.5">
+            <div className="relative h-0.5 bg-hair">
+              <div className={`absolute inset-y-0 ${bandBroken ? "bg-line" : "bg-ink4"}`}
                    style={{ left: "6%", right: "6%" }} />
               {/* No marker on a band the service has already called
                   indefensible. A precise indicator over broken bounds is a
                   drawing of a measurement that does not exist. */}
               {markerLeft != null && (
-                <div className="absolute top-1/2 -translate-y-1/2 h-3 w-0.5 rounded bg-accent"
+                <div className="absolute top-1/2 -translate-y-1/2 h-2.5 w-px bg-accent"
                      style={{ left: `${markerLeft}%` }} />
               )}
             </div>
-            <div className="flex justify-between mt-1 text-2xs tnum text-ink3">
+            <div className="flex justify-between mt-1.5 text-2xs tnum text-ink3">
               <span>{low}</span>
               {bandBroken ? (
                 <span className="text-bad" title={t("insp.bandUnusableWhy")}>
                   {t("insp.bandUnusable")}
                 </span>
               ) : (
-                <span className="text-ink2">{t("insp.rangeBetweenFrames")}</span>
+                <span className="text-ink3">{t("insp.rangeBetweenFrames")}</span>
               )}
               <span>{high}</span>
             </div>
           </div>
         )}
 
-        <div className="flex items-center flex-wrap gap-2 mt-2.5">
-          {f.source==="test" && <Pill tone="accent">{t("pill.testData")}</Pill>}
-          {/* No confidence pill. The detector's score is an uncalibrated model
-              output; printing it as "NN% confidence" dressed it up as a
-              probability the number cannot support. The band is the honest
-              uncertainty, and it is already above. */}
-          {/* No per-detection verdict pill either. It read `detections[0]` and
-              printed one arbitrary animal's status as the whole sortie's — a
-              sortie carries one detection per animal, so the label flipped
-              with array order. The reviewed share is the honest figure and it
-              is already computed and shown in the Review row below. */}
-          {/* A manual basis is not an engine basis and must not look like one:
-              the accent pill says a person produced this number, and the line
-              under it says what that costs — no cross-frame range. */}
-          {/* A corrected number is a person's number, and the pill says which
-              KIND of person's: `basisText` would render the stored 'manual'
-              through a fallback that prints the raw English word in all three
-              languages, and "ground count" would be false over footage nobody
-              stood in front of. */}
-          {corrected
-            ? <Pill tone="accent">{t("rec.correct.pill")}</Pill>
-            : isManual
-              ? <Pill tone="accent">{t("rec.manual.pill")}</Pill>
-              : f.band?.basis && <Pill tone="neutral">{basisText(lang, f.band.basis)}</Pill>}
-          {retired && <Pill tone="neutral">{t("rec.retire.pill")}</Pill>}
-          {provenance && <span className="text-2xs text-ink3">{provenance}</span>}
-        </div>
+        {/* One line of quiet words joined by middots — the reference's marker
+            line. It used to be a row of capsules, which gave a provenance note
+            the same visual weight as the count above it, and a `gap` with three
+            of five conditions false left unrelated words abutting with nothing
+            saying they were a list. */}
+        {/* No confidence pill. The detector's score is an uncalibrated model
+            output; printing it as "NN% confidence" dressed it up as a
+            probability the number cannot support. The band is the honest
+            uncertainty, and it is already above. */}
+        {/* No per-detection verdict pill either. It read `detections[0]` and
+            printed one arbitrary animal's status as the whole sortie's — a
+            sortie carries one detection per animal, so the label flipped
+            with array order. The reviewed share is the honest figure and it
+            is already computed and shown in the Review row below. */}
+        {/* A manual basis is not an engine basis and must not look like one:
+            the italic marker says a person produced this number, and the line
+            under it says what that costs — no cross-frame range. */}
+        {/* A corrected number is a person's number, and the marker says which
+            KIND of person's: `basisText` would render the stored 'manual'
+            through a fallback that prints the raw English word in all three
+            languages, and "ground count" would be false over footage nobody
+            stood in front of. */}
+        <MarkerLine
+          className="mt-2.5"
+          marks={[
+            f.source==="test" ? <Pill key="test" tone="accent">{t("pill.testData")}</Pill> : null,
+            corrected
+              ? <Pill key="basis" tone="accent">{t("rec.correct.pill")}</Pill>
+              : isManual
+                ? <Pill key="basis" tone="accent">{t("rec.manual.pill")}</Pill>
+                : f.band?.basis ? <Pill key="basis" tone="neutral">{basisText(lang, f.band.basis)}</Pill> : null,
+            retired ? <Pill key="retired" tone="neutral">{t("rec.retire.pill")}</Pill> : null,
+            provenance ? <span key="prov" className="text-xs text-ink3">{provenance}</span> : null,
+          ]}
+        />
         {(isManual || corrected) && (
           <p className="text-2xs text-ink3 mt-1.5 leading-relaxed">{t("rec.manual.noBand")}</p>
         )}
@@ -419,13 +446,17 @@ export default function RightInspector({ compact }: { compact?: boolean }){
             {!evidenceOpen && !replayOpen && (
               <EvidenceFrame mediaId={evidence.mediaId} pixels={evidence.pixels} />
             )}
+            {/* A control standing on a photograph needs a body of its own —
+                the plate, the same one a panel floating over the map gets. A
+                bare hairline button over a bright shoreline is unreadable.
+                Both controls carry it, replay included. */}
             <div className="absolute bottom-2 right-2 flex gap-1.5">
               {replayable && (
-                <Button icon="play" className="shadow-pop" onClick={() => setReplayOpen(true)}>
+                <Button icon="play" className="plate shadow-pop" onClick={() => setReplayOpen(true)}>
                   {t("insp.replay")}
                 </Button>
               )}
-              <Button icon="search" className="shadow-pop" onClick={() => setEvidenceOpen(true)}>
+              <Button icon="search" className="plate shadow-pop" onClick={() => setEvidenceOpen(true)}>
                 {t("insp.openEvidence")}
               </Button>
             </div>
@@ -457,13 +488,16 @@ export default function RightInspector({ compact }: { compact?: boolean }){
             measurement. Absent (not empty) means the service never reported
             them, and silence is the only honest rendering of that. */}
         {f.caveats && (
-          <div className="px-4 py-3 border-b border-line">
-            <SectionHead title={t("sec.caveats")} className="mb-1.5" />
+          /* No warning lamps. Each caveat had an alert glyph in the signal
+             colour beside it — the colour reserved for the standing estimate,
+             spent on decoration, repeated once per sentence. The section is
+             named "caveats"; the sentences are the warning. */
+          <div className="px-4 py-3.5 border-b border-hair">
+            <SectionHead title={t("sec.caveats")} className="mb-2" />
             {f.caveats.length ? (
               f.caveats.map((c, i) => (
-                <div key={i} className="flex items-start gap-1.5 py-1 border-b border-line-soft last:border-0">
-                  <Icon name="alert" size={12} className="text-accent shrink-0 mt-[3px]" />
-                  <span className="text-xs text-ink2 leading-relaxed break-words">{c}</span>
+                <div key={i} className="text-xs text-ink2 leading-relaxed break-words py-1.5 border-b border-hair last:border-0 last:pb-0">
+                  {c}
                 </div>
               ))
             ) : (
@@ -472,13 +506,15 @@ export default function RightInspector({ compact }: { compact?: boolean }){
           </div>
         )}
 
-        <div className="px-4 py-3">
-          <SectionHead title={t("sec.sortie")} className="mb-1" />
+        <div className="px-4 py-3.5">
+          <SectionHead title={t("sec.sortie")} className="mb-1.5" />
           {/* A ground count has no file to name. Printing "(archived survey)"
               over a number a person reported would invent footage. */}
+          {/* No `mono` on the filename: the flag means tabular figures now, and
+              a filename is not a column of numbers. */}
           {isManual
             ? <Row label={t("row.file")} value={t("rec.manual.title")} />
-            : <Row label={t("row.file")} value={f.filename} mono />}
+            : <Row label={t("row.file")} value={f.filename} />}
           {/* A quick count names the clip it was cut from, the second it was
               taken at, and the thing it gave up for the speed. The basis alone
               says `single image`, which does not distinguish this from a
@@ -506,7 +542,7 @@ export default function RightInspector({ compact }: { compact?: boolean }){
               label={t("rec.date.counted")}
               value={
                 <span className="inline-flex items-baseline gap-1.5 min-w-0">
-                  <span className="font-mono tnum">{formatDate(f.uploadedAt, lang)}</span>
+                  <span className="tnum">{formatDate(f.uploadedAt, lang)}</span>
                   <span className="text-2xs text-ink3 truncate" title={t("rec.date.notRecorded")}>
                     {t("rec.date.notRecorded")}
                   </span>
@@ -535,7 +571,7 @@ export default function RightInspector({ compact }: { compact?: boolean }){
             value={
               isPlaced(f) ? (
                 <span className="inline-flex items-baseline gap-1.5 min-w-0">
-                  <span className="font-mono tnum">
+                  <span className="tnum">
                     {f.center.lat.toFixed(locPrecision(f.locationSource))},{" "}
                     {f.center.lng.toFixed(locPrecision(f.locationSource))}
                   </span>
@@ -558,7 +594,7 @@ export default function RightInspector({ compact }: { compact?: boolean }){
                   {/* Hectares, formatted by the same shared helper the
                       dashboard total uses - one unit for one quantity across
                       the product. */}
-                  <span className="font-mono tnum">
+                  <span className="tnum">
                     {f.areaM2 != null ? `${formatArea(f.areaM2, lang)} ${t("unit.ha")}` : "—"}
                   </span>
                   {/* title: the source token is what says whether this area was
@@ -682,6 +718,25 @@ export default function RightInspector({ compact }: { compact?: boolean }){
   );
 }
 
+/* A line of quiet markers, middot-separated, skipping the ones that do not
+   apply. This is what the pill badges became: words sitting next to the figure
+   they qualify. The separator is decoration and is hidden from the screen
+   reader, which hears the markers as the separate phrases they are. */
+function MarkerLine({ marks, className = "" }: { marks: React.ReactNode[]; className?: string }) {
+  const shown = marks.filter(Boolean);
+  if (!shown.length) return null;
+  return (
+    <div className={`flex items-baseline flex-wrap gap-x-1.5 gap-y-0.5 ${className}`}>
+      {shown.map((m, i) => (
+        <Fragment key={i}>
+          {i > 0 && <span aria-hidden="true" className="text-xs text-ink4">·</span>}
+          {m}
+        </Fragment>
+      ))}
+    </div>
+  );
+}
+
 /* ------------------------------------------------------- the count history
 
    Every number this sortie has ever carried: the engine's run and each human
@@ -736,10 +791,10 @@ function CountHistory({
   }, [open, rows, loading, error, load]);
 
   return (
-    <div className="px-4 py-3 border-b border-line">
+    <div className="px-4 py-3.5 border-b border-hair">
       <SectionHead
         title={t("rec.counts.title")}
-        className="mb-1.5"
+        className="mb-2"
         right={
           surveyId ? (
             <button
@@ -764,9 +819,13 @@ function CountHistory({
             {rows.map((c) => (
               <div
                 key={c.run_id}
-                className="flex items-baseline gap-2 py-1 border-b border-line-soft last:border-0"
+                className="flex items-baseline gap-2 py-1.5 border-b border-hair last:border-0"
               >
-                <span className={`text-xs tnum shrink-0 w-[52px] ${c.standing ? "text-ink" : "text-ink3"}`}>
+                {/* The standing figure carries the signal colour; the word
+                    marking it stays a quiet word. Colouring the badge and
+                    leaving the number grey put the accent on the label
+                    instead of on the thing the label is about. */}
+                <span className={`text-sm tnum shrink-0 w-[52px] ${c.standing ? "text-accent" : "text-ink3"}`}>
                   {c.best ?? "—"}
                 </span>
                 <span className="text-2xs text-ink3 flex-1 truncate">
@@ -783,7 +842,7 @@ function CountHistory({
                   {c.operator ? ` · ${c.operator}` : ""}
                   {c.reason ? ` · ${c.reason}` : ""}
                 </span>
-                {c.standing && <Pill tone="accent">{t("rec.counts.standing")}</Pill>}
+                {c.standing && <Pill>{t("rec.counts.standing")}</Pill>}
                 <span className="text-2xs text-ink3 tnum shrink-0">
                   {c.created_at ? formatDate(c.created_at, lang) : "—"}
                 </span>
@@ -846,7 +905,8 @@ function PurgeControl({ f }: { f: Footage }) {
   }
 
   return (
-    <div className="mt-2 rounded border border-line bg-bg p-2 space-y-1.5">
+    /* A rule, not a box inside the banner's box. */
+    <div className="mt-2 pl-3 border-l border-bad space-y-1.5">
       <p className="text-2xs text-ink2 leading-relaxed">{t("rec.purge.confirmTitle")}</p>
       {busy ? (
         <p className="text-2xs text-ink3">{t("rec.purge.checking")}</p>
@@ -966,27 +1026,26 @@ function gsdNote(gsd: number | null | undefined, source: string): string {
 }
 
 function FramePreview({ filename, count, det }: { filename:string; count:number; det:any }){
+  /* Nothing to show, said flatly. The blue radial wash that used to sit here
+     was a picture of a photograph that does not exist — and the filename under
+     it was set in a typewriter face for no reason but decoration. */
   return (
-    <div className="w-full h-full relative bg-[#0d0f11] overflow-hidden grid place-items-center">
-      <div
-        className="absolute inset-0 opacity-60"
-        style={{ background:"radial-gradient(ellipse at 35% 40%, #14202a 0%, transparent 65%)" }}
-      />
+    <div className="w-full h-full relative bg-bg overflow-hidden grid place-items-center">
       {/* bbox is optional and, since the real engine replaced the mock, usually
           absent: the counter returns a point per animal, not a box. The mock
           always supplied one, so the old code indexed it unguarded - which
           crashed the whole app the moment a real sortie was selected. */}
       {det && Array.isArray(det.bbox) && det.bbox.length === 4 && (
         <div
-          className="absolute border border-accent rounded-[2px]"
+          className="absolute border border-accent"
           style={{ left: `${det.bbox[0]*100}%`, top: `${det.bbox[1]*100}%`, width: `${det.bbox[2]*100}%`, height: `${det.bbox[3]*100}%` }}
         >
-          <span className="absolute -top-[15px] left-0 bg-accent text-accent-ink text-2xs font-medium px-1 rounded-sm leading-[14px] tnum">
+          <span className="absolute -top-[15px] left-0 bg-bg text-accent text-2xs font-medium px-1 leading-[14px] tnum">
             {count}
           </span>
         </div>
       )}
-      <span className="absolute bottom-2 left-2.5 text-2xs font-mono text-ink3 truncate max-w-[80%]">{filename}</span>
+      <span className="absolute bottom-2 left-2.5 text-2xs text-ink3 truncate max-w-[80%]">{filename}</span>
     </div>
   );
 }

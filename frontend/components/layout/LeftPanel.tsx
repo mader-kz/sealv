@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useFootageStore } from "@/store/useFootageStore";
 import { Button, Field, Stat, SectionHead, Pill } from "@/components/ui/primitives";
 import Icon from "@/components/ui/Icon";
@@ -257,32 +257,42 @@ export default function LeftPanel(){
 
   return (
     <div className="w-[340px] shrink-0 bg-surface flex flex-col overflow-hidden h-full">
-      {/* Headline numbers — figures first, no boxed KPI grid.
-          The sortie count lost its own column: it is in the line underneath
-          and in the section header below, and the estimate's label needs the
-          width in Kazakh. */}
+      {/* The season's one figure, and everything else a step down from it.
+          Two equal-weight KPI columns used to sit here; they are not equal —
+          the standing estimate is the answer this product exists to give and
+          the surveyed area is a qualification of it. So the estimate is the
+          hero, in the one signal colour reserved for exactly this number, and
+          the area drops to a readout line: label left, value right, its
+          caveats under it. */}
       <div className="px-4 pt-4 pb-3.5">
-        <div className="flex gap-5">
-          <div className="shrink-0"><Stat label={t("est.current")} value={est.current} /></div>
-          {/* stat.surveyed, not the analytics panel's longer stat.area: the
-              sub-line is not optional — a sum over the sorties that HAVE a
-              scale, printed bare, reads as the whole survey. */}
-          <div className="min-w-0 flex-1"><Stat label={t("stat.surveyed")} value={areaText} sub={areaSub} /></div>
-        </div>
+        <Stat label={t("est.current")} value={est.current} size="lg" tone="accent" />
         {/* The demoted total. Summing every sortie counts one haul-out once per
             visit, so it is effort, not a population — said in those words. */}
         {/* "across M sorties" counts the sorties the animals were observed ON,
             which is the ones that produced a count — not every row in the
             list. */}
         {counted.length>0 && (
-          <p className="text-2xs text-ink3 mt-2.5 leading-relaxed">
+          <p className="text-2xs text-ink3 mt-2 leading-relaxed">
             {t("est.observedSub", { n: est.observed, m: counted.length })}
           </p>
         )}
+        {/* stat.surveyed, not the analytics panel's longer stat.area: the
+            sub-line is not optional — a sum over the sorties that HAVE a
+            scale, printed bare, reads as the whole survey. */}
+        <div className="mt-3.5 pt-3 border-t border-hair">
+          <div className="flex items-baseline gap-3">
+            <span className="text-xs text-ink3 shrink-0">{t("stat.surveyed")}</span>
+            <span className="flex-1" />
+            <span className="tnum text-lead text-ink truncate" title={areaText}>{areaText}</span>
+          </div>
+          {areaSub && (
+            <p className="text-2xs text-ink3 mt-1 leading-tight" title={areaSub}>{areaSub}</p>
+          )}
+        </div>
       </div>
 
-      <div className="px-3 pb-3 space-y-2 border-b border-line">
-        <div className="flex gap-1.5">
+      <div className="px-4 pb-3 space-y-2 border-b border-line">
+        <div className="flex gap-2">
           <Field value={q} onChange={setQ} placeholder={t("left.filter")} icon="search" />
           <Button icon="download" onClick={exportCSV} title={t("left.exportCsvTitle")} />
           {/* The rare and the destructive, one click further away. Showing the
@@ -298,21 +308,23 @@ export default function LeftPanel(){
                 aria-expanded={menuOpen}
                 aria-controls="left-more"
                 title={t("left.more")}
-                className={`w-7 h-7 grid place-items-center rounded border border-line transition-colors ${
-                  menuOpen ? "bg-surface2 text-ink border-ink3" : "bg-surface2 text-ink2 hover:text-ink hover:border-ink3"
+                className={`w-7 h-7 grid place-items-center border transition-colors ${
+                  menuOpen ? "border-ink4 text-ink bg-surface2" : "border-line text-ink2 hover:text-ink hover:border-ink4 hover:bg-surface2"
                 }`}
               >
                 <span aria-hidden="true" className="text-sm leading-none -translate-y-[3px]">···</span>
               </button>
               {menuOpen && (
+                /* A flat dark plate: this leaves the page plane, so it keeps a
+                   border and a shadow, and nothing else. */
                 <div
                   id="left-more"
-                  className="absolute right-0 top-8 z-30 w-[228px] p-1 bg-surface border border-line rounded shadow-pop"
+                  className="plate absolute right-0 top-8 z-30 w-[228px] p-1 shadow-pop"
                 >
                   {retiredInWindow.length>0 && (
                     <button
                       onClick={()=>{ setShowRetired(v=>!v); setMenuOpen(false); }}
-                      className="w-full text-left px-2 py-1.5 rounded text-xs text-ink2 hover:bg-surface2 hover:text-ink transition-colors"
+                      className="w-full text-left px-2 py-1.5 text-xs text-ink2 hover:bg-surface2 hover:text-ink transition-colors"
                     >
                       {showRetired
                         ? t("rec.retire.hide", { n: retiredInWindow.length })
@@ -342,7 +354,7 @@ export default function LeftPanel(){
                   ) : (
                     <button
                       onClick={()=> setPendingClear(true)}
-                      className="w-full text-left px-2 py-1.5 rounded text-xs text-ink2 hover:bg-surface2 hover:text-bad transition-colors"
+                      className="w-full text-left px-2 py-1.5 text-xs text-ink2 hover:bg-surface2 hover:text-bad transition-colors"
                     >
                       {t("left.clearAll")}
                     </button>
@@ -371,7 +383,7 @@ export default function LeftPanel(){
       <div ref={setListEl} onScroll={onScroll} className="flex-1 overflow-auto">
         <SectionHead
           title={`${t("nav.footage")} · ${filtered.length}`}
-          className="px-3 h-8 sticky top-0 bg-surface border-b border-line-soft z-10"
+          className="px-4 h-8 sticky top-0 bg-bg border-b border-line z-10"
         />
 
         {padTop>0 && <div aria-hidden="true" style={{ height: padTop }} />}
@@ -385,6 +397,29 @@ export default function LeftPanel(){
              filenames; the site name is the only thing that told them apart
              and it was never shown. A ground count has no filename at all. */
           const title = isManual ? t("rec.manual.title") : f.filename;
+          /* The row's markers, as quiet words joined by middots — the pill
+             capsules are gone. Collected into an array rather than emitted
+             inline so the separator can sit BETWEEN them: with three of the
+             five conditions false, a `gap` alone left a run of unrelated words
+             with nothing saying they were a list. */
+          const marks: React.ReactNode[] = [];
+          if(f.source==="test") marks.push(<Pill key="test">{t("pill.test")}</Pill>);
+          /* One frame of a clip, not a photograph. It survives a reload
+             because the archive stores the clip and the second, so the label
+             is a fact about the row rather than a leftover from the session
+             that made it. */
+          if(f.quickCount) marks.push(
+            <Pill key="quick">
+              <span title={t("ingest.quickFrom", { name: f.quickCount.fromVideo, s: f.quickCount.atSeconds })}>
+                {t("pill.quick")}
+              </span>
+            </Pill>,
+          );
+          if(isManual) marks.push(<Pill key="manual" tone="accent">{t("rec.manual.pill")}</Pill>);
+          if(f.retiredAt) marks.push(<Pill key="retired">{t("rec.retire.pill")}</Pill>);
+          /* Losing the coordinates must not lose the fact that there are none:
+             this sortie is in the list and on no map. */
+          if(!isPlaced(f)) marks.push(<Pill key="unplaced">{t("misc.notPlaced")}</Pill>);
           return (
             /* The app's primary navigation was a bare <div onClick>: no tab
                stop, no role, no key handler. */
@@ -398,9 +433,15 @@ export default function LeftPanel(){
               onKeyDown={(e)=>{
                 if(e.key==="Enter" || e.key===" "){ e.preventDefault(); open(); }
               }}
-              className={`group relative px-3 py-2 cursor-pointer border-b border-line-soft transition-colors outline-none focus-visible:bg-surface2 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent ${active?"bg-surface2":"hover:bg-surface2/60"}`}
+              /* `hover:bg-surface2/60` emitted no CSS at all — Tailwind cannot
+                 apply an opacity modifier to a colour declared as a bare
+                 `var()`, so the list's only hover feedback has never rendered.
+                 Full surface-2, which is what the reference's rows use. The
+                 selected row is marked in ink, not in the signal colour: green
+                 is the standing estimate, not "you clicked this". */
+              className={`group relative px-4 py-2 cursor-pointer border-b border-hair transition-colors outline-none focus-visible:bg-surface2 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ink2 ${active?"bg-surface2":"hover:bg-surface2"}`}
             >
-              {active && <span className="absolute left-0 top-0 bottom-0 w-px bg-accent" />}
+              {active && <span className="absolute left-0 top-0 bottom-0 w-0.5 bg-ink" />}
               {/* One line per sortie. The coordinates, the clip length and the
                   track-point count used to fill a second storey with facts the
                   inspector prints in full the instant this row is clicked — a
@@ -408,8 +449,12 @@ export default function LeftPanel(){
                   is what a person scans by: the name, what it is, how far the
                   review got, when it landed, and the count. */}
               <div className="flex items-baseline gap-1.5 overflow-hidden">
+                {/* A filename is not a hash. It used to be set in a typewriter
+                    face, which made every row shout its least interesting
+                    fact; it is Inter now, and the id hash is the one string in
+                    this product that still gets a monospace. */}
                 <span
-                  className={`text-sm truncate min-w-0 text-ink ${isManual ? "" : "font-mono"} ${f.retiredAt ? "line-through opacity-60" : ""}`}
+                  className={`text-sm truncate min-w-0 text-ink ${f.retiredAt ? "line-through opacity-60" : ""}`}
                   title={title}
                 >
                   {title}
@@ -422,25 +467,16 @@ export default function LeftPanel(){
                     {f.siteName}
                   </span>
                 )}
-                <span className="shrink-0 flex items-baseline gap-1.5 empty:hidden">
-                  {f.source==="test" && <Pill>{t("pill.test")}</Pill>}
-                  {/* One frame of a clip, not a photograph. It survives a reload
-                      because the archive stores the clip and the second, so the
-                      label is a fact about the row rather than a leftover from
-                      the session that made it. */}
-                  {f.quickCount && (
-                    <Pill>
-                      <span title={t("ingest.quickFrom", { name: f.quickCount.fromVideo, s: f.quickCount.atSeconds })}>
-                        {t("pill.quick")}
-                      </span>
-                    </Pill>
-                  )}
-                  {isManual && <Pill tone="accent">{t("rec.manual.pill")}</Pill>}
-                  {f.retiredAt && <Pill>{t("rec.retire.pill")}</Pill>}
-                  {/* Losing the coordinates must not lose the fact that there
-                      are none: this sortie is in the list and on no map. */}
-                  {!isPlaced(f) && <Pill>{t("misc.notPlaced")}</Pill>}
-                </span>
+                {marks.length>0 && (
+                  <span className="shrink-0 flex items-baseline gap-1">
+                    {marks.map((m,i)=>(
+                      <Fragment key={i}>
+                        {i>0 && <span aria-hidden="true" className="text-2xs text-ink4">·</span>}
+                        {m}
+                      </Fragment>
+                    ))}
+                  </span>
+                )}
                 <span className="flex-1 min-w-[2px]" />
                 {/* How far the review has got. Rulings, not confirmations: a
                     reviewer who rejected every animal of this sortie has
@@ -467,12 +503,21 @@ export default function LeftPanel(){
                     so countOf() is 0 — and "0 seals" reads as a finished survey
                     that found nothing. State, not a number, until there is one. */}
                 {f.status==="processing" ? (
-                  <span className="shrink-0"><Pill tone="accent">{t("left.processing")}…</Pill></span>
+                  /* Counting right now — one of the two things the signal
+                     colour is for. A capsule is not needed to say it. */
+                  <span className="text-xs text-accent shrink-0">{t("left.processing")}…</span>
                 ) : f.status==="error" ? (
-                  <span className="shrink-0"><Pill tone="bad">{t("left.failed")}</Pill></span>
+                  <span className="text-xs text-bad shrink-0">{t("left.failed")}</span>
                 ) : (
                   <>
-                    <span className="tnum text-sm text-ink shrink-0">{sealCount}</span>
+                    {/* The row's figure, a step up from the text around it, and
+                        right-aligned in a column of its own: tabular digits
+                        only line up if the cell they sit in does too, and a
+                        ragged 0 / 137 / 1282 down a scanning list is the one
+                        thing an instrument may not do. A zero stays muted —
+                        "this sortie found nothing" should not read at the same
+                        volume as six hundred. */}
+                    <span className={`tnum text-lead font-medium shrink-0 min-w-[34px] text-right ${sealCount>0 ? "text-ink" : "text-ink3"}`}>{sealCount}</span>
                     <span className="text-2xs text-ink3 shrink-0">{tp(sealCount, "unit.seals")}</span>
                   </>
                 )}
@@ -496,8 +541,10 @@ export default function LeftPanel(){
               </div>
 
               {pendingRetire===f.id && (
+                /* A nested action, held by the rule down its left edge rather
+                   than by a box inside a row that is already a box. */
                 <div
-                  className="mt-1.5 space-y-1"
+                  className="mt-2 pl-3 border-l border-line space-y-1"
                   onClick={e=>e.stopPropagation()}
                   onKeyDown={e=>e.stopPropagation()}
                 >
@@ -511,7 +558,7 @@ export default function LeftPanel(){
                     autoFocus
                     placeholder={t("rec.retire.reasonPlaceholder")}
                     aria-label={t("rec.retire.reasonLabel")}
-                    className="w-full h-7 bg-surface2 border border-line rounded px-2 text-xs placeholder:text-ink3 focus:outline-none focus:border-ink3 transition-colors"
+                    className="w-full h-7 bg-transparent border-b border-line px-0 text-xs placeholder:text-ink4 focus:border-ink2 transition-colors"
                   />
                   {retireError && <p className="text-2xs text-bad">{retireError}</p>}
                   <div className="flex items-center gap-2 text-2xs">
@@ -555,7 +602,7 @@ export default function LeftPanel(){
                 <p>{t("rec.left.emptyUpload")}</p>
                 <p>{t("rec.left.emptyReview")}</p>
                 <p>{t("rec.left.emptyReport")}</p>
-                <p className="text-2xs pt-1 border-t border-line-soft">{t("rec.left.emptyManual")}</p>
+                <p className="text-2xs pt-2 mt-1 border-t border-hair">{t("rec.left.emptyManual")}</p>
                 <p className="text-2xs">{t("left.emptyHint")}</p>
               </div>
             )}
