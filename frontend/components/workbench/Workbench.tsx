@@ -500,7 +500,15 @@ function WorkbenchBody({ onClose }: { onClose: () => void }) {
     onClose();
   };
 
+  /* Column heads are plain-case labels, not letter-spaced small caps: the
+     table's hierarchy is the rule under the head and the alignment of the
+     figures, not a typographic costume on the word. */
   const th = "px-3 py-2 label font-normal";
+  /* The toolbar's controls are ruled, not boxed — one line under the value,
+     the same object as the search field beside them. */
+  const control =
+    "h-7 bg-transparent border-0 border-b border-line px-0 text-xs text-ink2 " +
+    "hover:border-ink4 focus:border-ink2 transition-colors";
   const progressText = stats.pct === null
     ? t("wb.reviewNothing")
     : t("wb.reviewProgress", { n: stats.verified, m: stats.reviewable, pct: Math.round(stats.pct) });
@@ -511,7 +519,10 @@ function WorkbenchBody({ onClose }: { onClose: () => void }) {
       className="left-auto right-0 top-0 translate-x-0 translate-y-0 h-full w-[94vw] max-w-[940px] p-0 gap-0 flex flex-col overflow-hidden bg-surface border-0 border-l border-line rounded-none sm:rounded-none shadow-pop"
     >
       <DialogHeader className="h-11 shrink-0 border-b border-line flex-row items-center text-left space-y-0 px-4 pr-12 gap-3">
-        <DialogTitle className="text-base font-medium text-ink tracking-normal">{t("nav.detections")}</DialogTitle>
+        {/* The drawer's one large word. Everything else in the header steps
+            down to 11px, which is what lets a 17px title do the work a rule
+            and a fill used to. */}
+        <DialogTitle className="text-title font-semibold text-ink">{t("nav.detections")}</DialogTitle>
         <span className="text-xs text-ink3 tnum">
           {t("wb.ofTotal", { a: total, b: scopeDetections.length })}
           {selected.size > 0 && ` · ${t("wb.selected", { n: selected.size })}`}
@@ -545,7 +556,7 @@ function WorkbenchBody({ onClose }: { onClose: () => void }) {
           aria-label={t("wb.scope")}
           value={scopeValue}
           onChange={(e) => setRunScope(e.target.value || null)}
-          className="h-7 max-w-[280px] bg-surface2 border border-line rounded px-2 text-xs text-ink2"
+          className={`${control} max-w-[280px]`}
         >
           <option value="">{t("wb.scopeAll")}</option>
           {scopeUnresolved && <option value={runScope as string}>{runScope}</option>}
@@ -563,7 +574,7 @@ function WorkbenchBody({ onClose }: { onClose: () => void }) {
           aria-label={t("wb.status")}
           value={status}
           onChange={(e) => setStatus(e.target.value as ReviewStatusFilter)}
-          className="h-7 bg-surface2 border border-line rounded px-2 text-xs text-ink2"
+          className={control}
         >
           <option value="all">{t("wb.allStatus")}</option>
           <option value="auto">{t("status.auto")}</option>
@@ -575,7 +586,7 @@ function WorkbenchBody({ onClose }: { onClose: () => void }) {
           aria-label={t("wb.sortBy")}
           value={sort}
           onChange={(e) => setSort(e.target.value as ReviewSort)}
-          className="h-7 bg-surface2 border border-line rounded px-2 text-xs text-ink2"
+          className={control}
         >
           <option value="score_asc">{t("wb.sortScoreAsc")}</option>
           <option value="score_desc">{t("wb.sortScoreDesc")}</option>
@@ -588,10 +599,25 @@ function WorkbenchBody({ onClose }: { onClose: () => void }) {
         <div className="flex-1" />
         {selected.size > 0 && !confirming && (
           <div className="flex items-center gap-1.5">
-            <Button icon="check" onClick={() => requestBulk("validated")} title={t("wb.markVerifiedWhy")}>
+            {/* A verdict button carries its verdict's colour, and only on
+                hover — at rest the toolbar stays monochrome. The important
+                modifier is load-bearing: the shared Button already declares a
+                `hover:text-ink`, and which of two same-specificity rules wins
+                would otherwise depend on the order Tailwind happened to emit
+                them in. */}
+            <Button
+              icon="check"
+              onClick={() => requestBulk("validated")}
+              title={t("wb.markVerifiedWhy")}
+              className="hover:!text-good hover:!border-good"
+            >
               {t("wb.markVerified")}
             </Button>
-            <Button onClick={() => requestBulk("false_positive")} title={t("wb.markFalseWhy")}>
+            <Button
+              onClick={() => requestBulk("false_positive")}
+              title={t("wb.markFalseWhy")}
+              className="hover:!text-bad hover:!border-bad"
+            >
               {t("wb.markFalse")}
             </Button>
             <Button variant="ghost" onClick={() => setSelected(new Set())}>{t("btn.clear")}</Button>
@@ -602,7 +628,7 @@ function WorkbenchBody({ onClose }: { onClose: () => void }) {
       {/* A bulk verdict names its exact size — and, for a certification, the
           number of sorties it is about to sign for — before it fires. */}
       {confirming && (
-        <div className="px-4 py-2 border-b border-line bg-surface2 flex flex-wrap items-center gap-2">
+        <div className="px-4 py-2 border-b border-line flex flex-wrap items-center gap-2">
           <span className="text-xs text-ink2">
             {confirming.to === "validated"
               ? t("wb.confirmValidate", { n: confirming.ids.length, m: confirmingSorties })
@@ -637,7 +663,11 @@ function WorkbenchBody({ onClose }: { onClose: () => void }) {
                   type="checkbox"
                   aria-label={t("wb.selectAll")}
                   ref={(el) => { if (el) el.indeterminate = selected.size > 0 && !allSelected; }}
-                  className="accent-[color:var(--accent)]"
+                  /* Checkboxes are neutral. Selecting rows is not a live state
+                     and not the standing estimate, which is all the signal
+                     colour is for; a screenful of green boxes would spend it
+                     on the least meaningful thing on the panel. */
+                  className="accent-[color:var(--ink-2)]"
                   checked={allSelected}
                   onChange={(e) => { setSelected(e.target.checked ? new Set(selectableIds) : new Set()); }}
                 />
@@ -684,22 +714,38 @@ function WorkbenchBody({ onClose }: { onClose: () => void }) {
                   }}
                   aria-rowindex={rowIdx + 2}
                   title={kept ? t("wb.kept") : undefined}
-                  className={`border-b border-line-soft transition-colors outline-none focus:shadow-[inset_0_0_0_1px_var(--accent)] ${isSel ? "bg-surface2" : "hover:bg-surface2/60"} ${(d.status === "false_positive" || kept) ? "opacity-45" : ""}`}
+                  /* Hover and selection share the one quiet fill; what marks a
+                     SELECTED row is the bar down its left edge (drawn on the
+                     first cell, below, so it composes with the focus ring
+                     instead of fighting it). The keyboard's row wears the
+                     app's one focus colour rather than the signal green —
+                     walking a table is not a live state.
+
+                     The old pair was `bg-surface2` against `bg-surface2/60`,
+                     and the /60 half generated no CSS at all: Tailwind cannot
+                     put an alpha on a colour declared as a bare `var(--x)`, so
+                     hovering a row had been doing nothing since the token
+                     rename. */
+                  className={`border-b border-hair transition-colors outline-none focus:shadow-[inset_0_0_0_1px_var(--ink-2)] ${isSel ? "bg-hover" : "hover:bg-hover"} ${(d.status === "false_positive" || kept) ? "opacity-45" : ""}`}
                 >
-                  <td className="pl-4 pr-2 py-2">
+                  <td className={`pl-4 pr-2 py-2 ${isSel ? "shadow-[inset_2px_0_0_var(--ink)]" : ""}`}>
                     {/* No checkbox on the aggregate marker: there is nothing
                         behind it a bulk verdict could write to. */}
                     {!agg && (
                       <input
                         type="checkbox"
                         aria-label={t("wb.selectRow")}
-                        className="accent-[color:var(--accent)]"
+                        className="accent-[color:var(--ink-2)]"
                         checked={isSel}
                         onChange={() => toggle(d.id)}
                       />
                     )}
                   </td>
-                  <td className="px-3 py-2 font-mono text-ink truncate" title={`${name} · ${f ? shortRun(f) : d.footageId}`}>
+                  {/* A filename is prose, not a hash — it is set in the same
+                      face as everything else. The monospace face is reserved
+                      for run/survey ids, where reading character by character
+                      is the actual task. */}
+                  <td className="px-3 py-2 text-ink truncate" title={`${name} · ${f ? shortRun(f) : d.footageId}`}>
                     {name}
                   </td>
                   {/* raw model score, not a percentage: it is not a calibrated probability */}
@@ -711,19 +757,29 @@ function WorkbenchBody({ onClose }: { onClose: () => void }) {
                         reviewer's decision on screen, which is right — but a
                         row that did not reach the archive must not look
                         identical to one that did, or the reviewer walks away
-                        believing work is saved that is not. */}
+                        believing work is saved that is not.
+
+                        A square tick, not a round lamp — and it stays a mark
+                        rather than becoming the sentence, because the sentence
+                        is forty characters wide and this column is 88px. The
+                        header carries the count in words; here the job is only
+                        "this row is not the same as its neighbours". */}
                     {d.unsaved && (
                       <span
-                        className="inline-block w-1.5 h-1.5 rounded-full bg-bad mr-1.5 align-middle"
+                        className="inline-block w-[5px] h-[5px] bg-bad mr-1.5 align-middle"
                         title={t("wb.unsaved")}
                         aria-label={t("wb.unsaved")}
                       />
                     )}
-                    <Pill tone={d.status === "validated" ? "good" : "neutral"}>
+                    {/* Both verdicts keep their semantic colour; "auto" is not
+                        a verdict and stays quiet. */}
+                    <Pill tone={d.status === "validated" ? "good" : d.status === "false_positive" ? "bad" : "neutral"}>
                       {d.status === "false_positive" ? t("status.falseShort") : d.status === "validated" ? t("status.validatedL") : t("status.autoL")}
                     </Pill>
                   </td>
-                  <td className="px-3 py-2 font-mono text-xs text-ink3 tnum">
+                  {/* Coordinates are figures: Inter with tabular numerals lines
+                      the column up without a typewriter face. */}
+                  <td className="px-3 py-2 text-xs text-ink3 tnum">
                     {Number.isFinite(d.lat) && Number.isFinite(d.lng)
                       ? `${d.lat.toFixed(3)}, ${d.lng.toFixed(3)}`
                       : t("misc.notPlaced")}
@@ -745,7 +801,7 @@ function WorkbenchBody({ onClose }: { onClose: () => void }) {
                               verified share depends on that one. */}
                           <Button
                             variant="ghost"
-                            className="whitespace-nowrap"
+                            className="whitespace-nowrap hover:!text-good"
                             disabled={d.status === "validated"}
                             title={d.status === "validated" ? t("wb.alreadyVerified") : t("wb.markVerifiedWhy")}
                             onClick={() => rule(d, "validated")}
@@ -754,7 +810,7 @@ function WorkbenchBody({ onClose }: { onClose: () => void }) {
                           </Button>
                           <Button
                             variant="ghost"
-                            className="whitespace-nowrap"
+                            className="whitespace-nowrap hover:!text-bad"
                             disabled={d.status === "false_positive"}
                             title={d.status === "false_positive" ? t("wb.alreadyFalse") : t("wb.markFalseWhy")}
                             onClick={() => rule(d, "false_positive")}

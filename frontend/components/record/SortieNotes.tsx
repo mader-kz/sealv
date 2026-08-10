@@ -118,7 +118,10 @@ export default function SortieNotes({ f }: { f: Footage }) {
         title={t("rec.notes.title")}
         className="mb-1.5"
         right={
-          <span className={`text-2xs tnum ${left <= NEAR_CAP ? "text-accent" : "text-ink3"}`}>
+          /* Running out of room is not a live state and not a failure, so it
+             steps UP the neutral ramp rather than reaching for a colour: the
+             counter goes from quiet to plain the moment it starts to matter. */
+          <span className={`text-2xs tnum ${left <= NEAR_CAP ? "text-ink" : "text-ink3"}`}>
             {t("rec.notes.count", { n: text.length, max: NOTES_MAX })}
           </span>
         }
@@ -132,7 +135,9 @@ export default function SortieNotes({ f }: { f: Footage }) {
         spellCheck={false}
         placeholder={t("rec.notes.placeholder")}
         aria-label={t("rec.notes.title")}
-        className="w-full bg-surface2 border border-line rounded px-2.5 py-2 text-sm leading-relaxed text-ink placeholder:text-ink3 focus:outline-none focus:border-ink3 transition-colors resize-y min-h-[72px]"
+        /* Ruled, not boxed — and ruled on all four sides would be a box, so it
+           is one line under the writing, the way a field notebook is ruled. */
+        className="w-full bg-transparent border-0 border-b border-line px-0 py-2 text-sm leading-relaxed text-ink placeholder:text-ink4 focus:border-ink2 transition-colors resize-y min-h-[72px]"
       />
       <div className="flex items-baseline justify-between gap-2 mt-1">
         {/* Attribution, and only the attribution the data supports. The survey

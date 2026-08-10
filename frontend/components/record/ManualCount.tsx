@@ -23,9 +23,14 @@ import { useFootageStore } from "@/store/useFootageStore";
 import { Button } from "@/components/ui/primitives";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
-const LABEL = "text-2xs text-ink3";
+/* A field is a value on a ruled line, not a value in a box. The label sits
+   above it in plain case at the label step, the rule brightens on focus, and
+   the keyboard focus ring from globals.css is left alone rather than
+   suppressed for looks. */
+const LABEL = "label";
 const INPUT =
-  "w-full h-7 mt-0.5 bg-surface2 border border-line rounded px-2 text-sm text-ink placeholder:text-ink3 focus:outline-none focus:border-ink3 transition-colors";
+  "w-full h-7 mt-0.5 bg-transparent border-0 border-b border-line px-0 text-sm text-ink " +
+  "placeholder:text-ink4 focus:border-ink2 transition-colors";
 
 export default function ManualCount({
   open,
@@ -133,15 +138,15 @@ export default function ManualCount({
         className="max-w-[420px] w-[92vw] p-0 gap-0 bg-surface border-line rounded"
       >
         <DialogHeader className="px-4 py-3 pr-12 border-b border-line space-y-0">
-          <DialogTitle className="text-sm font-medium text-ink tracking-normal">
+          <DialogTitle className="text-lead font-medium text-ink tracking-normal">
             {t("rec.manual.title")}
           </DialogTitle>
         </DialogHeader>
 
-        <div className="px-4 py-3 space-y-2.5 max-h-[70vh] overflow-auto">
-          <p className="text-2xs text-ink3 leading-relaxed">{t("rec.manual.lead")}</p>
+        <div className="px-4 py-3 space-y-3 max-h-[70vh] overflow-auto">
+          <p className="text-xs text-ink3 leading-relaxed">{t("rec.manual.lead")}</p>
 
-          <div className="flex gap-1.5">
+          <div className="flex gap-4">
             <label className="block flex-1 min-w-0">
               <span className={LABEL}>{t("rec.manual.count")}</span>
               <input
@@ -163,8 +168,10 @@ export default function ManualCount({
             </label>
           </div>
 
-          <div>
-            <span className={LABEL}>{t("rec.manual.location")}</span>
+          {/* A group of fields, so its word is a section head carried by
+              weight — the fields under it keep the label step. */}
+          <div className="pt-1">
+            <span className="hd mb-1.5">{t("rec.manual.location")}</span>
             {sites.length > 0 && (
               <select
                 value={siteId}
@@ -178,14 +185,16 @@ export default function ManualCount({
                 ))}
               </select>
             )}
-            <div className="flex gap-1.5 mt-1">
+            {/* Coordinates are figures, not hashes: tabular Inter, no
+                typewriter face. */}
+            <div className="flex gap-4 mt-1.5">
               <label className="block flex-1 min-w-0">
                 <span className={LABEL}>{t("rec.manual.lat")}</span>
                 <input
                   inputMode="decimal"
                   value={lat}
                   onChange={(e) => setLat(e.target.value)}
-                  className={`${INPUT} tnum font-mono`}
+                  className={`${INPUT} tnum`}
                 />
               </label>
               <label className="block flex-1 min-w-0">
@@ -194,19 +203,21 @@ export default function ManualCount({
                   inputMode="decimal"
                   value={lng}
                   onChange={(e) => setLng(e.target.value)}
-                  className={`${INPUT} tnum font-mono`}
+                  className={`${INPUT} tnum`}
                 />
               </label>
             </div>
+            {/* A quiet text affordance, not the signal colour: taking the map
+                pin's coordinate is a convenience, not a live state. */}
             {pin ? (
               <button
                 onClick={() => { setLat(String(pin.lat)); setLng(String(pin.lng)); }}
-                className="text-2xs text-accent hover:underline mt-1"
+                className="text-xs text-ink2 hover:text-ink transition-colors mt-1.5"
               >
                 {t("rec.manual.usePin")}
               </button>
             ) : (
-              <p className="text-2xs text-ink3 mt-1 leading-relaxed">{t("rec.manual.pinHint")}</p>
+              <p className="text-xs text-ink3 mt-1.5 leading-relaxed">{t("rec.manual.pinHint")}</p>
             )}
           </div>
 
@@ -238,15 +249,15 @@ export default function ManualCount({
               onChange={(e) => setNote(e.target.value.slice(0, NOTES_MAX))}
               maxLength={NOTES_MAX}
               rows={2}
-              className="w-full mt-0.5 bg-surface2 border border-line rounded px-2 py-1.5 text-sm text-ink placeholder:text-ink3 focus:outline-none focus:border-ink3 transition-colors resize-y"
+              className="w-full mt-0.5 bg-transparent border-0 border-b border-line px-0 py-1.5 text-sm text-ink placeholder:text-ink4 focus:border-ink2 transition-colors resize-y"
             />
           </label>
 
-          <p className="text-2xs text-ink3 leading-relaxed">{t("rec.manual.noBand")}</p>
-          {error && <p className="text-2xs text-bad leading-relaxed">{error}</p>}
+          <p className="text-xs text-ink3 leading-relaxed">{t("rec.manual.noBand")}</p>
+          {error && <p className="text-xs text-bad leading-relaxed">{error}</p>}
         </div>
 
-        <div className="px-4 py-3 border-t border-line flex gap-1.5">
+        <div className="px-4 py-3 border-t border-line flex gap-2">
           <Button variant="primary" onClick={() => void submit()} disabled={busy}>
             {busy ? t("rec.manual.saving") : t("rec.manual.submit")}
           </Button>

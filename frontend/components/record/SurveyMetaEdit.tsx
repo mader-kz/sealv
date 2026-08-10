@@ -34,6 +34,15 @@ import { Button, SectionHead } from "@/components/ui/primitives";
    not, so a correction made in Kazakh reads the same to the endpoint. */
 const TIDES = ["low", "falling", "high", "rising", "unknown"] as const;
 
+/* Correcting a measurement is typing a number on a ruled line. Boxed inputs
+   drew five identical grey rectangles down a 380px column and made the form
+   the loudest thing in the inspector; the rule under each value is enough,
+   and the label above it in plain case does the rest. */
+const LABEL = "label";
+const FIELD =
+  "w-full h-7 mt-0.5 bg-transparent border-0 border-b border-line px-0 text-sm " +
+  "placeholder:text-ink4 focus:border-ink2 transition-colors";
+
 /** `2026-04-11T08:12:00Z` -> `2026-04-11` for a date input, in UTC: the input
  *  has no zone, and shifting a capture date by the reader's offset would move
  *  a morning sortie to the previous day in the field. */
@@ -117,50 +126,50 @@ export default function SurveyMetaEdit({ f }: { f: Footage }) {
         right={
           <button
             onClick={() => { setOpen((v) => !v); setError(null); }}
-            className="text-2xs text-ink3 hover:text-ink transition-colors"
+            className="text-xs text-ink3 hover:text-ink transition-colors"
           >
             {open ? t("rec.edits.hide") : t("rec.edits.show")}
           </button>
         }
       />
       {open && (
-        <div className="space-y-2">
+        <div className="space-y-3">
           <label className="block">
-            <span className="text-2xs text-ink3">{t("rec.meta.capturedAt")}</span>
+            <span className={LABEL}>{t("rec.meta.capturedAt")}</span>
             <input
               type="date"
               max={today}
               value={form.captured}
               onChange={(e) => set("captured", e.target.value)}
-              className="w-full h-7 mt-0.5 bg-surface2 border border-line rounded px-2 text-sm tnum focus:outline-none focus:border-ink3 transition-colors"
+              className={`${FIELD} tnum`}
             />
           </label>
-          <div className="flex gap-1.5">
+          <div className="flex gap-4">
             <label className="block flex-1 min-w-0">
-              <span className="text-2xs text-ink3">{t("rec.meta.altitude")}</span>
+              <span className={LABEL}>{t("rec.meta.altitude")}</span>
               <input
                 inputMode="decimal"
                 value={form.altitude}
                 onChange={(e) => set("altitude", e.target.value)}
-                className="w-full h-7 mt-0.5 bg-surface2 border border-line rounded px-2 text-sm tnum focus:outline-none focus:border-ink3 transition-colors"
+                className={`${FIELD} tnum`}
               />
             </label>
             <label className="block flex-1 min-w-0">
-              <span className="text-2xs text-ink3">{t("rec.meta.gsd")}</span>
+              <span className={LABEL}>{t("rec.meta.gsd")}</span>
               <input
                 inputMode="decimal"
                 value={form.gsd}
                 onChange={(e) => set("gsd", e.target.value)}
-                className="w-full h-7 mt-0.5 bg-surface2 border border-line rounded px-2 text-sm tnum focus:outline-none focus:border-ink3 transition-colors"
+                className={`${FIELD} tnum`}
               />
             </label>
           </div>
           <label className="block">
-            <span className="text-2xs text-ink3">{t("rec.meta.tide")}</span>
+            <span className={LABEL}>{t("rec.meta.tide")}</span>
             <select
               value={form.tide}
               onChange={(e) => set("tide", e.target.value)}
-              className="w-full h-7 mt-0.5 bg-surface2 border border-line rounded px-2 text-sm text-ink focus:outline-none focus:border-ink3 transition-colors"
+              className={`${FIELD} text-ink`}
             >
               <option value="">{t("rec.tide.unset")}</option>
               {TIDES.map((v) => (
@@ -175,7 +184,9 @@ export default function SurveyMetaEdit({ f }: { f: Footage }) {
             </select>
           </label>
 
-          <div className="text-2xs text-ink3 leading-relaxed space-y-1 pt-0.5">
+          {/* Four consequences of a correction, ruled off from the fields
+              rather than boxed into a notice. */}
+          <div className="text-xs text-ink3 leading-relaxed space-y-1 pt-1.5 border-t border-hair">
             <p>{t("rec.meta.noticeArea")}</p>
             <p>{t("rec.meta.noticeAlt")}</p>
             {/* The one sentence that must never soften: nothing here re-counts. */}
@@ -183,8 +194,8 @@ export default function SurveyMetaEdit({ f }: { f: Footage }) {
             <p>{t("rec.meta.noticeDate")}</p>
           </div>
 
-          {error && <p className="text-2xs text-bad leading-relaxed">{error}</p>}
-          <div className="flex gap-1.5">
+          {error && <p className="text-xs text-bad leading-relaxed">{error}</p>}
+          <div className="flex gap-2">
             <Button variant="primary" onClick={() => void submit()} disabled={busy}>
               {busy ? t("rec.meta.saving") : t("rec.meta.save")}
             </Button>

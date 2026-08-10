@@ -190,7 +190,7 @@ export default function Dashboard({ onClose }: { onClose?: ()=>void }){
   return (
     <div className="w-[380px] shrink-0 bg-surface border-l border-line flex flex-col overflow-hidden">
       <div className="h-9 shrink-0 pl-4 pr-1.5 flex items-center justify-between border-b border-line">
-        <span className="label">{t("nav.analytics")}</span>
+        <span className="hd">{t("nav.analytics")}</span>
         <div className="flex items-center gap-1">
           <Button
             onClick={onExportPDF}
@@ -208,33 +208,50 @@ export default function Dashboard({ onClose }: { onClose?: ()=>void }){
         {/* Headline figures — standing estimate, flown, covered.
             The lead number is no longer the sum over sorties: that sum counts
             the same haul-out once per visit. It is still printed, one line
-            down, as what it honestly is. */}
+            down, as what it honestly is.
+
+            One hero, then a readout. Three equal Stats side by side made the
+            standing estimate, a sortie tally and a hectare figure look like
+            three findings of equal weight — and squeezed all three into 380px,
+            which is how a five-figure hectare total came to clip mid-number.
+            The estimate is the figure this survey stands behind, so it is the
+            only large thing here and the only one in the signal colour;
+            everything else steps down to a labelled row. */}
         <div className="px-4 py-4 border-b border-line">
-          {/* The two counts keep their intrinsic width; only the area column
-              absorbs the squeeze. Three even thirds of 380px clipped a
-              five-figure hectare total mid-number. */}
-          <div className="flex gap-4">
-            <div className="shrink-0"><Stat label={t("est.current")} value={est.current} /></div>
-            <div className="shrink-0"><Stat label={t("stat.sorties")} value={filtered.f.length} /></div>
-            {/* A measured scale and a guessed one must not print identically:
-                the sub-line names whichever caveat applies to this total. */}
-            <div className="min-w-0 flex-1">
-              <Stat
-                label={t("stat.area")}
-                value={areaText ? t("dash.areaHa", { v: areaText }) : "—"}
-                sub={areaCaveat}
-              />
-            </div>
-          </div>
+          <Stat label={t("est.current")} value={est.current} size="lg" tone="accent" />
           {filtered.f.length>0 && (
-            <div className="mt-3 space-y-1">
-              <p className="text-2xs text-ink3">
-                {t("est.observedSub", { n: est.observed, m: filtered.f.length })}
-              </p>
-              <p className="text-2xs text-ink3 leading-relaxed">
-                {t("est.basis", { km: SITE_RADIUS_M/1000 })}
-              </p>
+            <p className="text-xs text-ink3 tnum mt-1.5">
+              {t("est.observedSub", { n: est.observed, m: filtered.f.length })}
+            </p>
+          )}
+          {/* Aligned columns, hairline-separated. No boxes: the label column
+              and the figure column are the structure. */}
+          <dl className="mt-3.5">
+            <div className="grid grid-cols-[104px_1fr] items-baseline gap-x-3 py-1.5 border-t border-hair">
+              <dt className="label">{t("stat.sorties")}</dt>
+              <dd className="tnum text-lead text-ink">{filtered.f.length}</dd>
             </div>
+            <div className="grid grid-cols-[104px_1fr] items-baseline gap-x-3 py-1.5 border-t border-hair">
+              <dt className="label">{t("stat.area")}</dt>
+              {/* A measured scale and a guessed one must not print identically:
+                  the line under the figure names whichever caveat applies to
+                  this total, and it wraps rather than hiding behind a hover. */}
+              <dd className="min-w-0">
+                <span className="tnum text-lead text-ink">
+                  {areaText ? t("dash.areaHa", { v: areaText }) : "—"}
+                </span>
+                {areaCaveat && (
+                  <span className="block text-xs text-ink3 leading-tight mt-0.5" title={areaCaveat}>
+                    {areaCaveat}
+                  </span>
+                )}
+              </dd>
+            </div>
+          </dl>
+          {filtered.f.length>0 && (
+            <p className="text-xs text-ink3 leading-relaxed mt-3">
+              {t("est.basis", { km: SITE_RADIUS_M/1000 })}
+            </p>
           )}
         </div>
 
@@ -258,10 +275,20 @@ export default function Dashboard({ onClose }: { onClose?: ()=>void }){
                         key={b.f.id}
                         onClick={()=> goTo(b.f)}
                         title={`${b.f.filename} · ${b.best}${hasRange ? ` (${b.low}–${b.high})` : ""}`}
-                        className="flex-1 relative h-full flex items-end min-w-[3px]"
+                        className="group flex-1 relative h-full flex items-end min-w-[3px]"
                       >
+                        {/* Square and quiet, all of it inside the neutral
+                            ramp. The column is an echo of a number the panel
+                            already prints, so it sits on the decorative step
+                            and rises one step under the cursor and one more
+                            when it is the selected sortie — never to full ink,
+                            which at this size would out-shout the estimate.
+                            The whisker carries the band, which IS a fact, so
+                            it stays at the floor rather than below it. */}
                         <div
-                          className={`w-full rounded-[2px] ${selectedId===b.f.id ? "bg-ink" : "bg-ink2"}`}
+                          className={`w-full transition-colors ${
+                            selectedId===b.f.id ? "bg-ink2" : "bg-ink4 group-hover:bg-ink3"
+                          }`}
                           style={{ height: Math.max(2, (b.best/maxBar)*H) }}
                         />
                         {hasRange && (
@@ -277,7 +304,7 @@ export default function Dashboard({ onClose }: { onClose?: ()=>void }){
                     );
                   })}
                 </div>
-                <div className="flex items-baseline justify-between text-2xs text-ink3 mt-1.5">
+                <div className="flex items-baseline justify-between text-2xs text-ink3 tnum mt-1.5">
                   <span>{day(bars[0].f.uploadedAt)}</span>
                   <span>{day(bars[bars.length-1].f.uploadedAt)}</span>
                 </div>
@@ -318,12 +345,13 @@ export default function Dashboard({ onClose }: { onClose?: ()=>void }){
                     onClick={()=> setOpenSite(open ? null : key)}
                     aria-expanded={open}
                     title={open ? t("dash.collapseSite") : t("dash.expandSite")}
-                    className="w-full flex items-baseline justify-between gap-3 text-xs text-left rounded px-1 -mx-1 py-0.5 hover:bg-surface2"
+                    className="w-full flex items-baseline justify-between gap-3 text-xs text-left px-1 -mx-1 py-1 transition-colors hover:bg-hover"
                   >
                     {/* A person's name for the place when there is one, the
                         measured centroid when there is not — never a region
-                        invented from a latitude. */}
-                    <span className={`text-ink2 truncate ${site.name ? "" : "font-mono tnum"}`}>
+                        invented from a latitude. A coordinate is a number, not
+                        a hash: Inter with tabular figures, no typewriter. */}
+                    <span className={`text-ink2 truncate ${site.name ? "" : "tnum"}`}>
                       {site.name ?? `${site.centroid.lat.toFixed(2)}, ${site.centroid.lng.toFixed(2)}`}
                     </span>
                     <span className="tnum text-ink3 shrink-0">
@@ -367,12 +395,15 @@ export default function Dashboard({ onClose }: { onClose?: ()=>void }){
                 {bins.map(b=>(
                   <div key={b.label} className="flex-1 flex flex-col items-center gap-1.5">
                     <div className="h-12 w-full flex items-end">
+                      {/* The bar restates the count printed directly under it,
+                          so it stays on the decorative step; an empty bin is a
+                          hairline, and its zero is muted rather than shouted. */}
                       <div
-                        className={`w-full rounded-[2px] ${b.count ? "bg-ink2" : "bg-line-soft"}`}
+                        className={`w-full ${b.count ? "bg-ink4" : "bg-hair"}`}
                         style={{ height: Math.max(2, (b.count/maxBin)*48) }}
                       />
                     </div>
-                    <span className="text-2xs tnum text-ink">{b.count}</span>
+                    <span className={`text-2xs tnum ${b.count ? "text-ink" : "text-ink3"}`}>{b.count}</span>
                     <span className="text-2xs text-ink3">{b.label}</span>
                   </div>
                 ))}
@@ -392,22 +423,23 @@ export default function Dashboard({ onClose }: { onClose?: ()=>void }){
             : review.reviewable===0
               ? <p className="text-sm text-ink3 mt-2.5">{t("dash.onlyUnreviewable", { n: review.unreviewable })}</p>
               : <>
-                  {/* The bar is progress through the work, so its numerator is
-                      rulings of either kind. The split underneath is what the
-                      rulings were — a season where every animal was rejected is
-                      fully reviewed and found nothing, and those are two facts
-                      that must not be collapsed into one share. */}
-                  <p className="text-sm text-ink2 mt-2.5">
+                  {/* Said, not metered. The share was already written out in
+                      full one line above the bar, so the bar was a second,
+                      vaguer copy of a sentence — and a filled strip reads as a
+                      target being approached, which is a claim nobody made.
+                      The numerator is rulings of either kind; the split
+                      underneath is what the rulings WERE, because a season
+                      where every animal was rejected is fully reviewed and
+                      found nothing, and those two facts must not collapse into
+                      one share. */}
+                  <p className="text-sm text-ink2 tnum mt-2.5">
                     {t("dash.verifiedOf", { n: review.ruled, r: review.reviewable, pct: reviewPct })}
                   </p>
-                  <div className="h-1 bg-line-soft rounded-full overflow-hidden mt-2">
-                    <div className="h-full bg-ink2 rounded-full" style={{ width:`${reviewPct}%` }} />
-                  </div>
-                  <p className="text-2xs text-ink3 mt-1.5 leading-relaxed">
+                  <p className="text-2xs text-ink3 tnum mt-1.5 leading-relaxed">
                     {t("dash.ruledSplit", { v: review.verified, x: review.rejected })}
                   </p>
                   {review.unreviewable>0 && (
-                    <p className="text-2xs text-ink3 mt-1.5 leading-relaxed">
+                    <p className="text-2xs text-ink3 tnum mt-1.5 leading-relaxed">
                       {t("dash.plusUnreviewable", { n: review.unreviewable })}
                     </p>
                   )}
