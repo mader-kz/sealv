@@ -26,15 +26,22 @@ export default function TopBar(){
      localStorage the same way and for the same reason. */
   useEffect(()=>{ initLang(); initOperator(); },[]);
 
+  /* The instrument's top edge: a hairline, not a bar. Nothing here is a box —
+     the wordmark sits on the same 20px gutter as the rail below it, the
+     operator is a ruled line, and the language is three plain words. */
   return (
-    <div className="h-11 shrink-0 bg-bg border-b border-line flex items-center px-3 gap-3">
-      <div className="flex items-baseline gap-2.5 select-none">
-        <span className="text-base font-medium tracking-tight">SEALv</span>
-        <span className="text-xs text-ink3">{t("brand.sub")}</span>
+    <div className="h-9 shrink-0 bg-bg border-b border-hair flex items-center px-5 gap-4">
+      <div className="flex items-baseline gap-2.5 select-none min-w-0">
+        <span className="text-base font-semibold tracking-tight">SEALv</span>
+        <span className="text-xs text-ink3 truncate">{t("brand.sub")}</span>
       </div>
 
       <div className="flex-1" />
 
+      {/* A ruled line, not an input box. The focus widening is kept — it is the
+          only way a long name is readable in a 128px slot — but the border no
+          longer draws a rectangle round an empty field, and the keyboard focus
+          ring from globals.css is no longer suppressed for looks. */}
       <input
         value={operator ?? ""}
         onChange={(e)=> setOperator(e.target.value)}
@@ -42,17 +49,20 @@ export default function TopBar(){
         placeholder={t("rec.operator.placeholder")}
         aria-label={t("rec.operator.who")}
         title={t("rec.operator.title")}
-        className="w-[128px] h-6 bg-surface border border-line rounded px-2 text-2xs text-ink placeholder:text-ink3 focus:outline-none focus:border-ink3 focus:w-[180px] transition-all"
+        className="w-[128px] h-6 bg-transparent border-b border-line px-0 text-xs text-ink placeholder:text-ink4 focus:border-ink2 focus:w-[180px] transition-all"
       />
 
-      <div className="flex items-center gap-0.5 bg-surface border border-line rounded p-0.5">
+      {/* Three words, not a segmented capsule. The current language is the one
+          in full ink with a rule under it — the same marker the rail and the
+          list rows use for "this is the one you are on". */}
+      <div className="flex items-baseline gap-3 shrink-0">
         {LANGS.map(l=>(
           <button
             key={l}
             onClick={()=> setLang(l)}
             aria-pressed={lang===l}
-            className={`px-1.5 h-6 rounded text-2xs tracking-wide transition-colors ${
-              lang===l ? "bg-surface2 text-ink" : "text-ink3 hover:text-ink2"
+            className={`text-2xs pb-0.5 border-b transition-colors ${
+              lang===l ? "text-ink border-ink" : "text-ink3 border-transparent hover:text-ink2"
             }`}
           >
             {LANG_LABELS[l]}
