@@ -36,7 +36,11 @@ const DARK_STYLE: any = {
     },
     esri: {
       type: "raster",
-      tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
+      // blankTile=false: where imagery runs out, the server answers 404
+      // instead of a grey "map data not yet available" plate — and a raster
+      // tile that errors leaves the overzoomed parent imagery on screen,
+      // which is the honest rendering of "this is as sharp as it gets".
+      tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}?blankTile=false"],
       tileSize: 256,
       attribution: "Esri",
     }
@@ -294,6 +298,10 @@ export default function CaspianMap({
       center: AKTAU,
       zoom: 6.8,
       maxBounds: [[42.5,34],[59,50.5]],
+      // Past ~z18 even the deepest coastal imagery is pure overzoom mush and
+      // the wheel only manufactures blur; the survey has nothing to say at
+      // per-stone scale anyway.
+      maxZoom: 18,
       attributionControl: false,
       dragPan: true,
       scrollZoom: true,
