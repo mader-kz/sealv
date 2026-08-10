@@ -161,6 +161,28 @@ export default function SiteCard({
     setError(null);
   }, [site.siteId, site.name, site.centroid.lat, site.centroid.lng]);
 
+  /* Escape closes the card — and, while a rename is open, closes the rename
+     first. Anything that covers the chart has to be dismissible from the
+     keyboard; the × in the corner cannot be the only way out of a panel this
+     tall. A rename in progress is a separate layer of the same gesture: the
+     first press abandons the edit, the second puts the card away, so Escape
+     never silently discards typing AND the panel in one keystroke. */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      if (editing) {
+        setEditing(false);
+        setError(null);
+        setName(site.name ?? "");
+        return;
+      }
+      onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [editing, onClose, site.name]);
+
   const members = site.footages;
 
   /* The same write SitePicker performs from the sortie inspector, addressed to
