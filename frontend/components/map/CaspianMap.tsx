@@ -109,7 +109,34 @@ export type SiteChip = {
 
 /* A chip, once projected. `x`/`y` are canvas pixels; everything else is the
    SiteChip it came from, copied flat so sameChips can diff without walking. */
-type ColonyChip = SiteChip & { x: number; y: number };
+type ColonyChip = SiteChip & { x: number; y: number; ay: number };
+
+/* Push overlapping chips apart vertically. Two sites a couple of kilometres
+   apart project onto the same pixels at basin zoom, and the upper chip then
+   swallows the lower one's clicks — the site card behind it was unreachable,
+   which the smoke run proved with a 30-second click timeout. The estimate is
+   deliberately rough (a chip is ~52px tall plus its band line and spark);
+   roughness only costs a few extra pixels of separation, never a swallowed
+   click. `ay` keeps the true anchor so a displaced chip can draw a stalk back
+   to the coordinate it actually claims. */
+function separateChips(chips: ColonyChip[]) {
+  const H = (c: ColonyChip) =>
+    52 + (c.low != null && c.high != null && c.low !== c.high ? 14 : 0) +
+    (c.spark.length > 1 ? SPARK_H + 5 : 0);
+  const W = 132;
+  const byY = [...chips].sort((a, b) => a.y - b.y);
+  for (let pass = 0; pass < 3; pass++) {
+    for (let i = 1; i < byY.length; i++) {
+      for (let j = 0; j < i; j++) {
+        const a = byY[j], b = byY[i];
+        if (Math.abs(a.x - b.x) >= W) continue;
+        const need = (H(a) + H(b)) / 2 + 4;
+        const gap = b.y - a.y;
+        if (gap < need) b.y = a.y + need;
+      }
+    }
+  }
+}
 
 /* A figure that must not spend the signal colour: a counted zero, and a site
    with no standing count at all. One declaration for both — the chip sets
@@ -661,8 +688,9 @@ export default function CaspianMap({
         for(const a of chipAnchors){
           const pr = m.project([a.lng, a.lat]);
           if(rect && (pr.x < -120 || pr.x > rect.width+120 || pr.y < -120 || pr.y > rect.height+120)) continue;
-          chips.push({ ...a, x:pr.x, y:pr.y });
+          chips.push({ ...a, x:pr.x, y:pr.y, ay:pr.y });
         }
+        separateChips(chips);
         setOverlayChips(prev=> sameChips(prev, chips) ? prev : chips);
         /* The zoom, for the pin readout: a coordinate clicked at basin zoom
            and one clicked at 200 m are not the same claim, and the sortie's
@@ -822,9 +850,27 @@ export default function CaspianMap({
           const muted = c.retired || c.count===0;
           const label = c.name ?? `${c.lat.toFixed(3)}, ${c.lng.toFixed(3)}`;
           const band = c.low!=null && c.high!=null && c.low!==c.high;
+          const displaced = Math.abs(c.y - c.ay) > 8;
           return (
+            <span key={c.key} style={{ display: "contents" }}>
+            {displaced && (
+              /* The stalk: a displaced chip still points at the coordinate it
+                 claims, exactly like the prototype. Drawn from the chip's
+                 centre to the true anchor; hairline, never interactive. */
+              <span
+                aria-hidden="true"
+                style={{
+                  position: "absolute",
+                  left: c.x,
+                  top: Math.min(c.y, c.ay),
+                  height: Math.abs(c.y - c.ay),
+                  width: 1,
+                  background: "var(--ink-4)",
+                  pointerEvents: "none",
+                }}
+              />
+            )}
             <button
-              key={c.key}
               onClick={()=>handleChipClick(c)}
               /* The place's name first — a chip reading "Kenderli · 218 seals"
                  is a sentence an ecologist can act on; "218 seals" over a dot
@@ -877,6 +923,7 @@ export default function CaspianMap({
                 </svg>
               )}
             </button>
+            </span>
           );
         })}
       </div>
@@ -929,7 +976,7 @@ function sameChips(a: ColonyChip[], b: ColonyChip[]){
        per visit, so this is a handful of comparisons per chip. */
     if(x.spark.length!==y.spark.length) return false;
     for(let k=0;k<x.spark.length;k++) if(x.spark[k]!==y.spark[k]) return false;
-    if(Math.abs(x.x-y.x)>0.5 || Math.abs(x.y-y.y)>0.5) return false;
+    if(Math.abs(x.x-y.x)>0.5 || Math.abs(x.y-y.y)>0.5 || Math.abs(x.ay-y.ay)>0.5) return false;
   }
   return true;
 }
