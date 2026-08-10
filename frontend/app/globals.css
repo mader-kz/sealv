@@ -415,6 +415,22 @@ a:focus-visible {
   border-top-color: var(--line) !important;
 }
 
+/* The chip layer: the map's own rectangle, and the hard edge of it.
+
+   Chips are absolutely positioned from projected map pixels, so a chip whose
+   anchor sits just off the canvas used to paint OUTSIDE the map — one was
+   caught rendering on top of the season header above the chart. This element
+   covers the map container exactly (both are inset-0 siblings), and clipping
+   here is what makes a chip sliding off the edge go half-visible and then
+   away instead of escaping into unrelated UI. The stalk a displaced chip
+   draws back to its anchor lives in here too, so it clips with the chip.
+
+   It stays pointer-events:none (the chips themselves opt back in) — overflow
+   changes what paints, never what is clickable. */
+.chip-layer {
+  overflow: hidden;
+}
+
 /* Colony chip: one per sortie — the count, and under it the honest low–high
    band. A DOM element, deliberately not a GL symbol layer: DOM renders under
    every GL backend (headless/software included) and never loses its glyphs.

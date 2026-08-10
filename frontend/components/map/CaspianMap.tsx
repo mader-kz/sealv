@@ -123,6 +123,17 @@ type ColonyChip = SiteChip & { x: number; y: number; ay: number };
    roughness only costs a few extra pixels of separation, never a swallowed
    click. `ay` keeps the true anchor so a displaced chip can draw a stalk back
    to the coordinate it actually claims. */
+/* How far past the canvas edge a chip may still be worth rendering. Inside
+   this margin a chip is partly on screen (the layer clips the rest, which is
+   the correct reading — the count is sliding off the edge); beyond it there
+   is nothing to see, so the node is dropped rather than kept alive off-frame.
+   A little wider than the tallest chip so one never pops out of existence
+   while a sliver of it is still legible. */
+const CHIP_CULL_MARGIN = 160;
+const offCanvas = (x: number, y: number, rect: { width: number; height: number }) =>
+  x < -CHIP_CULL_MARGIN || x > rect.width + CHIP_CULL_MARGIN ||
+  y < -CHIP_CULL_MARGIN || y > rect.height + CHIP_CULL_MARGIN;
+
 function separateChips(chips: ColonyChip[]) {
   const H = (c: ColonyChip) =>
     52 + (c.low != null && c.high != null && c.low !== c.high ? 14 : 0) +
@@ -200,6 +211,38 @@ function pointsSignature(pts: Detection[]): string {
     h = (Math.imul(h, 31) + ((d.lng * 1e5) | 0)) | 0;
   }
   return pts.length + ":" + h;
+}
+
+/* The presence disc — what a site draws when its animals could not be placed.
+   A sortie with no ground-sample-distance yields a count and no coordinates,
+   so at close zoom its chip used to float over empty water while every
+   georeferenced neighbour showed dots and a hull. The disc is the honest mark
+   for that state: it says "this many animals, somewhere in here" and nothing
+   more. It is dashed for exactly that reason — the extent was never measured —
+   and it is drawn ONLY where there are no placed detections, so a measured
+   position is never faked or approximated away. */
+const PRESENCE_VERTICES = 48;
+/* The same equirectangular metre used by lib/colony.ts, restated rather than
+   imported: one circle needs the constant, not the projection machinery. */
+const METERS_PER_DEG = 111320;
+/* Magnitude at a glance, not a confidence radius: 25 seals ≈ 425 m,
+   575 ≈ 900 m, and the clamp keeps it between "visible" and "not a claim
+   about the whole bay". */
+const presenceRadius = (count: number) =>
+  Math.min(1500, Math.max(350, 300 + 25 * Math.sqrt(count)));
+
+function presenceRing(lat: number, lng: number, radiusM: number): number[][] {
+  const cosLat = Math.max(Math.cos((lat * Math.PI) / 180), 0.01);
+  const ring: number[][] = [];
+  for (let i = 0; i < PRESENCE_VERTICES; i++) {
+    const th = (i / PRESENCE_VERTICES) * Math.PI * 2;
+    ring.push([
+      lng + (Math.cos(th) * radiusM) / (cosLat * METERS_PER_DEG),
+      lat + (Math.sin(th) * radiusM) / METERS_PER_DEG,
+    ]);
+  }
+  ring.push(ring[0]); // GeoJSON rings close explicitly
+  return ring;
 }
 
 export default function CaspianMap({
@@ -320,6 +363,9 @@ export default function CaspianMap({
       // left over from the mock era.
       map.addSource("colonies", { type: "geojson", data: { type:"FeatureCollection", features: [] } });
       map.addSource("animals", { type: "geojson", data: { type:"FeatureCollection", features: [] } });
+      // Sites whose animals were counted but never georeferenced — see the
+      // presence-disc note above the component.
+      map.addSource("presence", { type: "geojson", data: { type:"FeatureCollection", features: [] } });
       // GL cannot read CSS vars, so the ramp is baked in: #e9edf2 is --ink.
       map.addLayer({ id: "footprints-line", type:"line", source:"footprints", paint:{ "line-color":"#e9edf2", "line-width":1, "line-opacity":0.3 } });
       map.addLayer({ id:"footprints-fill", type:"fill", source:"footprints", paint:{ "fill-color":"#e9edf2", "fill-opacity":0.04 } });
@@ -340,6 +386,22 @@ export default function CaspianMap({
         "line-color":"#e9edf2",
         "line-width": ["case",["==",["get","selected"],true], 2, 1],
         "line-opacity": ["case",["==",["get","selected"],true], 1, 0.55],
+      }});
+      /* The presence disc. It carries the signal colour because it stands in
+         for a count — but at a seventh of the fill opacity a hull gets, and
+         with a DASHED edge: a solid line would claim a surveyed boundary. GL
+         cannot read CSS vars, so #3fd8a3 is --accent baked in. minzoom 7: at
+         basin zoom the disc is sub-pixel noise under its own chip; it fades in
+         as you approach and is plainly there by ZOOM_COLONY. */
+      map.addLayer({ id:"presence-fill", type:"fill", source:"presence", minzoom: 7, paint:{
+        "fill-color":"#3fd8a3",
+        "fill-opacity":0.07,
+      }});
+      map.addLayer({ id:"presence-line", type:"line", source:"presence", minzoom: 7, paint:{
+        "line-color":"#3fd8a3",
+        "line-width":1.5,
+        "line-opacity":0.55,
+        "line-dasharray":[2,2],
       }});
       // Individual animals only at close zoom, bare dots, no labels. A verdict
       // is semantic and keeps its colour: validated is --good (#3fd8a3), and
@@ -389,6 +451,8 @@ export default function CaspianMap({
       map.on("mouseleave","animal-dots",()=> map.getCanvas().style.cursor= useFootageStore.getState().pinMode?"crosshair":"");
     });
     mapRef.current = map;
+    /* Dev-only handle for driving the camera in automated verification. */
+    if (process.env.NODE_ENV === "development") (window as any).__mainMap = map;
     // The container's width changes with every panel toggle, but the map was
     // created at whatever size the first paint happened to have - 400x300 on
     // a cold load. Without resize() the canvas keeps that stale geometry: the
@@ -673,6 +737,34 @@ export default function CaspianMap({
     return (siteChips ?? []).filter(s=> Number.isFinite(s.lat) && Number.isFinite(s.lng));
   },[siteChips, showColonies]);
 
+  /* Presence discs, pushed on the same cadence as the colonies/animals sources:
+     whenever the chips or the placed detections change. A site qualifies only
+     when it HAS a count and none of its sorties contributed a single placed
+     detection — sites with real positions keep their dots and hulls and get no
+     disc, because the disc is an admission that the extent is unknown, not a
+     decoration. Nothing here invents a coordinate: the centre is the site's own
+     centroid and the radius is a function of the count alone. */
+  useEffect(()=>{
+    const map=mapRef.current; if(!map||!mapLoaded) return;
+    const src = map.getSource("presence") as any;
+    if(!src) return;
+    src.setData({
+      type:"FeatureCollection",
+      features: chipAnchors
+        .filter(s=> s.count!=null && s.count>0 &&
+          /* The `-agg` marker is one synthetic dot standing in for a run whose
+             animals could not be placed — the very case the disc exists for.
+             Only a REAL per-animal detection means the extent is measured. */
+          !s.footageIds.some(id=>
+            (placed.byFootage.get(id) ?? []).some(d=> !d.id.endsWith("-agg"))))
+        .map(s=>({
+          type:"Feature",
+          geometry:{ type:"Polygon", coordinates:[presenceRing(s.lat, s.lng, presenceRadius(s.count as number))] },
+          properties:{ key:s.key, count:s.count }
+        }))
+    });
+  },[chipAnchors, placed, mapLoaded]);
+
   useEffect(()=>{
     const map=mapRef.current; if(!map||!mapLoaded) return;
     /* Coalesce through one animation frame. MapLibre fires `move` once per
@@ -695,11 +787,18 @@ export default function CaspianMap({
         const chips: ColonyChip[] = [];
         for(const a of chipAnchors){
           const pr = m.project([a.lng, a.lat]);
-          if(rect && (pr.x < -120 || pr.x > rect.width+120 || pr.y < -120 || pr.y > rect.height+120)) continue;
+          if(rect && offCanvas(pr.x, pr.y, rect)) continue;
           chips.push({ ...a, x:pr.x, y:pr.y, ay:pr.y });
         }
         separateChips(chips);
-        setOverlayChips(prev=> sameChips(prev, chips) ? prev : chips);
+        /* Second cull, AFTER displacement: separateChips only ever pushes a
+           chip down, and at basin zoom a stack of coincident sites can push
+           the last one hundreds of pixels past the bottom edge. The layer
+           clips it either way — this keeps it out of the DOM instead of
+           parking a node nobody can see. */
+        const r = rect;
+        const live = r ? chips.filter(c=> !offCanvas(c.x, c.y, r)) : chips;
+        setOverlayChips(prev=> sameChips(prev, live) ? prev : live);
         /* The zoom, for the pin readout: a coordinate clicked at basin zoom
            and one clicked at 200 m are not the same claim, and the sortie's
            note records which it was. */
@@ -846,7 +945,7 @@ export default function CaspianMap({
           catching clicks meant for the anchor.
           `chipLayerRef` is load-bearing, not decoration: the wheel over a chip
           used to zoom the map underneath it. */}
-      <div ref={chipLayerRef} className={`absolute inset-0 z-[6] pointer-events-none ${pinMode ? "colony-chips-dimmed" : ""}`}>
+      <div ref={chipLayerRef} className={`chip-layer absolute inset-0 z-[6] pointer-events-none ${pinMode ? "colony-chips-dimmed" : ""}`}>
         {overlayChips.map(c=>{
           const isSel = c.key===selectedSiteKey;
           /* Two ways a chip goes quiet, and they are different claims. A site
