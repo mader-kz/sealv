@@ -866,7 +866,7 @@ function CountHistory({
    The confirmation names real numbers, and they come from the service's own
    dry run rather than from anything this component counted: a client's guess
    under a button marked "for ever" is worse than no number. */
-function PurgeControl({ f }: { f: Footage }) {
+export function PurgeControl({ f }: { f: Footage }) {
   const { t } = useT();
   const purgeFootage = useFootageStore(s => s.purgeFootage);
   const [asked, setAsked] = useState(false);

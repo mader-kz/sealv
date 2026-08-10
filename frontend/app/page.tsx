@@ -8,6 +8,7 @@ import ReviewMode from "@/components/modes/ReviewMode";
 import IngestMode from "@/components/modes/IngestMode";
 import ArchiveMode from "@/components/modes/ArchiveMode";
 import ReportMode from "@/components/modes/ReportMode";
+import ManageMode from "@/components/modes/ManageMode";
 import { useFootageStore } from "@/store/useFootageStore";
 import { isRunning, isWaiting, useIngestStore } from "@/store/useIngestStore";
 import { IconButton } from "@/components/ui/primitives";
@@ -179,6 +180,7 @@ export default function Page(){
           {mode==="ingest"  && <IngestMode />}
           {mode==="archive" && <ArchiveMode />}
           {mode==="report"  && <ReportMode />}
+          {mode==="manage"  && <ManageMode />}
         </div>
 
         {showInspector && (
