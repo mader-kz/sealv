@@ -20,6 +20,8 @@ export type IconName =
   | "target"
   | "chevronLeft"
   | "chevronRight"
+  | "chevronUp"
+  | "chevronDown"
   | "check"
   | "alert"
   | "copy"
@@ -42,6 +44,8 @@ const paths: Record<IconName, React.ReactNode> = {
   target: <><circle cx="8" cy="8" r="5.5" /><circle cx="8" cy="8" r="1.5" /></>,
   chevronLeft: <><path d="m9.5 3.5-5 4.5 5 4.5" /></>,
   chevronRight: <><path d="m6.5 3.5 5 4.5-5 4.5" /></>,
+  chevronUp: <><path d="m3.5 9.5 4.5-5 4.5 5" /></>,
+  chevronDown: <><path d="m3.5 6.5 4.5 5 4.5-5" /></>,
   check: <><path d="m3 8.5 3.2 3L13 4.5" /></>,
   alert: <><path d="M8 2.5 14.5 13.5h-13z" /><path d="M8 6.5v3M8 11.6v.01" /></>,
   copy: <><rect x="5.5" y="5.5" width="8" height="8" rx="1" /><path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2" /></>,

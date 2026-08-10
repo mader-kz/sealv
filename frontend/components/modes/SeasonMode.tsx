@@ -37,9 +37,10 @@
  *  - Retired sorties are attached to their site for the RECORD (История) and
  *    are in no figure at all. Withdrawn evidence is still evidence.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import CaspianMap, { type SiteChip } from "@/components/map/CaspianMap";
 import SiteCard from "@/components/map/SiteCard";
+import Icon from "@/components/ui/Icon";
 import { formatArea, totalAreaM2 } from "@/lib/analytics/area";
 
 import { footagesInRange } from "@/lib/analytics/brush";
@@ -92,6 +93,28 @@ export default function SeasonMode() {
      move of the timeline brush, and closes only when that sortie genuinely
      leaves the season. */
   const [anchorId, setAnchorId] = useState<string | null>(null);
+  const [summaryOpen, setSummaryOpen] = useState(true);
+
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem("sealv-season-summary-open");
+      if (saved != null) setSummaryOpen(saved !== "0");
+    } catch {
+      /* A privacy-restricted browser simply keeps the default open state. */
+    }
+  }, []);
+
+  const toggleSummary = () => {
+    setSummaryOpen((open) => {
+      const next = !open;
+      try {
+        window.localStorage.setItem("sealv-season-summary-open", next ? "1" : "0");
+      } catch {
+        /* Persistence is a convenience, not a reason to disable the control. */
+      }
+      return next;
+    });
+  };
 
   /* ------------------------------------------------------------ the season */
   /* Three sets, and keeping them apart is the whole point. A FAILED ingest is a
@@ -268,7 +291,8 @@ export default function SeasonMode() {
   return (
     <div className="flex-1 min-h-0 flex flex-col">
       {/* ─────────────────────────────────────────────── the season's reading */}
-      <div className="shrink-0 flex items-center gap-10 px-5 pt-3.5 pb-4 border-b border-line bg-bg overflow-x-auto">
+      <div className={`shrink-0 border-b border-line bg-bg ${summaryOpen ? "flex items-center gap-10 px-5 pt-3.5 pb-4 overflow-x-auto" : "px-5 py-1.5"}`}>
+        {summaryOpen ? <>
         {/* The hero, and the only place the season total is stated on Карта.
             One number in the signal colour; everything beside it is a
             qualification of it and is set as one. */}
@@ -325,22 +349,18 @@ export default function SeasonMode() {
             because the short form is the reading and the long form is the
             argument behind it. */}
         <div className="ml-auto shrink-0 text-right flex flex-col gap-1.5 pl-6">
-          <p
-            className="text-2xs text-ink3 self-end"
-            style={{ borderBottom: "1px dotted var(--ink-4)", paddingBottom: 2, cursor: "help" }}
-            title={
-              review.reviewable === 0
-                ? t("season.trustReviewNoneLong")
-                : t("season.trustReviewLong", {
-                    n: review.ruled, r: review.reviewable,
-                    v: review.verified, x: review.rejected,
-                  })
-            }
-          >
-            {review.reviewable === 0
-              ? t("season.trustReviewNone")
-              : t("season.trustReview", { pct: reviewPct })}
-          </p>
+          {review.reviewable > 0 && (
+            <p
+              className="text-2xs text-ink3 self-end"
+              style={{ borderBottom: "1px dotted var(--ink-4)", paddingBottom: 2, cursor: "help" }}
+              title={t("season.trustReviewLong", {
+                n: review.ruled, r: review.reviewable,
+                v: review.verified, x: review.rejected,
+              })}
+            >
+              {t("season.trustReview", { pct: reviewPct })}
+            </p>
+          )}
           <p
             className="text-2xs text-ink3 self-end"
             style={{ borderBottom: "1px dotted var(--ink-4)", paddingBottom: 2, cursor: "help" }}
@@ -355,6 +375,34 @@ export default function SeasonMode() {
               : t("season.trustScale", { a: area.assumed, u: area.unknown })}
           </p>
         </div>
+        <button
+          type="button"
+          onClick={toggleSummary}
+          title={t("season.collapseSummary")}
+          aria-label={t("season.collapseSummary")}
+          aria-expanded="true"
+          className="shrink-0 inline-flex items-center justify-center w-7 h-7 border border-line text-ink3 hover:text-ink hover:border-ink3 transition-colors"
+        >
+          <Icon name="chevronUp" size={15} />
+        </button>
+        </> : (
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-baseline gap-2 min-w-0">
+              <span className="text-sm tnum text-accent font-medium">{est.current}</span>
+              <span className="text-2xs text-ink3 truncate">{t("season.heroCaption")}</span>
+            </div>
+            <button
+              type="button"
+              onClick={toggleSummary}
+              title={t("season.expandSummary")}
+              aria-label={t("season.expandSummary")}
+              aria-expanded="false"
+              className="shrink-0 inline-flex items-center justify-center w-7 h-7 border border-line text-ink3 hover:text-ink hover:border-ink3 transition-colors"
+            >
+              <Icon name="chevronDown" size={15} />
+            </button>
+          </div>
+        )}
       </div>
 
       {/* ────────────────────────────────────────────────────────────── the map */}
@@ -364,19 +412,6 @@ export default function SeasonMode() {
           selectedSiteKey={openKey}
           onSiteClick={openFromChip}
         />
-
-        {/* What a chip IS. The unit on this map changed — it used to be one per
-            flight — and a reader who assumes otherwise reads three visits to one
-            beach as three colonies. Text over the chart, no plate: it is a
-            caption, not a control. */}
-        <div
-          className="absolute left-5 bottom-6 z-[7] pointer-events-none max-w-[340px] text-2xs text-ink4 leading-relaxed"
-          style={{ textShadow: "0 1px 4px #000, 0 0 10px #000" }}
-        >
-          <p><b className="text-ink3 font-medium">{t("season.legendChip")}</b></p>
-          <p>{t("season.legendSpark")}</p>
-          <p>{t("season.legendRetired")}</p>
-        </div>
 
         {/* Nothing to show yet — said over the chart rather than in place of it,
             so the coast the season will be measured on is still on screen. */}

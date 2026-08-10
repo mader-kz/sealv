@@ -25,6 +25,7 @@ yolo11x.pt
 .venv/
 .venv-torch/
 .venv-countgd/
+.env
 
 # --- python noise ------------------------------------------------------------
 __pycache__/

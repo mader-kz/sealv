@@ -1,12 +1,14 @@
 "use client";
 /* Count replay: the number, replayed as it was earned. Left — the counted
    frame, every animal appearing dot by dot with the tally ticking up. Right —
-   the same animals landing on their measured coordinates on satellite imagery.
+   the same animals landing on their measured coordinates on satellite imagery,
+   with the media GPS track still shown when scale is missing.
    One clock drives both, so scrubbing the strip scrubs the map.
 
    This is presentation over the archive, not a second pipeline: the dots are
    the run's own points in the reference frame's pixel space, the positions are
-   the georeferenced lat/lng the worker wrote, and the tally ends on the same
+   the georeferenced lat/lng the worker wrote, and the media track is the
+   location source when individual projection is unavailable. The tally ends on the same
    mark count the Evidence view's header states. Nothing here is animated that
    was not measured.
 
@@ -134,6 +136,17 @@ function ReplayStage({ f }: { f: Footage }) {
   }, [f]);
   const n = marks.length;
   const placedMarks = useMemo(() => marks.filter((m) => m.placed), [marks]);
+  const trackPoints = useMemo(
+    () => f.track.filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng)),
+    [f.track],
+  );
+  const mapTrackPoints = useMemo(() => {
+    if (trackPoints.length > 0) return trackPoints;
+    return Number.isFinite(f.center.lat) && Number.isFinite(f.center.lng)
+      ? [{ t: 0, lat: f.center.lat, lng: f.center.lng }]
+      : [];
+  }, [f.center, trackPoints]);
+  const hasMapPosition = placedMarks.length > 0 || mapTrackPoints.length > 0;
   const durationMs = Math.min(MAX_MS, Math.max(MIN_MS, n * MS_PER_MARK));
 
   /* -------------------------------------------------------------- the frame */
@@ -386,9 +399,32 @@ function ReplayStage({ f }: { f: Footage }) {
     }),
     [placedMarks],
   );
+  const trackFc = useMemo(
+    () => ({
+      type: "FeatureCollection" as const,
+      features: [
+        ...(mapTrackPoints.length > 1
+          ? [{
+              type: "Feature" as const,
+              geometry: {
+                type: "LineString" as const,
+                coordinates: mapTrackPoints.map((p) => [p.lng, p.lat]),
+              },
+              properties: {},
+            }]
+          : []),
+        ...mapTrackPoints.map((p) => ({
+          type: "Feature" as const,
+          geometry: { type: "Point" as const, coordinates: [p.lng, p.lat] },
+          properties: {},
+        })),
+      ],
+    }),
+    [mapTrackPoints],
+  );
 
   useEffect(() => {
-    if (placedMarks.length === 0) return;
+    if (!hasMapPosition) return;
     let disposed = false;
     (async () => {
       /* Imported here, not at module top: this component sits in the static
@@ -406,6 +442,36 @@ function ReplayStage({ f }: { f: Footage }) {
       if (process.env.NODE_ENV === "development") (window as any).__replayMap = map;
       map.on("load", () => {
         if (disposed) return;
+        map.addSource("replay-track", { type: "geojson", data: trackFc });
+        if (mapTrackPoints.length > 1) {
+          map.addLayer({
+            id: "replay-track-line",
+            type: "line",
+            source: "replay-track",
+            filter: ["==", ["geometry-type"], "LineString"],
+            paint: {
+              "line-color": ACCENT,
+              "line-width": 2,
+              "line-opacity": 0.72,
+              "line-dasharray": [2, 2],
+            },
+          });
+        }
+        if (mapTrackPoints.length > 0) {
+          map.addLayer({
+            id: "replay-track-points",
+            type: "circle",
+            source: "replay-track",
+            filter: ["==", ["geometry-type"], "Point"],
+            paint: {
+              "circle-color": "#0d0f11",
+              "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 4, 16, 7, 18, 9],
+              "circle-stroke-color": ACCENT,
+              "circle-stroke-width": 2,
+              "circle-opacity": 0.95,
+            },
+          });
+        }
         map.addSource("replay", { type: "geojson", data: fc });
         map.addLayer({
           id: "replay-dots",
@@ -439,6 +505,7 @@ function ReplayStage({ f }: { f: Footage }) {
           "replay-dots",
         );
         const b = new maplibregl.LngLatBounds();
+        for (const p of mapTrackPoints) b.extend([p.lng, p.lat]);
         for (const m of placedMarks) b.extend([m.lng, m.lat]);
         map.fitBounds(b, { padding: 70, maxZoom: 16, duration: 0 });
         mapReadyRef.current = true;
@@ -465,7 +532,7 @@ function ReplayStage({ f }: { f: Footage }) {
        throttle state, and tearing the GL map down over that would restart the
        basemap mid-replay. The ref pattern above is what it actually needs. */
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [placedMarks, fc]);
+  }, [fc, hasMapPosition, mapTrackPoints, placedMarks, trackFc]);
 
   const low = f.band?.low ?? null;
   const best = f.band?.best ?? null;
@@ -528,7 +595,7 @@ function ReplayStage({ f }: { f: Footage }) {
 
         {/* -------------------------------------------------------- the map */}
         <div className="relative min-h-0 bg-bg">
-          {placedMarks.length > 0 ? (
+          {hasMapPosition ? (
             <div ref={mapWrapRef} className="absolute inset-0" />
           ) : (
             <div className="absolute inset-0 grid place-items-center p-6 text-center">
