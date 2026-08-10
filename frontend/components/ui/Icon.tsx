@@ -23,7 +23,9 @@ export type IconName =
   | "check"
   | "alert"
   | "copy"
-  | "trash";
+  | "trash"
+  | "play"
+  | "pause";
 
 const paths: Record<IconName, React.ReactNode> = {
   map: <><path d="M2 4.5 6 3l4 1.5L14 3v8.5L10 13 6 11.5 2 13z" /><path d="M6 3v8.5M10 4.5V13" /></>,
@@ -44,6 +46,8 @@ const paths: Record<IconName, React.ReactNode> = {
   alert: <><path d="M8 2.5 14.5 13.5h-13z" /><path d="M8 6.5v3M8 11.6v.01" /></>,
   copy: <><rect x="5.5" y="5.5" width="8" height="8" rx="1" /><path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2" /></>,
   trash: <><path d="M3 4.5h10M6.5 4.5v-1a1 1 0 0 1 1-1h1a1 1 0 0 1 1 1v1" /><path d="M4.5 4.5 5 13a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1l.5-8.5" /></>,
+  play: <path d="M5.5 3.5v9l7.5-4.5z" />,
+  pause: <path d="M5.5 3.5v9M10.5 3.5v9" />,
 };
 
 export default function Icon({

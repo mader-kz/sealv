@@ -1542,6 +1542,33 @@ def _point_projection(fields: Optional[str]) -> Optional[tuple[str, ...]]:
     return wanted
 
 
+@app.get("/v1/runs/{run_id}")
+async def get_run(run_id: str):
+    """One run, by its own id — the same `result` block GET /v1/jobs/{id} carries,
+    plus the two ids that block deliberately omits because the job route already
+    knows them: `media_id` and `job_id`.
+
+    The platform's replay view is why this exists. A hydrated client knows a
+    sortie only by `run_id` (off /v1/stats), and for a video run the frame the
+    points are pinned to is served at /media/{media_id}/frames/{job_id}/{name}
+    with the name recorded in `quality.frames[]` — three values reachable, until
+    this route, only by walking every job. The payload is assembled by the same
+    `_run_result` the job route uses, so the two can never disagree about what
+    a run said.
+    """
+    def load() -> dict:
+        with _conn() as conn:
+            run = db.get_run(conn, run_id)
+            if run is None:
+                raise HTTPException(404, "run not found")
+            out = _run_result(conn, run)
+            out["media_id"] = run.get("media_id")
+            out["job_id"] = run.get("job_id")
+            return out
+
+    return await asyncio.to_thread(load)
+
+
 @app.get("/v1/runs/{run_id}/points")
 async def run_points(run_id: str, status: Optional[str] = None, fields: Optional[str] = None):
     if status is not None and status not in db.POINT_STATUSES:

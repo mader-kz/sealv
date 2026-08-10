@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Button, Row, SectionHead, Pill } from "@/components/ui/primitives";
 import Icon from "@/components/ui/Icon";
 import EvidenceView, { EvidenceFrame } from "@/components/evidence/EvidenceView";
+import ReplayView from "@/components/replay/ReplayView";
 import { basisText, useT } from "@/lib/i18n";
 import { formatArea } from "@/lib/analytics/area";
 import { countOf } from "@/lib/analytics/count";
@@ -25,6 +26,7 @@ export default function RightInspector({ compact }: { compact?: boolean }){
   const unretireFootage = useFootageStore(s=>s.unretireFootage);
   const openReview = useReviewStore(s=>s.openReview);
   const [evidenceOpen, setEvidenceOpen] = useState(false);
+  const [replayOpen, setReplayOpen] = useState(false);
   const f = useMemo(()=> footages.find(x=>x.id===selectedId) || null, [footages, selectedId]);
 
   /* Copy-to-clipboard outcome, shown for ~1.5s. It is not cosmetic: the
@@ -42,7 +44,7 @@ export default function RightInspector({ compact }: { compact?: boolean }){
 
   /* A selection change swaps the sortie under the dialog; showing sortie B's
      photo in a dialog opened for sortie A would be quiet misinformation. */
-  useEffect(() => { setEvidenceOpen(false); }, [selectedId]);
+  useEffect(() => { setEvidenceOpen(false); setReplayOpen(false); }, [selectedId]);
 
   const shell = `w-[340px] ${compact ? "flex-1" : "shrink-0 border-l border-line"} bg-surface flex flex-col overflow-hidden`;
 
@@ -75,6 +77,14 @@ export default function RightInspector({ compact }: { compact?: boolean }){
     !f.videoUrl && f.mediaId && f.pixels && f.pixels.length > 0
       ? { mediaId: f.mediaId, pixels: f.pixels }
       : null;
+  /* The replay needs marks to reveal and a frame to reveal them on: for a
+     photo that is the media file, for a video run the reference frame the
+     run id can name. A processing or failed sortie has neither number nor
+     evidence to animate. */
+  const replayable =
+    f.status === "ready" &&
+    !!f.pixels?.some(p => p.status !== "false_positive") &&
+    !!(evidence || (f.runId && f.mediaId));
   /* With the real engine a sortie holds one detection PER ANIMAL, so the
      headline is the band's best estimate; summing the SURVIVING detections is
      the fallback for test data, which never carries a band. countOf() is that
@@ -232,23 +242,38 @@ export default function RightInspector({ compact }: { compact?: boolean }){
           only where there is genuinely nothing to show. */}
       <div className="aspect-video bg-bg border-b border-line relative shrink-0">
         {f.videoUrl ? (
-          <video src={f.videoUrl} controls className="w-full h-full object-contain" />
+          <>
+            <video src={f.videoUrl} controls className="w-full h-full object-contain" />
+            {/* Top corner: the native controls own the bottom edge. */}
+            {replayable && (
+              <Button
+                icon="play"
+                className="absolute top-2 right-2 shadow-pop"
+                onClick={() => setReplayOpen(true)}
+              >
+                {t("insp.replay")}
+              </Button>
+            )}
+          </>
         ) : evidence ? (
           <>
-            {/* Not while the dialog is up: the two frames are the same
+            {/* Not while a dialog is up: the two frames are the same
                 original, so both <img> elements decode the full-resolution
                 still and both overlays stay mounted behind an opaque
                 dialog nobody can see through. */}
-            {!evidenceOpen && (
+            {!evidenceOpen && !replayOpen && (
               <EvidenceFrame mediaId={evidence.mediaId} pixels={evidence.pixels} />
             )}
-            <Button
-              icon="search"
-              className="absolute bottom-2 right-2 shadow-pop"
-              onClick={() => setEvidenceOpen(true)}
-            >
-              {t("insp.openEvidence")}
-            </Button>
+            <div className="absolute bottom-2 right-2 flex gap-1.5">
+              {replayable && (
+                <Button icon="play" className="shadow-pop" onClick={() => setReplayOpen(true)}>
+                  {t("insp.replay")}
+                </Button>
+              )}
+              <Button icon="search" className="shadow-pop" onClick={() => setEvidenceOpen(true)}>
+                {t("insp.openEvidence")}
+              </Button>
+            </div>
           </>
         ) : (
           <FramePreview filename={f.filename} count={totalSeals} det={det} />
@@ -263,6 +288,10 @@ export default function RightInspector({ compact }: { compact?: boolean }){
           pixels={evidence.pixels}
           band={f.band ?? null}
         />
+      )}
+
+      {replayable && (
+        <ReplayView open={replayOpen} onOpenChange={setReplayOpen} footage={f} />
       )}
 
       <div className="flex-1 overflow-auto">

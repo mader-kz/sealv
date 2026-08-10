@@ -643,6 +643,38 @@ export async function fetchTrack(
 
 export const mediaFileUrl = (mediaId: string) => `${API}/media/${mediaId}/file`;
 
+/* A sampled video frame, by the name the run's quality ledger recorded for it.
+   Frames live per job (a re-run must not swap the evidence under a finished
+   run); runs from before that layout kept theirs flat, and the service tries
+   both — so a missing jobId is a valid address, not a broken one. */
+export const mediaFrameUrl = (mediaId: string, name: string, jobId?: string | null) =>
+  jobId
+    ? `${API}/media/${mediaId}/frames/${jobId}/${name}`
+    : `${API}/media/${mediaId}/frames/${name}`;
+
+/* GET /v1/runs/{id}: the job route's `result` block plus media_id/job_id.
+   Only the fields the replay actually reads are typed; the quality ledger
+   stays a bag because its keys are the service's to define. */
+export type RunDetail = {
+  run_id: string;
+  media_id?: string | null;
+  job_id?: string | null;
+  count?: CountBand;
+  quality?: {
+    reference_frame?: number | null;
+    width?: number | null;
+    height?: number | null;
+    frames?: Array<{ index: number; t?: number | null; file?: string | null }>;
+  } & Record<string, unknown>;
+};
+
+export async function fetchRun(
+  runId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<RunDetail> {
+  return jsonOrThrow(await fetch(`${API}/v1/runs/${runId}`, { signal: opts.signal }));
+}
+
 /* ------------------------------------------------- surveys, sites, counts */
 
 /* One survey row, verbatim. Everything but `id` and `created_at` is nullable,
