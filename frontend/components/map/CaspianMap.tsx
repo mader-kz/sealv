@@ -1135,6 +1135,7 @@ export default function CaspianMap({
      the same size used to leave the camera parked over sorties that were no
      longer drawn. */
   const fitKey = useMemo(()=> footages.map(f=>f.id).join(","), [footages]);
+  const standingFitKey = useMemo(()=> (standingFootageIds ?? []).join(","),[standingFootageIds]);
   useEffect(()=>{
     const map=mapRef.current; if(!map||!mapLoaded) return;
     /* Not while the archive is still arriving. Hydration commits each sortie
@@ -1153,9 +1154,23 @@ export default function CaspianMap({
       let minLng=180, minLat=90, maxLng=-180, maxLat=-90;
       for(const f of footages){ for(const p of f.track){ minLng=Math.min(minLng,p.lng); maxLng=Math.max(maxLng,p.lng); minLat=Math.min(minLat,p.lat); maxLat=Math.max(maxLat,p.lat); } }
       for(const d of detections){ minLng=Math.min(minLng,d.lng); maxLng=Math.max(maxLng,d.lng); minLat=Math.min(minLat,d.lat); maxLat=Math.max(maxLat,d.lat); }
+      /* Aggregate group cards can be positioned from a survey centre even
+         when the sortie has no usable flight line or per-animal points. They
+         still belong to the timestamp state, so their own measured centres
+         participate in the camera fit instead of landing just outside it. */
+      for(const track of movementTracks){
+        for(const observation of track.observations){
+          if(standingFootageIds && !standingIdSet.has(observation.surveyId)) continue;
+          minLng=Math.min(minLng,observation.center.lng); maxLng=Math.max(maxLng,observation.center.lng);
+          minLat=Math.min(minLat,observation.center.lat); maxLat=Math.max(maxLat,observation.center.lat);
+        }
+      }
       if (isFinite(minLng)) {
         const pad = 0.15;
-        try { map.stop(); map.fitBounds([[minLng-pad, minLat-pad],[maxLng+pad, maxLat+pad]], { padding: 40, duration: 520, maxZoom: ZOOM_COLONY }); } catch{}
+        /* Bounds protect card rectangles, not only their centre points. The
+           southern card needs extra room below its coordinate; otherwise the
+           state is numerically present but its plate lands just off-screen. */
+        try { map.stop(); map.fitBounds([[minLng-pad, minLat-pad],[maxLng+pad, maxLat+pad]], { padding:{top:64,right:64,bottom:176,left:64}, duration:520, maxZoom:ZOOM_COLONY }); } catch{}
       }
     }
     /* `footages` and `detections` are read latest ON PURPOSE and kept out of
@@ -1163,7 +1178,7 @@ export default function CaspianMap({
        fitKey), never because a verdict click handed us a new `detections`
        array identity — that would yank the map out from under the review. */
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[fitKey,mapLoaded,selectedId,selectedMovementTrack,hydrating]);
+  },[fitKey,standingFitKey,mapLoaded,selectedId,selectedMovementTrack,hydrating]);
 
   /* DOM overlay — tracks and colony chips, guaranteed visible even if GL
      layers/glyphs fail. Everything that depends only on the DATA is computed
@@ -1506,13 +1521,12 @@ export default function CaspianMap({
                     try { mapRef.current?.easeTo({ center:[observation.center.lng,observation.center.lat], duration:320 }); } catch {}
                   }
                 }}
-                title={`${new Date(point.observedAt).toLocaleDateString(localeFor(lang))} · ${point.size} ${tp(point.size,"unit.seals")}${point.anomalous ? ` · ${t("track.anomalies",{n:1})}` : ""}`}
+                title={`${new Date(point.observedAt).toLocaleDateString(localeFor(lang))} · ${point.size} ${tp(point.size,"unit.seals")}${point.checkpoint ? ` · ${t("checkpoint.updatedCard")}` : ""}${point.anomalous ? ` · ${t("track.anomalies",{n:1})}` : ""}`}
                 aria-expanded={point.expanded}
-                aria-current={point.checkpoint ? "time" : undefined}
                 data-track-id={point.trackId}
                 data-observation-index={point.index}
-                data-timestamp-selected={point.checkpoint ? "true" : undefined}
-                className={`movement-observation-card ${point.latest ? "latest" : ""} ${point.selected ? "selected" : ""} ${point.expanded ? "expanded" : "collapsed"} ${point.dimmed ? "dimmed" : ""} ${point.anomalous ? "anomaly" : ""} ${point.checkpoint ? "timestamp-selected" : "timestamp-context"}`}
+                data-timestamp-updated={point.checkpoint ? "true" : undefined}
+                className={`movement-observation-card ${point.latest ? "latest" : ""} ${point.selected ? "selected" : ""} ${point.expanded ? "expanded" : "collapsed"} ${point.dimmed ? "dimmed" : ""} ${point.anomalous ? "anomaly" : ""} ${point.checkpoint ? "timestamp-updated" : "timestamp-context"}`}
                 style={{
                   left:point.x,
                   top:point.y,

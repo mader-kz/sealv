@@ -570,37 +570,25 @@ a:focus-visible {
   background: color-mix(in srgb, var(--bad) 16%, rgb(22 26 32 / 0.98));
 }
 .movement-observation-card.timestamp-context:not(.selected) {
-  opacity: .88;
-}
-.movement-observation-card.timestamp-selected:not(.selected) {
-  z-index: 80;
   opacity: 1;
-  border: 1px solid var(--accent);
-  border-left-width: 3px;
-  background: rgb(22 26 32 / 1);
-  box-shadow:
-    0 0 0 1px rgb(11 13 16 / .95),
-    0 0 0 2px color-mix(in srgb, var(--accent) 68%, white),
-    0 8px 20px rgb(0 0 0 / .4);
 }
-.movement-observation-card.timestamp-selected:not(.selected)::before {
+.movement-observation-card.timestamp-updated:not(.selected) {
+  z-index: 3;
+  opacity: 1;
+  border-left: 2px solid var(--accent);
+  background: rgb(17 21 26 / .96);
+}
+.movement-observation-card.timestamp-updated:not(.selected)::before {
   content: "";
   position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 1px;
+  top: 4px;
+  right: 4px;
+  width: 4px;
+  height: 4px;
   background: var(--accent);
 }
-.movement-observation-card.timestamp-selected.anomaly:not(.selected) {
-  border-color: var(--bad);
-  box-shadow:
-    0 0 0 1px rgb(11 13 16 / .95),
-    0 0 0 2px color-mix(in srgb, var(--bad) 68%, white),
-    0 8px 20px rgb(0 0 0 / .4);
-}
-.movement-observation-card.timestamp-selected.anomaly:not(.selected)::before {
-  background: var(--bad);
+.movement-observation-card.timestamp-updated.anomaly:not(.selected) {
+  border-left-color: var(--bad);
 }
 .movement-observation-card.selected,
 .movement-observation-card.expanded.selected,

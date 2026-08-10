@@ -191,11 +191,41 @@ function MiniTrend({
         <span className="truncate text-[10px] text-ink3">{label}</span>
         <span className="text-xs text-ink tnum">{selectedValue}</span>
       </div>
-      <svg viewBox={`0 0 ${width} ${height}`} className="mt-0.5 block h-[48px] w-full overflow-visible" role="img" aria-label={label}>
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        className="mt-0.5 block h-[48px] w-full overflow-visible"
+        role="img"
+        aria-label={label}
+        onMouseMove={event=>{
+          const rect=event.currentTarget.getBoundingClientRect();
+          if(rect.width<=0 || points.length===0) return;
+          const localX=((event.clientX-rect.left)/rect.width)*width;
+          const ratio=Math.max(0,Math.min(1,(localX-pad.l)/(width-pad.l-pad.r)));
+          const index=points.length===1 ? 0 : Math.round(ratio*(points.length-1));
+          setHoveredId(points[index]?.id ?? null);
+        }}
+        onMouseLeave={()=>setHoveredId(null)}
+        onClick={()=>{ if(hovered) onSelect(hovered); }}
+        style={{cursor:"crosshair"}}
+      >
         <line x1={pad.l} x2={width-pad.r} y1={height-pad.b} y2={height-pad.b} stroke="var(--hair)" />
         <path d={path} fill="none" stroke={name==="global"?"var(--accent)":"var(--ink-3)"} strokeWidth={name==="global"?1.5:1} />
+        {hovered && (
+          <line
+            data-graph-crosshair
+            x1={x(hoveredIndex)}
+            x2={x(hoveredIndex)}
+            y1={pad.t}
+            y2={height-pad.b}
+            stroke="var(--ink-2)"
+            strokeWidth={0.7}
+            strokeDasharray="2 2"
+            pointerEvents="none"
+          />
+        )}
         {points.map((point,index)=>{
           const active=point.id===selectedId;
+          const hoveredPoint=point.id===hoveredId;
           const hoverLabel=`${label}: ${point.snapshot[name]} · ${formatTimestamp(point.ingestedAt)}`;
           return (
             <g
@@ -204,11 +234,8 @@ function MiniTrend({
               role="button"
               tabIndex={0}
               aria-label={hoverLabel}
-              onMouseEnter={()=>setHoveredId(point.id)}
-              onMouseLeave={()=>setHoveredId(current=>current===point.id ? null : current)}
               onFocus={()=>setHoveredId(point.id)}
               onBlur={()=>setHoveredId(current=>current===point.id ? null : current)}
-              onClick={()=>onSelect(point)}
               onKeyDown={event=>{
                 if(event.key!=="Enter" && event.key!==" ") return;
                 event.preventDefault();
@@ -218,7 +245,7 @@ function MiniTrend({
             >
               <title>{hoverLabel}</title>
               <circle cx={x(index)} cy={y(point.snapshot[name])} r={7} fill="transparent" />
-              <circle cx={x(index)} cy={y(point.snapshot[name])} r={active?3.2:1.8} fill={active?"var(--accent)":name==="global"?"var(--accent)":"var(--ink-3)"} />
+              <circle cx={x(index)} cy={y(point.snapshot[name])} r={active||hoveredPoint?3.2:1.8} fill={active||hoveredPoint?"var(--accent)":name==="global"?"var(--accent)":"var(--ink-3)"} />
             </g>
           );
         })}
