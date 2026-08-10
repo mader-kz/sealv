@@ -35,6 +35,13 @@ import { Button } from "@/components/ui/primitives";
 import { setMode } from "@/lib/modes";
 import { stageText, useT } from "@/lib/i18n";
 
+/* Files whose arrival has already sent the operator to the map once. Outside
+   the component on purpose: a row unmounts every time Загрузка is left, and
+   the point of the record is to survive exactly that. Ids only, and an ingest
+   id is never reused, so this stays small and cannot mis-fire on a later
+   file. */
+const autoShown = new Set<string>();
+
 const KB = 1024;
 function humanBytes(n: number): string {
   if (!Number.isFinite(n) || n <= 0) return "0";
@@ -126,6 +133,21 @@ function Row({ item, queuePos, queueTotal }: { item: IngestItem; queuePos: numbe
     claimPin(item.id);
     setPinMode(true);
     setPinPoints([]);
+    /* And, ONCE per file, go where the pinning is. The map is the only screen
+       a point can be placed on, so asking for a location and staying on the
+       queue costs the operator a mode switch they cannot have wanted.
+
+       Once, though, and not every time this effect runs. Cancelling on the map
+       frees the pin, and this row re-mounts and re-arms whenever Загрузка is
+       opened — so an unconditional jump would answer "I do not want to place
+       this now" by throwing the operator back at the map, and would keep the
+       queue (its own × included) unreachable while any file lacked a location.
+       A module-level set, not a ref: the ref dies with the unmounting row and
+       would forget on the way back. */
+    if (!autoShown.has(item.id)) {
+      autoShown.add(item.id);
+      setMode("map");
+    }
   }, [item.phase, item.id, pinTarget, claimPin, setPinMode, setPinPoints]);
 
   const reason = item.reason ? t(item.reason.key, item.reason.vars) : null;

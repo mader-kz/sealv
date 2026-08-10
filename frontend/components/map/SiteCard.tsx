@@ -152,6 +152,12 @@ export default function SiteCard({
   const [name, setName] = useState(site.name ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /* The count replay, launched from the photograph itself, far below. Held as
+     the footage rather than a boolean so the dialog cannot outlive a site
+     switch and replay some other beach's animals. Declared up here with the
+     rest of the card's own state because the Escape handler below has to know
+     whether the replay is open before it decides what "close" means. */
+  const [replayFor, setReplayFor] = useState<Footage | null>(null);
 
   /* A different site opened: forget an abandoned rename rather than carrying a
      half-typed name from one beach onto another. */
@@ -160,6 +166,35 @@ export default function SiteCard({
     setEditing(false);
     setError(null);
   }, [site.siteId, site.name, site.centroid.lat, site.centroid.lng]);
+
+  /* Escape closes the card — and, while a rename is open, closes the rename
+     first. Anything that covers the chart has to be dismissible from the
+     keyboard; the × in the corner cannot be the only way out of a panel this
+     tall. A rename in progress is a separate layer of the same gesture: the
+     first press abandons the edit, the second puts the card away, so Escape
+     never silently discards typing AND the panel in one keystroke. The replay
+     is a third layer above both, and it owns no Escape of its own: without the
+     first branch below one press would take the replay and the card underneath
+     it together, which is not what "close this" meant. */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      if (replayFor) {
+        setReplayFor(null);
+        return;
+      }
+      if (editing) {
+        setEditing(false);
+        setError(null);
+        setName(site.name ?? "");
+        return;
+      }
+      onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [editing, replayFor, onClose, site.name]);
 
   const members = site.footages;
 
@@ -255,10 +290,6 @@ export default function SiteCard({
     () => photoVisits.find((f) => f.id === shownId) ?? photoVisits[0] ?? null,
     [photoVisits, shownId],
   );
-  /* The count replay, launched from the photograph itself. Held as the
-     footage rather than a boolean so the dialog cannot outlive a site switch
-     and replay some other beach's animals. */
-  const [replayFor, setReplayFor] = useState<Footage | null>(null);
   /* Switching sites must not leave the previous site's frame selected. */
   useEffect(() => { setShownId(null); setReplayFor(null); }, [site.id]);
 

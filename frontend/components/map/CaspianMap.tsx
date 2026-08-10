@@ -359,6 +359,12 @@ export default function CaspianMap({
     });
     if (NavCtrl) map.addControl(new NavCtrl({ showCompass: false }), "bottom-right");
     if (AttrCtrl) map.addControl(new AttrCtrl({ compact: true }), "bottom-left");
+    /* A survey chart with no scale bar asks the reader to guess how far apart
+       two haul-outs are — on a product whose whole subject is distance, area
+       and the 2 km that decides whether two visits are one place. Metric, and
+       bottom-right above the zoom so it never lands on the attribution. */
+    const ScaleCtrl: any = (ml as any).ScaleControl || (ml as any).default?.ScaleControl;
+    if (ScaleCtrl) map.addControl(new ScaleCtrl({ maxWidth: 110, unit: "metric" }), "bottom-right");
     // ensure interactions enabled — overlay was blocking
     try{ map.dragPan.enable(); map.scrollZoom.enable(); map.doubleClickZoom.enable(); map.boxZoom.enable(); map.keyboard.enable(); }catch{}
     map.on("load", ()=> {
@@ -971,6 +977,7 @@ export default function CaspianMap({
                  centre to the true anchor; hairline, never interactive. */
               <span
                 aria-hidden="true"
+                className="chip-stalk"
                 style={{
                   position: "absolute",
                   left: c.x,
@@ -1072,6 +1079,13 @@ export default function CaspianMap({
                  whether it took was the whole complaint. */
               if (useIngestStore.getState().applyPin()) setMode("ingest");
             } : undefined}
+            /* Escape and a visible Отмена: the crosshair can always be put
+               down, whether or not a file is waiting for it. */
+            onCancel={() => {
+              try { useIngestStore.getState().claimPin(null); } catch {}
+              setPinPoints([]);
+              useFootageStore.getState().setPinMode(false);
+            }}
           />
         )}
       </div>
@@ -1137,6 +1151,7 @@ export function PinReadout({
   entry,
   onChange,
   onConfirm,
+  onCancel,
 }: {
   value: { lat: number; lng: number } | null;
   zoom: number | null;
@@ -1150,10 +1165,25 @@ export function PinReadout({
    *  nothing is: then this card only reports and sets a coordinate, and it
    *  promises no Confirm it does not have. */
   onConfirm?: () => void;
+  /** Leave pin mode without placing anything. A mode that changes the cursor,
+   *  dims the chips and reinterprets every click is modal, and a modal state
+   *  with no way out but a correct answer is a trap: the crosshair outlived the
+   *  screen it was armed from and there was nothing on the map to dismiss it
+   *  with. Escape does it too — bound below. */
+  onCancel?: () => void;
 }) {
   const { t } = useT();
   const [text, setText] = useState("");
   const [bad, setBad] = useState(false);
+
+  useEffect(() => {
+    if (!onCancel) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.preventDefault(); onCancel(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onCancel]);
   const typed = entry === "typed";
 
   const apply = () => {
@@ -1239,11 +1269,21 @@ export function PinReadout({
       {/* The promise the card has been making, kept: the point is accepted
           HERE, where it was placed, and the file that asked for it is taken
           back up on its own screen. */}
-      {onConfirm && (
-        <div className="mt-2">
-          <Button variant="primary" full disabled={!value} onClick={apply}>
-            {t("btn.confirm")}
-          </Button>
+      {(onConfirm || onCancel) && (
+        <div className="mt-2 flex items-center gap-1.5">
+          {onConfirm && (
+            <Button variant="primary" full disabled={!value} onClick={apply}>
+              {t("btn.confirm")}
+            </Button>
+          )}
+          {/* The other half of a modal state. Escape does the same thing; this
+              is the version you can see, which is the version a person who has
+              never used the app will find. */}
+          {onCancel && (
+            <Button variant="ghost" onClick={onCancel}>
+              {t("btn.cancel")}
+            </Button>
+          )}
         </div>
       )}
     </div>
