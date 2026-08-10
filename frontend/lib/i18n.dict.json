@@ -743,7 +743,8 @@
     "report.nothingPicked": "Кемінде бір жатақ таңдаңыз.",
     "report.degenerate": "{m} жатақтың {n}-інде аралық жалғыз мәнге тірелген — есеп бір кадр бойынша, кадрлар арасында шашырау жоқ.",
     "report.retiredNote": "Кезеңдегі {n} ұшу есептен шығарылған және бірде-бір санға кірмейді.",
-    "report.noResultNote": "Кезеңдегі {n} ұшу ешқандай есеп бермеді."
+    "report.noResultNote": "Кезеңдегі {n} ұшу ешқандай есеп бермеді.",
+    "site.openSortie": "Түсірілімді ашу"
   },
   "ru": {
     "brand.sub": "Учёт каспийского тюленя",
@@ -1489,7 +1490,8 @@
     "report.nothingPicked": "Выберите хотя бы один участок.",
     "report.degenerate": "Диапазон вырожден у {n} из {m} участков — счёт по одному кадру, разброса между кадрами нет.",
     "report.retiredNote": "{n} вылет(ов) периода сняты с учёта и не входят ни в одно число.",
-    "report.noResultNote": "{n} вылет(ов) периода не дали никакого подсчёта."
+    "report.noResultNote": "{n} вылет(ов) периода не дали никакого подсчёта.",
+    "site.openSortie": "Открыть съёмку"
   },
   "en": {
     "brand.sub": "Caspian seal survey",
@@ -2235,6 +2237,7 @@
     "report.nothingPicked": "Pick at least one site.",
     "report.degenerate": "The range is degenerate at {n} of {m} sites — a single-frame count, with no spread between frames.",
     "report.retiredNote": "{n} sortie(s) in the period were withdrawn and are in none of these figures.",
-    "report.noResultNote": "{n} sortie(s) in the period produced no count at all."
+    "report.noResultNote": "{n} sortie(s) in the period produced no count at all.",
+    "site.openSortie": "Open the sortie"
   }
 }
