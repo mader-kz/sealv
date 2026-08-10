@@ -43,18 +43,23 @@ const DARK_STYLE: any = {
     }
   },
   layers: [
-    // GL cannot read CSS vars — #13161b is --bg baked in, so map void = app bg.
-    { id: "bg", type: "background", paint: { "background-color": "#13161b" } },
+    // GL cannot read CSS vars — #0b0d10 is --bg baked in, so map void = app bg.
+    { id: "bg", type: "background", paint: { "background-color": "#0b0d10" } },
     // Dial the basemap right down — it is context, and the counts drawn on top
     // are the only things that should carry contrast. brightness-min lifts the
     // tile blacks off the floor so water/land separate from the app background
     // instead of pooling into one tar pit with it.
+    // Fully desaturated on purpose: the chart is near-monochrome and the one
+    // signal colour belongs to the counts, so a basemap that keeps its own
+    // olive-and-slate is a second palette arguing with the first. Saturation
+    // -1 with the contrast lifted trades that colour back for legible
+    // coastline — land and water separate by value now, not by hue.
     { id: "osm", type: "raster", source: "osm", paint: {
       "raster-opacity": 1,
-      "raster-brightness-min": 0.06,
-      "raster-brightness-max": 0.72,
-      "raster-saturation": -0.45,
-      "raster-contrast": 0.05,
+      "raster-brightness-min": 0.12,
+      "raster-brightness-max": 0.84,
+      "raster-saturation": -1,
+      "raster-contrast": 0.18,
     } },
   ],
   glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
@@ -76,22 +81,19 @@ type ColonyChip = {
   name: string | null;
 };
 
-/* A counted zero, at the weight a zero deserves. Inline rather than a class
-   because .colony-chip's amber lives in globals.css and this is the only
-   caller that wants it turned down; the geometry (the translate centring, the
-   hover scale) is left to the stylesheet so the chip still moves and still
-   clicks exactly like every other one. `selected` is re-stated here because an
-   inline box-shadow outranks the .selected rule it would otherwise silence. */
-const ZERO_CHIP_BEST: React.CSSProperties = { fontSize: 12, fontWeight: 500 };
-const zeroChipStyle = (selected: boolean): React.CSSProperties => ({
-  background: "var(--surface)",
-  color: "var(--ink-3)",
-  padding: "3px 8px 4px",
-  borderRadius: 8,
-  boxShadow: selected
-    ? "0 0 0 2px #fff, 0 2px 6px rgb(0 0 0 / 0.35)"
-    : "0 0 0 1px var(--line), 0 2px 6px rgb(0 0 0 / 0.35)",
-});
+/* A counted zero, at the weight a zero deserves. One declaration now: the chip
+   sets `color` on itself and .chip-best inherits, so turning the colour down
+   here mutes the figure without touching anything else. Everything the chip is
+   — the flat plate, the square corners, the left hairline, the translate
+   centring, the hover scale, the selected rule — stays in globals.css, so a
+   zero moves, hovers and selects exactly like every other chip. It differs
+   only in that it does not spend the signal colour on nothing.
+
+   The pill, the second background and the shadow stack are gone with the rest
+   of the boxes; the reason the old style had to re-state `selected` (an inline
+   box-shadow outranking the .selected rule) went with them. */
+const ZERO_CHIP_BEST: React.CSSProperties = { fontSize: 13, fontWeight: 500 };
+const ZERO_CHIP_STYLE: React.CSSProperties = { color: "var(--ink-3)" };
 
 /* Where a chip wants to sit, in world coordinates. Computed from the data
    once; the move handler only projects it. */
@@ -239,24 +241,33 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
       // left over from the mock era.
       map.addSource("colonies", { type: "geojson", data: { type:"FeatureCollection", features: [] } });
       map.addSource("animals", { type: "geojson", data: { type:"FeatureCollection", features: [] } });
-      map.addLayer({ id: "footprints-line", type:"line", source:"footprints", paint:{ "line-color":"#ffffff", "line-width":1, "line-opacity":0.3 } });
-      map.addLayer({ id:"footprints-fill", type:"fill", source:"footprints", paint:{ "fill-color":"#ffffff", "fill-opacity":0.04 } });
+      // GL cannot read CSS vars, so the ramp is baked in: #e9edf2 is --ink.
+      map.addLayer({ id: "footprints-line", type:"line", source:"footprints", paint:{ "line-color":"#e9edf2", "line-width":1, "line-opacity":0.3 } });
+      map.addLayer({ id:"footprints-fill", type:"fill", source:"footprints", paint:{ "fill-color":"#e9edf2", "fill-opacity":0.04 } });
       // Colony outline: the haul-out drawn as an area, not a soup of dots.
       // Appears from mid zoom; far out the chip alone carries the story.
+      //
+      // The amber is gone. This design spends ONE colour, and it spends it on
+      // the count in the chip — an amber wash under every colony was a second
+      // signal smeared across the whole coast, competing with the figure it
+      // sits beneath. The outline is ink now and says what it has to say with
+      // value: a hairline over a dark fill, stepping up in width and opacity
+      // for the selected sortie.
       map.addLayer({ id:"colony-fill", type:"fill", source:"colonies", minzoom: ZOOM_COLONY, paint:{
-        "fill-color":"#e0a13c",
-        "fill-opacity":0.16, // lifted raster floor eats a little of the tint — keep in sync with the pin toggle below
+        "fill-color":"#e9edf2",
+        "fill-opacity":0.07, // white reads far hotter than the old tint — keep in sync with the pin toggle below
       }});
       map.addLayer({ id:"colony-line", type:"line", source:"colonies", minzoom: ZOOM_COLONY, paint:{
-        "line-color":"#e0a13c",
-        "line-width": ["case",["==",["get","selected"],true], 2, 1.5],
-        "line-opacity": ["case",["==",["get","selected"],true], 1, 0.8],
+        "line-color":"#e9edf2",
+        "line-width": ["case",["==",["get","selected"],true], 2, 1],
+        "line-opacity": ["case",["==",["get","selected"],true], 1, 0.55],
       }});
-      // Individual animals only at close zoom, bare dots, no labels.
-      // GL cannot read CSS vars, so var(--good) is baked in as #74b294.
+      // Individual animals only at close zoom, bare dots, no labels. A verdict
+      // is semantic and keeps its colour: validated is --good (#3fd8a3), and
+      // an unreviewed dot is plain ink.
       map.addLayer({ id:"animal-dots", type:"circle", source:"animals", minzoom: ZOOM_ANIMALS, paint:{
         "circle-radius": 3.5,
-        "circle-color": ["case",["==",["get","status"],"validated"],"#74b294","#ffffff"],
+        "circle-color": ["case",["==",["get","status"],"validated"],"#3fd8a3","#e9edf2"],
         "circle-stroke-color": "rgba(0,0,0,0.6)",
         "circle-stroke-width": 1,
         "circle-opacity": 1
@@ -342,8 +353,8 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
     const m = mapRef.current; if (!m) return;
     m.getCanvas().style.cursor = pinMode ? "crosshair" : "";
     for (const [id, prop, on, off] of [
-      ["colony-fill","fill-opacity",0.16,0.04],
-      ["colony-line","line-opacity",0.8,0.25],
+      ["colony-fill","fill-opacity",0.07,0.02],
+      ["colony-line","line-opacity",0.55,0.18],
       ["animal-dots","circle-opacity",1,0.25],
     ] as const) {
       try {
@@ -379,11 +390,22 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
       if (!map.getLayer("esri-raster")) {
         map.addLayer({ id:"esri-raster", type:"raster", source:"esri", paint:{ "raster-opacity":0.95, "raster-brightness-max":0.6, "raster-saturation":-0.35 } }, "footprints-fill");
       } else map.setLayoutProperty("esri-raster","visibility","visible");
-      try{ map.setPaintProperty("footprints-line","line-color","#facc15"); }catch{}
+      /* One track colour, both basemaps. The old pair — a hazard yellow over
+         imagery, a cyan over the dark tiles — were two more hues than this
+         chart has, and neither carried any meaning the line did not already
+         have. A flight track is context, so it stays ink and buys its
+         legibility over bright imagery with opacity instead. */
+      try{
+        map.setPaintProperty("footprints-line","line-color","#e9edf2");
+        map.setPaintProperty("footprints-line","line-opacity",0.55);
+      }catch{}
     } else {
       if (map.getLayer("osm")) map.setLayoutProperty("osm","visibility","visible");
       if (map.getLayer("esri-raster")) map.setLayoutProperty("esri-raster","visibility","none");
-      if (mapLoaded) try{ map.setPaintProperty("footprints-line","line-color","#22d3ee"); }catch{}
+      if (mapLoaded) try{
+        map.setPaintProperty("footprints-line","line-color","#e9edf2");
+        map.setPaintProperty("footprints-line","line-opacity",0.3);
+      }catch{}
     }
   }, [satellite, mapLoaded]);
 
@@ -706,7 +728,7 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
             key={t.id}
             points={t.pts.map(p=>`${p.x},${p.y}`).join(" ")}
             fill="none"
-            stroke={t.id==="pin" ? "var(--accent)" : t.id===selectedId ? "var(--accent)" : "#ffffff"}
+            stroke={t.id==="pin" ? "var(--accent)" : t.id===selectedId ? "var(--accent)" : "var(--ink)"}
             strokeWidth={t.id===selectedId ? 1.5 : 1}
             strokeOpacity={t.id===selectedId ? 0.9 : 0.28}
             strokeDasharray={t.id===selectedId ? "0" : "5 4"}
@@ -716,16 +738,19 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
         ))}
       </svg>
 
-      {/* Colony chips — the only saturated thing on screen. One per sortie:
-          the count, and under it the honest low–high band. In pin mode they
-          step back and stop catching clicks meant for the anchor. */}
+      {/* Colony chips — the only coloured thing on screen, now that the
+          basemap is monochrome and the hulls are ink. One per sortie: the
+          count, and under it the honest low–high band. In pin mode they step
+          back and stop catching clicks meant for the anchor.
+          `chipLayerRef` is load-bearing, not decoration: the wheel over a chip
+          used to zoom the map underneath it. */}
       <div ref={chipLayerRef} className={`absolute inset-0 z-[6] pointer-events-none ${pinMode ? "colony-chips-dimmed" : ""}`}>
         {overlayChips.map(c=>{
           const isSel = c.fid===selectedId;
           /* A sortie that counted nothing is data, so its chip stays, keeps its
-             number and keeps its click. What it loses is the volume: a
-             full-weight amber chip reading "0" shouts louder over an empty
-             beach than over the 645 next to it. Quiet, not hidden. */
+             number and keeps its click. What it loses is the volume: a chip
+             reading "0" in the signal colour shouts louder over an empty beach
+             than the 645 next to it does over a full one. Quiet, not hidden. */
           const zero = c.count===0;
           return (
             <button
@@ -741,7 +766,7 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
                   : `${c.count} ${tp(c.count, "unit.seals")}`,
               ].filter(Boolean).join(" · ")}
               className={`colony-chip ${isSel ? "selected z-10" : ""}`}
-              style={{ left:c.x, top:c.y, ...(zero ? zeroChipStyle(isSel) : null) }}
+              style={{ left:c.x, top:c.y, ...(zero ? ZERO_CHIP_STYLE : null) }}
             >
               <span className="chip-best tnum" style={zero ? ZERO_CHIP_BEST : undefined}>{c.count}</span>
               {c.low!=null && c.high!=null && (
@@ -754,8 +779,9 @@ export default function CaspianMap({ onMapReady }: { onMapReady?: (m: any)=>void
 
       {/* Layer controls */}
       <div className="absolute top-3 left-3 z-10 flex items-center gap-2">
-        {/* fully opaque: over satellite imagery any translucency reads as dirt */}
-        <div className="flex items-center gap-0.5 bg-surface border border-line rounded p-0.5 shadow-pop">
+        {/* The flat dark plate the map's own controls now wear — one border,
+            square, no elevation stack. */}
+        <div className="plate flex items-center gap-0.5 p-0.5">
           <Toggle checked={satellite} onChange={setSatellite} label={t("map.satellite")} />
           <span className="w-px h-4 bg-line mx-0.5" />
           <Toggle checked={layerState.footprints} onChange={v=>setLayer("footprints",v)} label={t("map.tracks")} />
@@ -860,10 +886,14 @@ export function PinReadout({
   };
 
   return (
-    <div className="bg-surface border border-line rounded shadow-pop px-2 py-1.5 max-w-[260px]">
+    <div className="plate px-2.5 py-2 max-w-[260px]">
       <div className="text-2xs text-ink3">{value ? t("map.anchorSet") : t("map.clickCentre")}</div>
       {value && (
-        <div className="text-xs text-ink tnum font-mono mt-0.5">
+        /* The coordinate is the readout's figure, so it is set like one:
+           Inter at reading size with tabular, slashed-zero digits. It used to
+           be typewriter text at 11 px — a monospace face on a number the eye
+           reads as a pair of quantities, not as a string to diff. */
+        <div className="text-lead text-ink tnum mt-1">
           {/* Shown at the precision it is STORED at. A click is rounded to
               three decimals before it reaches the store, so printing three is
               the whole value; a typed coordinate is kept verbatim, and
@@ -879,25 +909,26 @@ export function PinReadout({
           how much of that the gesture could actually see. A typed coordinate is
           as precise as it was typed, and describing it as 3-decimal was the
           label contradicting the data underneath it. */}
-      <div className="text-2xs text-ink3 mt-0.5 leading-tight">
+      <div className="text-2xs text-ink3 mt-0.5 leading-tight tnum">
         {typed
           ? t("map.pinPrecisionTyped")
           : zoom != null
             ? t("map.pinPrecisionZoom", { z: zoom.toFixed(1) })
             : t("map.pinPrecision")}
       </div>
-      <div className="flex items-center gap-1 mt-1">
+      <div className="flex items-baseline gap-2 mt-1.5">
+        {/* An underline, not a box: a value written onto the instrument. */}
         <input
           value={text}
           onChange={(e) => { setText(e.target.value); setBad(false); }}
           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); apply(); } }}
           placeholder={t("map.coordPlaceholder")}
           aria-label={t("map.coordEnter")}
-          className={`w-[132px] h-6 bg-surface2 border rounded px-1.5 text-2xs text-ink font-mono focus:outline-none ${bad ? "border-bad" : "border-line focus:border-ink3"}`}
+          className={`w-[132px] h-6 bg-transparent border-x-0 border-t-0 border-b px-0 text-xs text-ink tnum transition-colors focus:outline-none ${bad ? "border-bad" : "border-line focus:border-ink2"}`}
         />
         <button
           onClick={apply}
-          className="h-6 px-2 rounded border border-line bg-surface2 text-2xs text-ink2 hover:text-ink hover:border-ink3 transition-colors"
+          className="h-6 px-2 border border-line text-2xs text-ink2 hover:bg-hover hover:text-ink hover:border-ink4 transition-colors"
         >
           {t("map.coordApply")}
         </button>
@@ -911,8 +942,8 @@ function Toggle({ checked, onChange, label }: { checked:boolean; onChange:(v:boo
   return (
     <button
       onClick={()=>onChange(!checked)}
-      className={`px-2 h-6 rounded text-2xs transition-colors ${
-        checked ? "bg-surface2 text-ink" : "text-ink3 hover:text-ink2"
+      className={`px-2 h-6 text-2xs transition-colors ${
+        checked ? "bg-hover text-ink" : "text-ink3 hover:text-ink2"
       }`}
     >
       {label}

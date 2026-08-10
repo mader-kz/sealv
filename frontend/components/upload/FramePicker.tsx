@@ -138,10 +138,10 @@ function FrameLightbox({
     <Dialog open={index !== null} onOpenChange={(v) => !v && onClose()}>
       <DialogContent
         aria-describedby={undefined}
-        className="max-w-[92vw] w-[min(1000px,92vw)] h-[92vh] p-0 gap-0 flex flex-col overflow-hidden bg-surface border-line rounded"
+        className="max-w-[92vw] w-[min(1000px,92vw)] h-[92vh] p-0 gap-0 flex flex-col overflow-hidden bg-bg border-line"
       >
         <DialogHeader className="flex-row items-baseline gap-3 space-y-0 px-4 py-3 pr-12 border-b border-line shrink-0">
-          <DialogTitle className="text-sm font-medium text-ink tracking-normal">
+          <DialogTitle className="text-base font-medium text-ink tracking-normal">
             {at === null ? t("frames.title") : t("frames.previewAt", { s: at })}
           </DialogTitle>
           {index !== null && (
@@ -244,8 +244,10 @@ export default function FramePicker({ item }: { item: IngestItem }) {
   const moved = item.frameMoveM != null && item.frameMoveM > CLIP_MOVED_M ? item.frameMoveM : null;
 
   return (
-    <div className="mt-2 rounded border border-line bg-surface p-2">
-      <div className="label">{t("frames.title")}</div>
+    /* A nested box inside a row that is already delimited by a hairline is one
+       frame too many. The head and the strip's own alignment carry it. */
+    <div className="mt-2.5">
+      <div className="hd">{t("frames.title")}</div>
       <div className="text-2xs text-ink3 mt-1 leading-relaxed">{t("frames.pickWhy")}</div>
 
       {busy && frames.length === 0 && (
@@ -269,7 +271,13 @@ export default function FramePicker({ item }: { item: IngestItem }) {
             {frames.map((f, i) => (
               <div
                 key={f.atSeconds}
-                className="relative group rounded overflow-hidden border border-line hover:border-accent transition-colors"
+                /* Held by a hairline that goes to full ink under the cursor —
+                   the reference's own "this one" mark. NOT the signal colour:
+                   hovering a thumbnail is not a live state, and a strip of
+                   green rectangles would outshout the counts on the map.
+                   The frames themselves stay at full opacity, because judging
+                   animals in them is the entire job of this control. */
+                className="relative group overflow-hidden border border-hair hover:border-ink transition-colors"
               >
                 {/* Opening the frame is the main path: a ~130 px thumbnail is
                     for finding the candidate, not for ruling on it. */}
@@ -285,7 +293,7 @@ export default function FramePicker({ item }: { item: IngestItem }) {
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={f.dataUrl} alt="" className="block w-full aspect-video object-cover" />
                 </button>
-                <span className="absolute bottom-0 right-0 bg-bg/80 text-2xs text-ink px-1 tnum pointer-events-none">
+                <span className="absolute bottom-0 left-0 bg-black/70 text-2xs text-ink2 px-1.5 tnum pointer-events-none">
                   {f.atSeconds}s
                 </span>
                 {/* The shortcut for somebody who already knows which frame they
@@ -295,7 +303,7 @@ export default function FramePicker({ item }: { item: IngestItem }) {
                   disabled={busy}
                   title={t("frames.quickAt", { s: f.atSeconds })}
                   aria-label={t("frames.quickAt", { s: f.atSeconds })}
-                  className="absolute top-0.5 right-0.5 w-5 h-5 grid place-items-center rounded bg-bg/80 text-ink3 opacity-0 group-hover:opacity-100 focus:opacity-100 hover:text-ink transition-opacity disabled:pointer-events-none"
+                  className="absolute top-0 right-0 w-5 h-5 grid place-items-center bg-black/70 text-ink3 opacity-0 group-hover:opacity-100 focus:opacity-100 hover:text-ink transition-opacity disabled:pointer-events-none"
                 >
                   <Icon name="check" size={11} />
                 </button>

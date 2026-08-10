@@ -258,7 +258,11 @@ export default function Dropzone({
   const orphanAnchor = pinMode && !pinTarget && pinPoints.length > 0;
 
   return (
-    <div className="space-y-2">
+    /* No stack of boxes. Each band is held by a hairline and by the alignment
+       of its own left edge — the drop target, the survey metadata, the sample
+       clip and the queue read as one column of an instrument, not as four
+       grey cards floating in a fifth. */
+    <div>
       <div
         role="button"
         tabIndex={0}
@@ -276,12 +280,18 @@ export default function Dropzone({
             fileRef.current?.click();
           }
         }}
-        className={`rounded border border-dashed px-3 py-5 transition-colors text-center cursor-pointer ${
-          drag ? "border-accent bg-accent-soft" : "border-line hover:border-ink3 hover:bg-surface2"
+        /* The dashed rounded rectangle is gone: a drop target announces itself
+           in words, and a dashed box around them is the app drawing a picture
+           of a box. Dragging over it is a live state, so it is allowed the
+           signal colour — the only moment this band is anything but grey. */
+        className={`border-y py-3.5 transition-colors cursor-pointer ${
+          drag ? "border-accent bg-accent-soft" : "border-t-line border-b-hair hover:bg-hover"
         }`}
       >
-        <Icon name="upload" size={16} className="text-ink3 mx-auto" />
-        <div className="text-sm text-ink mt-2">{t("drop.title")}</div>
+        <div className="flex items-baseline gap-2">
+          <Icon name="upload" size={13} className="text-ink4 shrink-0 translate-y-px" />
+          <span className="text-base font-medium text-ink">{t("drop.title")}</span>
+        </div>
         <div className="text-xs text-ink3 mt-1 leading-relaxed">{t("drop.sub")}</div>
         <div className="text-2xs text-ink3 mt-1">{t("ingest.acceptedTypes")}</div>
         <input
@@ -299,10 +309,14 @@ export default function Dropzone({
       {/* The service has had these fields since /v1/media was written and no
           caller has ever filled them. An altitude typed here is what turns an
           unknown scale into a measured one for every hectare downstream. */}
-      <div className="rounded border border-line bg-surface2">
+      {/* A disclosure, not a card: the hairline under it is the whole frame.
+          Its fields are underlines rather than boxes — an input is a place a
+          value is written on the instrument, and five outlined rectangles in a
+          360 px column are five rectangles competing with the numbers. */}
+      <div className="border-b border-hair">
         <button
           onClick={() => setMetaOpen(!metaOpen)}
-          className="w-full flex items-center gap-1.5 px-2.5 py-1.5 text-left"
+          className="w-full flex items-center gap-1.5 py-2 text-left"
           aria-expanded={metaOpen}
         >
           <Icon name={metaOpen ? "chevronLeft" : "chevronRight"} size={12} className="text-ink3" />
@@ -314,15 +328,15 @@ export default function Dropzone({
           </span>
         </button>
         {metaOpen && (
-          <div className="px-2.5 pb-2.5 space-y-2">
-            <div className="grid grid-cols-2 gap-2">
+          <div className="pb-2.5 space-y-2.5">
+            <div className="grid grid-cols-2 gap-3">
               <label className="block">
                 <span className="label">{t("ingest.metaDate")}</span>
                 <input
                   type="date"
                   value={(meta.captured_at ?? "").slice(0, 10)}
                   onChange={(e) => setMeta({ captured_at: e.target.value || undefined })}
-                  className="w-full h-7 mt-1 bg-surface border border-line rounded px-2 text-xs text-ink focus:outline-none focus:border-ink3"
+                  className="w-full h-7 mt-0.5 bg-transparent border-x-0 border-t-0 border-b border-line px-0 text-xs text-ink tnum transition-colors focus:outline-none focus:border-ink2"
                 />
               </label>
               <label className="block">
@@ -337,13 +351,13 @@ export default function Dropzone({
                     const n = Number(e.target.value);
                     setMeta({ altitude_m: e.target.value === "" || !Number.isFinite(n) || n <= 0 ? undefined : n });
                   }}
-                  className="w-full h-7 mt-1 bg-surface border border-line rounded px-2 text-xs text-ink tnum focus:outline-none focus:border-ink3"
+                  className="w-full h-7 mt-0.5 bg-transparent border-x-0 border-t-0 border-b border-line px-0 text-xs text-ink tnum transition-colors focus:outline-none focus:border-ink2"
                 />
               </label>
             </div>
             <div>
               <span className="label">{t("ingest.metaOperator")}</span>
-              <div className="text-xs text-ink mt-1">
+              <div className="text-xs text-ink mt-0.5">
                 {operator ?? <span className="text-ink3">{t("ingest.metaOperatorNone")}</span>}
               </div>
             </div>
@@ -354,7 +368,7 @@ export default function Dropzone({
                 maxLength={NOTE_MAX}
                 value={meta.notes ?? ""}
                 onChange={(e) => setMeta({ notes: e.target.value })}
-                className="w-full mt-1 bg-surface border border-line rounded px-2 py-1.5 text-xs text-ink resize-y focus:outline-none focus:border-ink3"
+                className="w-full mt-0.5 bg-transparent border-x-0 border-t-0 border-b border-line px-0 py-1 text-xs text-ink resize-y transition-colors focus:outline-none focus:border-ink2"
               />
             </label>
             <div className="text-2xs text-ink3 leading-relaxed">{t("ingest.metaWhy")}</div>
@@ -368,7 +382,7 @@ export default function Dropzone({
         onClick={loadSampleClip}
         disabled={loadingSample}
         aria-label={t("drop.sampleAria")}
-        className="w-full flex items-center gap-2 px-2.5 py-2 rounded border border-line bg-surface2 text-left hover:border-ink3 transition-colors disabled:opacity-60 disabled:pointer-events-none"
+        className="w-full flex items-center gap-2 py-2 border-b border-hair text-left transition-colors hover:bg-hover disabled:opacity-60 disabled:pointer-events-none"
       >
         <Icon name={loadingSample ? "download" : "map"} size={13} className="text-ink3" />
         <span className="flex-1 min-w-0">
@@ -379,8 +393,11 @@ export default function Dropzone({
         </span>
       </button>
 
+      {/* An aside, marked the way the instrument marks asides: one rule down
+          its left edge. The pin glyph keeps the signal colour — an armed
+          anchor is genuinely live. */}
       {orphanAnchor && (
-        <div className="rounded border border-line bg-surface2 px-2.5 py-2 flex items-start gap-2">
+        <div className="mt-2.5 border-l border-line pl-2.5 flex items-start gap-2">
           <Icon name="pin" size={13} className="text-accent mt-0.5" />
           <div className="flex-1 min-w-0 text-2xs text-ink2 leading-relaxed">
             {t("ingest.anchorNoOwner")}
