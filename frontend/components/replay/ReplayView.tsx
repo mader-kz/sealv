@@ -44,7 +44,7 @@ type Mark = {
    the basemap is the subject's habitat rather than context, and dots landing on
    real shoreline read as evidence in a way dots on grey water do not. GL cannot
    read CSS vars, so --accent is baked in — same note as CaspianMap. */
-const ACCENT = "#e0a13c";
+const ACCENT = "#3fd8a3";
 const SAT_STYLE: any = {
   version: 8,
   sources: {
@@ -90,7 +90,7 @@ export default function ReplayView({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         aria-describedby={undefined}
-        className="max-w-[94vw] w-[94vw] h-[88vh] p-0 gap-0 flex flex-col overflow-hidden bg-surface border-line rounded"
+        className="max-w-[94vw] w-[94vw] h-[88vh] p-0 gap-0 flex flex-col overflow-hidden bg-surface border-line"
       >
         <DialogHeader className="flex-row items-baseline gap-3 space-y-0 px-4 py-3 pr-12 border-b border-line shrink-0">
           <DialogTitle className="text-sm font-medium text-ink tracking-normal">
@@ -231,23 +231,32 @@ function ReplayStage({ f }: { f: Footage }) {
     const fit = Math.min(box.w / d.w, box.h / d.h);
     const ox = (box.w - d.w * fit) / 2;
     const oy = (box.h - d.h * fit) / 2;
-    /* 0.35% of the displayed frame width — the Evidence view's radius rule. */
-    const r = Math.max(1.75, Math.min(5, d.w * fit * 0.0035));
-    ctx.beginPath();
+    /* Half a percent of the displayed frame width — deliberately larger than
+       the Evidence view's 0.35% rule. There a mark must stay out of the way
+       of a verdict; here the marks ARE the show, and they have to read from
+       across a room on a demo screen. */
+    const r = Math.max(2.5, Math.min(7, d.w * fit * 0.005));
+    /* A ring, not a filled dot: the animal stays visible inside its own mark
+       (the Evidence view's reasoning), and a dark halo under the signal ring
+       keeps it legible on bright sand and dark water alike. One Path2D,
+       stroked twice, so the marks stay two draw calls at any count. */
+    const ring = new Path2D();
     for (let i = 0; i < kNow; i++) {
       const m = marks[i];
       const x = ox + m.px * fit;
       const y = oy + m.py * fit;
-      ctx.moveTo(x + r, y);
-      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ring.moveTo(x + r, y);
+      ring.arc(x, y, r, 0, Math.PI * 2);
     }
-    ctx.fillStyle = ACCENT;
-    ctx.globalAlpha = 0.7;
-    ctx.fill();
-    ctx.strokeStyle = "rgba(255,255,255,0.85)";
-    ctx.lineWidth = Math.max(0.5, r * 0.3);
-    ctx.globalAlpha = 0.9;
-    ctx.stroke();
+    const ringW = Math.max(1, r * 0.32);
+    ctx.strokeStyle = "rgba(0,0,0,0.55)";
+    ctx.lineWidth = ringW + 2;
+    ctx.globalAlpha = 1;
+    ctx.stroke(ring);
+    ctx.strokeStyle = ACCENT;
+    ctx.lineWidth = ringW;
+    ctx.globalAlpha = 0.95;
+    ctx.stroke(ring);
     /* The newest arrivals pop — an expanding, fading ring over the dot. */
     for (let i = Math.max(0, kNow - 14); i < kNow; i++) {
       const age = tRef.current - (i + 1) * per;
@@ -257,7 +266,7 @@ function ReplayStage({ f }: { f: Footage }) {
       ctx.beginPath();
       ctx.arc(ox + m.px * fit, oy + m.py * fit, r * (1 + 2.6 * p), 0, Math.PI * 2);
       ctx.strokeStyle = ACCENT;
-      ctx.lineWidth = Math.max(1, r * 0.5);
+      ctx.lineWidth = Math.max(1, r * 0.45);
       ctx.globalAlpha = (1 - p) * 0.9;
       ctx.stroke();
     }
@@ -408,7 +417,7 @@ function ReplayStage({ f }: { f: Footage }) {
             "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 2, 12, 3.5, 16, 7, 18, 10],
             "circle-opacity": 0.85,
             "circle-stroke-color": "#ffffff",
-            "circle-stroke-width": 0.8,
+            "circle-stroke-width": 1,
             "circle-stroke-opacity": 0.85,
           },
         });
@@ -501,7 +510,7 @@ function ReplayStage({ f }: { f: Footage }) {
           )}
           {/* The tally. The digits are ref-written every tick; the label and
               the end-state range are the throttled React half. */}
-          <div className="absolute top-3 left-3 rounded border border-line bg-bg/75 backdrop-blur px-3.5 py-2.5">
+          <div className="absolute top-3 left-3 plate px-3.5 py-2.5">
             <div className="flex items-baseline gap-2">
               <span ref={counterRef} className="text-hero tnum font-medium leading-none">
                 0
@@ -529,7 +538,7 @@ function ReplayStage({ f }: { f: Footage }) {
             </div>
           )}
           {!!f.unplaced && placedMarks.length > 0 && (
-            <span className="absolute bottom-2 left-2.5 text-2xs text-ink3 bg-bg/75 backdrop-blur rounded px-1.5 py-0.5">
+            <span className="absolute bottom-2 left-2.5 plate text-2xs text-ink3 px-1.5 py-0.5">
               {t("insp.withoutCoords", { n: f.unplaced })}
             </span>
           )}
@@ -554,7 +563,7 @@ function ReplayStage({ f }: { f: Footage }) {
           defaultValue={0}
           aria-label={t("replay.title")}
           onInput={(e) => seek(Number(e.currentTarget.value) / 1000)}
-          className="flex-1 h-1 accent-[#e0a13c] cursor-pointer"
+          className="flex-1 h-1 accent-accent cursor-pointer"
         />
         <span className="text-2xs tnum text-ink3 shrink-0">
           {n} · {Math.round(durationMs / 1000)}
