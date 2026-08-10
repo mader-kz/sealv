@@ -56,7 +56,7 @@ import {
   type Site,
 } from "@/lib/analytics/surveys";
 import { useT } from "@/lib/i18n";
-import { useMode } from "@/lib/modes";
+import { setMode, useMode } from "@/lib/modes";
 import { Button } from "@/components/ui/primitives";
 import type { Footage } from "@/lib/types";
 import { useFootageStore } from "@/store/useFootageStore";
@@ -260,11 +260,9 @@ export default function SeasonMode() {
 
   /* ------------------------------------------------------------- the strip */
   const areaText = area.known ? `${formatArea(area.m2, lang)} ${t("unit.ha")}` : "—";
-  const areaSub =
-    [
-      area.unknown ? t("dash.noGsd", { n: area.unknown }) : null,
-      area.assumed ? t("dash.assumedGsd", { n: area.assumed }) : null,
-    ].filter(Boolean).join(" · ") || null;
+  /* No sub-line: the missing/assumed-GSD counts are exactly what the scale
+     trust light on the right states, with the long argument in its tooltip.
+     One strip must not print one caveat twice. */
 
   const unplaced = season.counted.filter((f) => !isPlaced(f)).length;
   const reviewPct = Math.round(review.pct ?? 0);
@@ -280,8 +278,11 @@ export default function SeasonMode() {
   const bandText =
     band.contributing === 0
       ? null
+      /* No band anywhere is a caveat, not a figure — each site's card says it
+         as a chip. A sentence permanently under the hero taught readers to
+         skip that line, which is fatal the day it holds a real range. */
       : band.degenerate === band.contributing
-        ? t("season.bandNone")
+        ? null
         : band.degenerate > 0
           ? t("season.bandPartial", {
               low: band.low, high: band.high, n: band.degenerate, m: band.contributing,
@@ -309,7 +310,10 @@ export default function SeasonMode() {
               haul-out twice contributes twice, so it measures EFFORT, not a
               population — and it is stated in those words rather than deleted,
               because it is the number a repeat-survey delta is computed from. */}
-          {season.counted.length > 0 && (
+          {/* Only when it DIFFERS from the estimate: equal, it restates the
+              hero and the sortie readout at once. Different, it is the repeat-
+              survey effort figure and earns its line. */}
+          {season.counted.length > 0 && est.observed !== est.current && (
             <div className="text-2xs text-ink4 tnum mt-1 leading-relaxed">
               {t("est.observedSub", { n: est.observed, m: season.counted.length })}
             </div>
@@ -323,13 +327,18 @@ export default function SeasonMode() {
         <dl className="m-0 shrink-0">
           <Readout
             label={t("season.sites")}
-            value={t("season.sitesOf", { n: sitesWithCount, m: chips.length })}
+            /* All counted is the DEFAULT and prints as the bare total; the
+               ratio and its explanation appear only when they deviate from it.
+               "2 из 2 · все в зачёте" said one thing three ways. */
+            value={
+              sitesWithCount < chips.length
+                ? t("season.sitesOf", { n: sitesWithCount, m: chips.length })
+                : String(chips.length)
+            }
             sub={
               sitesWithCount < chips.length
                 ? t("season.sitesRetired", { n: chips.length - sitesWithCount })
-                : chips.length > 0
-                  ? t("season.sitesAll")
-                  : null
+                : null
             }
             /* What makes two flights one site, on the figure that depends on
                it. The 2 km rule is the reason the estimate does not rise when
@@ -337,11 +346,21 @@ export default function SeasonMode() {
                be told it. */
             title={t("est.basis", { km: SITE_RADIUS_M / 1000 })}
           />
-          <Readout label={t("stat.surveyed")} value={areaText} sub={areaSub} />
+          <Readout label={t("stat.surveyed")} value={areaText} sub={null} />
           <Readout
             label={t("stat.sorties")}
             value={String(season.live.length)}
-            sub={t("season.sortiesSub", { n: season.counted.length, m: unplaced })}
+            /* Quiet zeros: "2 с подсчётом · 0 без координат" under "2" carried
+               no information. Each part prints only when it deviates — fewer
+               counted than flown, or anything unplaced. */
+            sub={
+              [
+                season.counted.length < season.live.length
+                  ? t("season.sortiesCounted", { n: season.counted.length })
+                  : null,
+                unplaced > 0 ? t("season.sortiesNoCoord", { m: unplaced }) : null,
+              ].filter(Boolean).join(" · ") || null
+            }
           />
         </dl>
 
@@ -370,11 +389,23 @@ export default function SeasonMode() {
                 : t("season.trustScaleLong", { a: area.assumed, u: area.unknown })
             }
           >
+            {/* A zero cohort is not said: "предположен у 0" reads as a fact
+                about nothing. Each half prints only when it has members. */}
             {noScale
               ? t("season.trustScaleAll")
-              : t("season.trustScale", { a: area.assumed, u: area.unknown })}
+              : area.assumed > 0 && area.unknown > 0
+                ? t("season.trustScale", { a: area.assumed, u: area.unknown })
+                : area.assumed > 0
+                  ? t("season.trustScaleAssumed", { a: area.assumed })
+                  : t("season.trustScaleUnknown", { u: area.unknown })}
           </p>
         </div>
+        {/* The door for footage, on the screen people actually stand at.
+            Drag-and-drop anywhere already routes to Загрузка; this is the
+            same door for a reader with a mouse and a clip of seals. */}
+        <Button icon="upload" variant="primary" className="shrink-0 self-center" onClick={() => setMode("ingest")}>
+          {t("page.ingest")}
+        </Button>
         <button
           type="button"
           onClick={toggleSummary}
@@ -391,6 +422,9 @@ export default function SeasonMode() {
               <span className="text-sm tnum text-accent font-medium">{est.current}</span>
               <span className="text-2xs text-ink3 truncate">{t("season.heroCaption")}</span>
             </div>
+            <Button icon="upload" variant="primary" className="shrink-0" onClick={() => setMode("ingest")}>
+              {t("page.ingest")}
+            </Button>
             <button
               type="button"
               onClick={toggleSummary}

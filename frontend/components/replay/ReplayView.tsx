@@ -53,7 +53,10 @@ const SAT_STYLE: any = {
     esri: {
       type: "raster",
       tiles: [
-        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        /* blankTile=false: missing imagery 404s instead of serving a grey
+           placeholder plate, and MapLibre keeps the overzoomed parent
+           imagery on screen — same note as CaspianMap. */
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}?blankTile=false",
       ],
       tileSize: 256,
       attribution: "Esri",
@@ -248,36 +251,71 @@ function ReplayStage({ f }: { f: Footage }) {
        the Evidence view's 0.35% rule. There a mark must stay out of the way
        of a verdict; here the marks ARE the show, and they have to read from
        across a room on a demo screen. */
-    const r = Math.max(2.5, Math.min(7, d.w * fit * 0.005));
-    /* A ring, not a filled dot: the animal stays visible inside its own mark
-       (the Evidence view's reasoning), and a dark halo under the signal ring
-       keeps it legible on bright sand and dark water alike. One Path2D,
-       stroked twice, so the marks stay two draw calls at any count. */
+    const r = Math.max(3, Math.min(9, d.w * fit * 0.006));
+    /* A surveyor's mark, not a signal-green ring: green rings vanish on pale
+       turquoise water, so legibility is carried by a WHITE reticle over a dark
+       halo (that pair survives green water, grey sand and dark rock alike) and
+       the accent survives only as the small centre dot. Still a ring, not a
+       filled dot, so the animal stays visible inside its own mark (the Evidence
+       view's reasoning). Three Path2Ds built once per frame and stroked/filled
+       in five calls, so the marks stay a constant cost at any count. */
     const ring = new Path2D();
+    const ticks = new Path2D();
+    const cores = new Path2D();
+    const tIn = r * 1.35;
+    const tOut = tIn + r * 0.5;
+    const cr = r * 0.35;
     for (let i = 0; i < kNow; i++) {
       const m = marks[i];
       const x = ox + m.px * fit;
       const y = oy + m.py * fit;
       ring.moveTo(x + r, y);
       ring.arc(x, y, r, 0, Math.PI * 2);
+      ticks.moveTo(x, y - tIn);
+      ticks.lineTo(x, y - tOut);
+      ticks.moveTo(x, y + tIn);
+      ticks.lineTo(x, y + tOut);
+      ticks.moveTo(x - tIn, y);
+      ticks.lineTo(x - tOut, y);
+      ticks.moveTo(x + tIn, y);
+      ticks.lineTo(x + tOut, y);
+      cores.moveTo(x + cr, y);
+      cores.arc(x, y, cr, 0, Math.PI * 2);
     }
-    const ringW = Math.max(1, r * 0.32);
-    ctx.strokeStyle = "rgba(0,0,0,0.55)";
-    ctx.lineWidth = ringW + 2;
+    const ringW = Math.max(1.2, r * 0.34);
+    const tickW = Math.max(1, ringW * 0.7);
+    ctx.lineCap = "butt";
     ctx.globalAlpha = 1;
+    ctx.strokeStyle = "rgba(0,0,0,0.5)";
+    ctx.lineWidth = ringW + 2.5;
     ctx.stroke(ring);
-    ctx.strokeStyle = ACCENT;
+    ctx.lineWidth = tickW + 2;
+    ctx.stroke(ticks);
+    ctx.strokeStyle = "rgba(255,255,255,0.95)";
     ctx.lineWidth = ringW;
-    ctx.globalAlpha = 0.95;
     ctx.stroke(ring);
-    /* The newest arrivals pop — an expanding, fading ring over the dot. */
+    ctx.lineWidth = tickW;
+    ctx.stroke(ticks);
+    ctx.fillStyle = ACCENT;
+    ctx.fill(cores);
+    /* The newest arrivals pop — an expanding, fading ACCENT ring (a live state,
+       so it keeps the signal colour) with a brief white core flash under it. */
     for (let i = Math.max(0, kNow - 14); i < kNow; i++) {
       const age = tRef.current - (i + 1) * per;
       if (age < 0 || age > POP_MS) continue;
       const p = age / POP_MS;
       const m = marks[i];
+      const x = ox + m.px * fit;
+      const y = oy + m.py * fit;
+      if (p < 0.34) {
+        ctx.beginPath();
+        ctx.arc(x, y, r * 0.55, 0, Math.PI * 2);
+        ctx.fillStyle = "#ffffff";
+        ctx.globalAlpha = (1 - p * 3) * 0.9;
+        ctx.fill();
+      }
       ctx.beginPath();
-      ctx.arc(ox + m.px * fit, oy + m.py * fit, r * (1 + 2.6 * p), 0, Math.PI * 2);
+      ctx.arc(x, y, r * (1 + 2.6 * p), 0, Math.PI * 2);
       ctx.strokeStyle = ACCENT;
       ctx.lineWidth = Math.max(1, r * 0.45);
       ctx.globalAlpha = (1 - p) * 0.9;
@@ -483,8 +521,8 @@ function ReplayStage({ f }: { f: Footage }) {
             "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 2, 12, 3.5, 16, 7, 18, 10],
             "circle-opacity": 0.85,
             "circle-stroke-color": "#ffffff",
-            "circle-stroke-width": 1,
-            "circle-stroke-opacity": 0.85,
+            "circle-stroke-width": 1.5,
+            "circle-stroke-opacity": 0.9,
           },
         });
         /* The landing flash: the single newest dot, big and soft under the
@@ -507,7 +545,15 @@ function ReplayStage({ f }: { f: Footage }) {
         const b = new maplibregl.LngLatBounds();
         for (const p of mapTrackPoints) b.extend([p.lng, p.lat]);
         for (const m of placedMarks) b.extend([m.lng, m.lat]);
-        map.fitBounds(b, { padding: 70, maxZoom: 16, duration: 0 });
+        /* How deep the camera may go depends on what the position IS. Placed
+           animals are a measured colony on a shoreline — imagery there runs
+           deep, and the cluster deserves a close look. A track fix or a
+           hand-dropped pin is one point of rough provenance: fitting z16 onto
+           it fakes precision the pin does not have, and over open water the
+           imagery bottoms out around z11 — deeper tiles are served as grey
+           "map data not yet available" plates. */
+        const camMax = placedMarks.length > 0 ? 15 : 11;
+        map.fitBounds(b, { padding: 70, maxZoom: camMax, duration: 0 });
         mapReadyRef.current = true;
         mapKRef.current = -1;
         /* The dialog is still animating open when `load` fires, so the first
@@ -517,7 +563,7 @@ function ReplayStage({ f }: { f: Footage }) {
         setTimeout(() => {
           if (disposed) return;
           map.resize();
-          map.fitBounds(b, { padding: 70, maxZoom: 16, duration: 0 });
+          map.fitBounds(b, { padding: 70, maxZoom: camMax, duration: 0 });
         }, 300);
         sync();
       });
@@ -541,11 +587,15 @@ function ReplayStage({ f }: { f: Footage }) {
 
   return (
     <>
-      <div className="flex-1 grid grid-cols-1 md:grid-cols-2 min-h-0">
-        {/* ------------------------------------------------------ the frame */}
+      {/* One pane: the frame IS the stage. The replay opens from the map,
+          so the place is already on screen behind this dialog — a second map
+          in here split the reader's attention with a pane of open water. The
+          GL map code below stays but never mounts (mapWrapRef never renders),
+          so restoring the split is a layout change, not an excavation. */}
+      <div className="flex-1 flex min-h-0">
         <div
           ref={wrapRef}
-          className="relative bg-bg min-h-0 overflow-hidden border-b md:border-b-0 md:border-r border-line"
+          className="relative bg-bg flex-1 min-h-0 overflow-hidden"
         >
           {frame === "loading" && (
             <div className="absolute inset-0 grid place-items-center">
@@ -591,19 +641,6 @@ function ReplayStage({ f }: { f: Footage }) {
               </div>
             )}
           </div>
-        </div>
-
-        {/* -------------------------------------------------------- the map */}
-        <div className="relative min-h-0 bg-bg">
-          {hasMapPosition ? (
-            <div ref={mapWrapRef} className="absolute inset-0" />
-          ) : (
-            <div className="absolute inset-0 grid place-items-center p-6 text-center">
-              <span className="text-xs text-ink3 max-w-[240px] leading-relaxed">
-                {t("misc.notPlaced")}
-              </span>
-            </div>
-          )}
           {!!f.unplaced && placedMarks.length > 0 && (
             <span className="absolute bottom-2 left-2.5 plate text-2xs text-ink3 px-1.5 py-0.5">
               {t("insp.withoutCoords", { n: f.unplaced })}
