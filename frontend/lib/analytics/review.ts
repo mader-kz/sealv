@@ -68,7 +68,19 @@ export function isGroundCount(f: ReviewFootageLike | null | undefined): boolean 
   if (f?.band?.basis !== "manual") return false;
   const unplaced = typeof f?.unplaced === "number" && Number.isFinite(f.unplaced)
     ? f.unplaced : 0;
-  return !(f?.detections?.length) && unplaced <= 0;
+  /* An aggregate marker is the ABSENCE of per-animal records, so it must not
+     count as one here. A ground count run stores zero points (verified: run
+     fd7a73a1af09, media NULL, 0 points), and hydrate mints exactly one marker
+     to carry the number — testing `detections.length` therefore said "this has
+     per-animal rows" about the one shape that provably has none, and a shore
+     count whose `engine` field never reached the client landed in the season's
+     "counted by the engine, no row to open" figure. `unplaced` still decides
+     the hard case: a hand-corrected video also stores basis 'manual', and its
+     562 unplaceable animals are the engine's, not a person's. */
+  const hasPerAnimalRow = (f?.detections ?? []).some(
+    (d) => d && !isAggregateMarker(d),
+  );
+  return !hasPerAnimalRow && unplaced <= 0;
 }
 
 export type ReviewStats = {

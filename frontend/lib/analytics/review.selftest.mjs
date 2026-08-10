@@ -116,15 +116,37 @@ ok("point 0 is a real point id, not a falsy miss", pointIdOf("run-7-p0") === 0);
 /* A shore count has no per-animal record and never will. That is a different
    fact from "the engine counted these and this build cannot show you the
    rows", and folding the two together printed a ground count of 41 under the
-   season's "animals the engine counted with no individual row to open". */
+   season's "animals the engine counted with no individual row to open".
+   The shape is what the service actually stores: a ground-count run carries
+   ZERO points (verified against the fixture: run fd7a73a1af09, media NULL,
+   0 points), so hydrate mints the aggregate marker and `unplaced` stays 0.
+   `unplaced` is the engine saying "I found these and could not place them",
+   which a person counting from the shore never says. */
 for (const manual of [
   { engine: "manual", detections: [{ id: "run-9-agg", status: "auto", count: 41 }] },
-  { band: { basis: "manual" }, detections: [{ id: "run-9-agg", status: "auto", count: 41 }], unplaced: 41 },
+  { band: { basis: "manual" }, detections: [{ id: "run-9-agg", status: "auto", count: 41 }] },
 ]) {
   const s = reviewStats(manual);
   ok("a ground count is not an engine backlog",
     s.groundCount === true && s.unreviewable === 0 && s.total === 0 && s.pct === null,
     JSON.stringify(s));
+}
+/* The case the fixture above used to be written as, and the reason
+   isGroundCount stopped trusting `basis: manual` on its own: correcting a
+   video sortie's number by hand makes its basis `manual` while its animals
+   are still the engine's — 562 of them, unplaceable but real. Counting that
+   as a person's shore count would delete a whole video's animals from the
+   season's "counted, no row to open" figure. */
+{
+  const corrected = reviewStats({
+    band: { basis: "manual" },
+    detections: [{ id: "run-9-agg", status: "auto", count: 562 }],
+    unplaced: 562,
+  });
+  ok("a hand-corrected video is not a shore count",
+    corrected.groundCount === false && corrected.unreviewable === 562 &&
+    corrected.total === 562 && corrected.pct === null,
+    JSON.stringify(corrected));
 }
 ok("an engine run is not mistaken for a ground count",
   reviewStats({ detections: rows("auto", 3) }).groundCount === false);
