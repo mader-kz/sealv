@@ -713,6 +713,15 @@ export default function RightInspector({ compact }: { compact?: boolean }){
             {copyState === "ok" ? t("insp.copied") : copyState === "fail" ? t("insp.copyFailed") : ""}
           </span>
         </div>
+
+        {/* Withdrawing a sortie belongs where the decision is made. The archive
+            row has an × too, but it appears on hover, in a list, next to a
+            filename — while the reason to withdraw ("this was flown over the
+            wrong beach", "the frame is unusable") is legible only here, with
+            the count, the caveats and the photograph in front of you. Not for
+            an already-retired sortie: that banner at the top already carries
+            Undo and, inside it, the destructive second step. */}
+        {!retired && <RetireControl f={f} />}
       </div>
     </div>
   );
@@ -853,6 +862,78 @@ function CountHistory({
           <p className="text-2xs text-ink3">{t("rec.counts.empty")}</p>
         )
       ) : null}
+    </div>
+  );
+}
+
+/* --------------------------------------------------------------- withdraw
+
+   Step one of the two, and the reversible one. A reason is mandatory for the
+   same reason it is mandatory in the archive: a number that silently left a
+   season's total is as bad as one that silently joined it, and six months on
+   nobody can defend either without the sentence somebody typed here. */
+function RetireControl({ f }: { f: Footage }) {
+  const { t } = useT();
+  const retireFootage = useFootageStore(s => s.retireFootage);
+  const [asked, setAsked] = useState(false);
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  /* A different sortie under the same panel: an unfinished withdrawal must not
+     follow the operator onto it. */
+  useEffect(() => {
+    setAsked(false);
+    setReason("");
+    setError(null);
+  }, [f.id]);
+
+  if (!asked) {
+    return (
+      <button
+        onClick={() => setAsked(true)}
+        className="mt-3 text-2xs text-ink3 hover:text-bad transition-colors"
+      >
+        {t("rec.retire.action")}
+      </button>
+    );
+  }
+
+  return (
+    <div className="mt-3 space-y-2 border-t border-hair pt-2.5">
+      <p className="text-2xs text-ink2 leading-relaxed">{t("rec.retire.explain")}</p>
+      <input
+        value={reason}
+        onChange={(e) => { setReason(e.target.value); setError(null); }}
+        maxLength={REASON_MAX}
+        autoFocus
+        placeholder={t("rec.retire.reasonPlaceholder")}
+        aria-label={t("rec.retire.reasonLabel")}
+        className="w-full h-7 bg-transparent border-b border-line px-0 text-xs placeholder:text-ink4 focus:border-ink2 transition-colors"
+      />
+      {error && <p className="text-2xs text-bad leading-relaxed">{error}</p>}
+      <div className="flex items-center gap-3 text-2xs">
+        <button
+          disabled={busy}
+          onClick={async () => {
+            if (!reason.trim()) { setError(t("rec.retire.reasonRequired")); return; }
+            setBusy(true);
+            const ok = await retireFootage(f.id, reason.trim());
+            setBusy(false);
+            if (ok) setAsked(false);
+            else setError(t("rec.retire.failed"));
+          }}
+          className="text-bad hover:underline disabled:opacity-50"
+        >
+          {t("rec.retire.action")}
+        </button>
+        <button
+          onClick={() => { setAsked(false); setError(null); }}
+          className="text-ink3 hover:text-ink transition-colors"
+        >
+          {t("btn.cancel")}
+        </button>
+      </div>
     </div>
   );
 }
