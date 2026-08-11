@@ -180,15 +180,21 @@ export default function Page(){
   const closeInspector = ()=> select(null);
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-bg">
+    /* `100dvh`, not `100vh`: on a phone the address bar shrinks and grows, and
+       `vh` is frozen at the tallest state - so the bottom of the app sat under
+       the browser chrome. `w-full` rather than `w-screen` because `w-screen`
+       ignores the scrollbar and pushes a horizontal one on desktop. */
+    <div className="flex h-[100dvh] w-full flex-col bg-bg">
       <TopBar />
 
       <div className="flex flex-1 min-h-0">
         <Rail />
 
         {/* Exactly one mode. Each of these owns the whole region: its own
-            header, its own scrolling, its own empty state. */}
-        <div className="flex-1 min-w-0 flex flex-col relative">
+            header, its own scrolling, its own empty state.
+            The bottom padding is the mobile rail, which is fixed and would
+            otherwise sit on top of whatever the mode puts at its own bottom. */}
+        <div className="relative flex min-w-0 flex-1 flex-col pb-14 sm:pb-0">
           {mode==="map"     && <SeasonMode />}
           {mode==="review"  && <ReviewMode />}
           {mode==="ingest"  && <IngestMode />}
@@ -198,7 +204,9 @@ export default function Page(){
         </div>
 
         {showInspector && (
-          <div className="shrink-0 flex flex-col border-l border-line">
+          /* A column beside the map on a desktop; a full-screen sheet on a
+             phone, where 320px of inspector next to 375px of map is neither. */
+          <div className="fixed inset-0 z-40 flex flex-col border-line bg-bg sm:static sm:z-auto sm:shrink-0 sm:border-l">
             <div className="h-9 shrink-0 flex items-center justify-between pl-4 pr-1.5 border-b border-line bg-bg">
               <span className="hd">{t("sec.sortie")}</span>
               <IconButton name="close" onClick={closeInspector} title={t("btn.close")} />

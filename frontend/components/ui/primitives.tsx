@@ -35,7 +35,7 @@ export function Button({
      near-black background the label stopped being legible at all, which reads
      as "missing" rather than "not available yet". */
   const base =
-    "h-7 inline-flex items-center justify-center gap-2 px-3 text-sm transition-colors " +
+    "h-9 sm:h-7 inline-flex items-center justify-center gap-2 px-3 text-sm transition-colors " +
     "disabled:pointer-events-none disabled:text-ink4 disabled:border-hair";
   const variants: Record<BtnVariant, string> = {
     // The only place a button is allowed the signal colour.
@@ -74,7 +74,9 @@ export function IconButton({
       onClick={onClick}
       title={title}
       aria-label={title}
-      className={`w-7 h-7 grid place-items-center transition-colors ${
+      /* 28px is a mouse target; a finger wants ~44. The icon stays the same
+         size - only the hit area grows on a phone. */
+      className={`grid h-9 w-9 place-items-center transition-colors sm:h-7 sm:w-7 ${
         active ? "text-ink bg-surface2" : "text-ink3 hover:text-ink hover:bg-surface2"
       } ${className}`}
     >

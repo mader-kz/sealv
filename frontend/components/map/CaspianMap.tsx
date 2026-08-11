@@ -1949,11 +1949,26 @@ export default function CaspianMap({
           cover a count, move a chip or touch the overlay above. */}
       {mapLoaded && <EnvLayer map={mapRef.current} />}
 
-      {/* Layer controls */}
-      <div className="absolute top-3 left-3 z-10 flex items-center gap-2">
+      {/* The map's left-hand stack.
+          Everything pinned to this corner lives in ONE column, in flow, because
+          three overlays each choosing their own `top-` was three overlays on
+          top of each other the moment two layers were on at once: the pollution
+          legend and the environment panel both landed under the toggles and the
+          legend covered the panel's header and its time field. Flow cannot
+          collide with itself. `EnvLayer` portals its panel in here (see
+          `data-map-left-stack`) rather than positioning itself, so switching a
+          layer on adds a row instead of a collision.
+          `items-start` keeps each child its own width; the column never catches
+          pointer events itself, only its children do, so the map still drags
+          through the gaps. */}
+      <div
+        data-map-left-stack
+        className="pointer-events-none absolute top-3 left-3 z-10 flex max-h-[calc(100%-5rem)] w-[calc(100%-5.75rem)] max-w-[340px] flex-col items-start gap-2 overflow-y-auto overflow-x-hidden sm:max-h-[calc(100%-1.5rem)] sm:w-auto sm:max-w-[min(520px,calc(100%-1.5rem))]"
+      >
+      <div className="pointer-events-auto flex flex-wrap items-center gap-2">
         {/* The flat dark plate the map's own controls now wear — one border,
             square, no elevation stack. */}
-        <div className="plate flex items-center gap-0.5 p-0.5">
+        <div className="plate flex flex-wrap items-center gap-0.5 p-0.5">
           <Toggle checked={satellite} onChange={setSatellite} label={t("map.satellite")} />
           <span className="w-px h-4 bg-line mx-0.5" />
           <Toggle checked={layerState.footprints} onChange={v=>setLayer("footprints",v)} label={t("map.tracks")} />
@@ -2002,13 +2017,13 @@ export default function CaspianMap({
         )}
       </div>
       {pollutionError && showPollution && !pinMode && (
-        <div className="plate absolute left-3 top-14 z-10 border border-bad px-2.5 py-1.5 text-2xs text-bad">
+        <div className="plate pointer-events-auto w-full border border-bad px-2.5 py-1.5 text-2xs text-bad">
           {t("pollution.loadError")}
         </div>
       )}
       {!pollutionError && showPollution && !pinMode && !selectedPollution && (
-        <div data-pollution-legend className="plate absolute left-3 top-14 z-10 max-w-[520px] border border-line px-2.5 py-2">
-          <div className="flex items-center gap-3 text-2xs text-ink3">
+        <div data-pollution-legend className="plate pointer-events-auto w-full border border-line px-2.5 py-2">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs text-ink3">
             <span className="tnum text-ink2">{pollutionDisplayData.features.length} · {t("map.pollution")}</span>
             {[
               ["#f04e45",t("pollution.ageDay")],
@@ -2032,6 +2047,8 @@ export default function CaspianMap({
           )}
         </div>
       )}
+      {/* EnvLayer's panel arrives here by portal, as the last row. */}
+      </div>
 
       {selectedPollution && showPollution && !pinMode && (
         <PollutionEvidenceCard
@@ -2125,7 +2142,7 @@ function PollutionEvidenceCard({
   },[onClose]);
 
   return (
-    <aside data-pollution-card={p.id} className="absolute top-0 right-0 bottom-0 z-20 w-[360px] max-w-[86%] bg-bg border-l border-line flex flex-col">
+    <aside data-pollution-card={p.id} className="absolute inset-x-0 bottom-0 top-0 z-20 flex w-full flex-col border-line bg-bg sm:inset-x-auto sm:right-0 sm:w-[360px] sm:max-w-[86%] sm:border-l">
       <header className="shrink-0 flex items-start justify-between gap-3 border-b border-line bg-bg px-4 pt-3.5 pb-3">
         <div className="min-w-0">
           <h2 className="text-base font-semibold tracking-tight text-ink">{t("pollution.title")}</h2>
@@ -2217,7 +2234,7 @@ function MovementTrackCard({
   const hasFrame=!!footage && !footage.videoUrl && !!footage.mediaId && (footage.pixels?.length ?? 0)>0;
   const reversed=[...track.observations].map((item,index)=>({item,index})).reverse();
   return (
-    <aside data-population-track-card={track.id} className="absolute top-0 right-0 bottom-0 z-20 w-[360px] max-w-[86%] bg-bg border-l border-line flex flex-col">
+    <aside data-population-track-card={track.id} className="absolute inset-x-0 bottom-0 top-0 z-20 flex w-full flex-col border-line bg-bg sm:inset-x-auto sm:right-0 sm:w-[360px] sm:max-w-[86%] sm:border-l">
       <header className="shrink-0 flex items-start justify-between gap-3 border-b border-line bg-bg px-4 pt-3.5 pb-3">
         <div>
           <h2 className="text-base font-semibold tracking-tight text-ink">{title}</h2>
@@ -2557,7 +2574,10 @@ function Toggle({ checked, onChange, label }: { checked:boolean; onChange:(v:boo
   return (
     <button
       onClick={()=>onChange(!checked)}
-      className={`px-2 h-6 text-2xs transition-colors ${
+      aria-pressed={checked}
+      /* 24px high is a mouse target. A finger needs about 44, so on a phone the
+         row grows and the desktop size returns at `sm:`. */
+      className={`h-9 px-3 text-xs transition-colors sm:h-6 sm:px-2 sm:text-2xs ${
         checked ? "bg-hover text-ink" : "text-ink3 hover:text-ink2"
       }`}
     >

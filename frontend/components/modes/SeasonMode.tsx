@@ -311,17 +311,26 @@ export default function SeasonMode() {
   return (
     <div className="flex-1 min-h-0 flex flex-col">
       {/* ─────────────────────────────────────────────── the season's reading */}
-      <div className={`shrink-0 border-b border-line bg-bg ${summaryOpen ? "flex items-center gap-10 px-5 pt-3.5 pb-4 overflow-x-auto" : "px-5 py-1.5"}`}>
+      {/* The season summary. On a phone it is a horizontal strip that scrolls
+          sideways by design - the hero, then the basins, then the tallies - and
+          the whole block is capped so it can never take more than a third of
+          the screen from the map, which is what the mode is for. Snap points
+          make the sideways scroll land on a block instead of between two. */}
+      <div className={`shrink-0 border-b border-line bg-bg ${summaryOpen
+        ? "flex max-h-[34vh] snap-x snap-mandatory items-center gap-6 overflow-x-auto overflow-y-hidden px-3 pb-3 pt-2.5 sm:max-h-none sm:gap-10 sm:px-5 sm:pb-4 sm:pt-3.5"
+        : "px-3 py-1.5 sm:px-5"}`}>
         {summaryOpen ? <>
         {/* The hero, and the only place the season total is stated on Карта.
             One number in the signal colour; everything beside it is a
             qualification of it and is set as one. */}
-        <div className="min-w-[186px] shrink-0">
+        <div className="min-w-[168px] shrink-0 snap-start sm:min-w-[186px]">
           <div className="text-2xs text-ink3 mb-1">{t("region.global")}</div>
           <div
             data-region-count="global"
-            className="tnum text-accent"
-            style={{ fontSize: 50, lineHeight: 0.9, fontWeight: 500, letterSpacing: "-0.038em" }}
+            /* 50px is the desktop hero. On a 375px screen it is a third of the
+               width for four digits, so it steps down rather than wrapping. */
+            className="tnum text-accent text-[38px] leading-[0.9] sm:text-[50px]"
+            style={{ fontWeight: 500, letterSpacing: "-0.038em" }}
           >
             {est.current}
           </div>
@@ -345,11 +354,11 @@ export default function SeasonMode() {
             conventional geomorphological basins. Sites are assigned by their
             centroid; counts without a coordinate remain global-only and are
             stated beneath the three regional figures. */}
-        <div className="shrink-0 border-l border-line pl-5">
+        <div className="shrink-0 snap-start border-l border-line pl-4 sm:pl-5">
           <div className="text-2xs text-ink3 mb-2">{t("region.title")}</div>
           <div className="grid grid-cols-3 border-y border-line-soft divide-x divide-line-soft">
             {(["north","central","south"] as const).map(region=>(
-              <div key={region} className="min-w-[76px] px-3 py-1.5 first:pl-0 last:pr-0">
+              <div key={region} className="min-w-[64px] px-2.5 py-1.5 first:pl-0 last:pr-0 sm:min-w-[76px] sm:px-3">
                 <div className="text-2xs text-ink3">{t(`region.${region}`)}</div>
                 <div data-region-count={region} className="tnum text-xl text-ink mt-0.5 leading-none">{regionalCounts[region]}</div>
               </div>
@@ -548,16 +557,18 @@ export default function SeasonMode() {
               select(null);
               setTimelineOpen(true);
             }}
-            className="plate absolute right-3 top-3 z-[19] flex h-9 items-center gap-2 border border-line px-3 text-xs text-ink2 hover:border-ink4 hover:bg-surface2 hover:text-ink"
+            className="plate absolute right-3 top-3 z-[19] flex h-9 items-center gap-2 border border-line px-2.5 text-xs text-ink2 hover:border-ink4 hover:bg-surface2 hover:text-ink sm:px-3"
           >
             <Icon name="chart" size={14} />
-            <span>{t("checkpoint.open")}</span>
-            <span className="border-l border-line pl-2 text-2xs text-ink4 tnum">{t("checkpoint.count",{n:checkpoints.length})}</span>
+            {/* The wording is a desktop luxury: on a phone this corner has to
+                stay narrow or it lands on the layer column opposite. */}
+            <span className="hidden sm:inline">{t("checkpoint.open")}</span>
+            <span className="text-2xs text-ink4 tnum sm:border-l sm:border-line sm:pl-2">{checkpoints.length}</span>
           </button>
         )}
 
         {timelineOpen && (
-          <div className="absolute inset-x-3 bottom-3 z-[30] max-h-[calc(100%-24px)] overflow-auto">
+          <div className="absolute inset-x-3 bottom-16 z-[30] max-h-[calc(100%-5.5rem)] overflow-auto sm:bottom-3 sm:max-h-[calc(100%-24px)]">
             <PopulationTimeline
               checkpoints={checkpoints}
               selectedId={activeCheckpoint?.id ?? null}

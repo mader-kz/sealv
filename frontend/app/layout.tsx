@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
@@ -26,6 +26,22 @@ const inter = Inter({
   display: "swap",
   variable: "--font-inter",
 });
+
+/* Without this a phone lays the page out at 980 CSS pixels and then scales the
+   result down: every control ends up a third of its intended size, and the
+   `sm:` breakpoints never fire because the viewport claims to be a desktop.
+   `viewport-fit=cover` lets the map reach under the notch, and the safe-area
+   insets used in globals.css keep the controls out from under it.
+
+   The scale is NOT locked. Pinch-zoom is an accessibility feature, and this is
+   a field tool read on a boat in sunlight - somebody will want to zoom into a
+   number. */
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  themeColor: "#0b0e12",
+};
 
 export const metadata: Metadata = {
   title: "SEALv — Caspian seal survey",

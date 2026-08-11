@@ -32,6 +32,7 @@
  * the pin.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { useEnvStore, layerKey, nowIso } from "@/store/useEnvStore";
 import { useFootageStore } from "@/store/useFootageStore";
 import { useT, type I18nKey } from "@/lib/i18n";
@@ -109,6 +110,24 @@ export default function EnvLayer({ map }: { map: any }) {
 
   const selectedId = useFootageStore((s) => s.selectedId);
   const footages = useFootageStore((s) => s.footages);
+
+  /* Where the panel goes. The map owns a single left-hand column
+     (`data-map-left-stack`) and every overlay pinned to that corner is a row in
+     it. Positioning independently is what put this panel underneath the
+     pollution legend whenever both layers were on. Looked up after mount
+     because the column is a sibling rendered by the map, and null until then -
+     in which case the panel simply waits a frame rather than appearing in the
+     wrong place. */
+  const [slot, setSlot] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!enabled) { setSlot(null); return; }
+    const find = () => setSlot(document.querySelector<HTMLElement>("[data-map-left-stack]"));
+    find();
+    /* One retry on the next frame: on the first render after the map loads the
+       column may not be in the DOM yet. */
+    const id = requestAnimationFrame(find);
+    return () => cancelAnimationFrame(id);
+  }, [enabled]);
 
   const [zoom, setZoom] = useState<number | null>(null);
   const [marks, setMarks] = useState<CellMark[]>([]);
@@ -508,322 +527,328 @@ export default function EnvLayer({ map }: { map: any }) {
       {/* The readout. Everything drawn is named here: the source, the slice it
           was measured at, how far that is from the moment asked for, the size
           of one cell and how far apart the cells we hold are. */}
-      <div
-        className="absolute top-12 left-3 z-10 w-[300px] max-h-[calc(100%-4.5rem)] overflow-auto bg-surface border border-line rounded shadow-pop p-2 text-2xs text-ink2"
-        data-testid="env-panel"
-      >
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-xs text-ink">{t("env.title")}</span>
-          {loading && <span className="text-ink3">{t("env.map.loading")}</span>}
-        </div>
-
-        {/* The moment. The layer answers for this instant and nothing else. */}
-        <label className="block mt-2 text-ink3" htmlFor="env-time">
-          {t("env.map.timeLocal", { zone: localZoneLabel(new Date(requested)) })}
-        </label>
-        <div className="flex items-center gap-1 mt-0.5">
-          <input
-            id="env-time"
-            type="text"
-            inputMode="numeric"
-            autoComplete="off"
-            spellCheck={false}
-            data-testid="env-time"
-            value={timeText}
-            placeholder={t("env.map.timeFormat")}
-            aria-invalid={timeBad || undefined}
-            onChange={(e) => {
-              setTimeText(e.currentTarget.value);
-              if (timeBad) setTimeBad(false);
-            }}
-            onBlur={commitTime}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                commitTime();
-              }
-            }}
-            className={`flex-1 h-6 bg-surface2 border rounded px-1 text-2xs text-ink font-mono focus:outline-none ${
-              timeBad ? "border-bad" : "border-line focus:border-ink3"
-            }`}
-          />
-          <button
-            onClick={() => setTime(null)}
-            className="h-6 px-1.5 rounded border border-line bg-surface2 text-2xs text-ink2 hover:text-ink"
-          >
-            {t("env.map.now")}
-          </button>
-        </div>
-        {timeBad && (
-          <div className="mt-0.5 text-bad leading-tight" data-testid="env-time-error">
-            {t("env.map.timeBad", { format: t("env.map.timeFormat") })}
+      {slot && createPortal(
+        <div
+          /* In flow inside the map's left column, not positioned: see `slot`.
+             The width is capped rather than fixed so a phone gets the column's
+             full width and a desktop keeps the 300px readout. */
+          className="pointer-events-auto w-full max-w-[320px] max-h-[calc(100vh-12rem)] overflow-auto bg-surface border border-line rounded shadow-pop p-2 text-2xs text-ink2 sm:w-[300px]"
+          data-testid="env-panel"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs text-ink">{t("env.title")}</span>
+            {loading && <span className="text-ink3">{t("env.map.loading")}</span>}
           </div>
-        )}
-        <div className="flex items-center gap-1 mt-1 flex-wrap">
-          <StepBtn onClick={() => shift(-24 * HOUR)} label={t("env.map.backDay")} />
-          <StepBtn onClick={() => shift(-6 * HOUR)} label={t("env.map.backHours")} />
-          <StepBtn onClick={() => shift(6 * HOUR)} label={t("env.map.fwdHours")} />
-          <StepBtn onClick={() => shift(24 * HOUR)} label={t("env.map.fwdDay")} />
-          {selectedCapturedAt && (
-            <StepBtn
-              onClick={() =>
-                setTime(new Date(selectedCapturedAt).toISOString().replace(/\.\d{3}Z$/, "Z"))
-              }
-              label={t("env.map.toSurvey")}
-            />
-          )}
-        </div>
 
-        {error && (
-          <div className="mt-2 text-bad leading-tight">
-            {t("env.map.failed", { msg: error })}{" "}
-            <button onClick={() => void load()} className="underline hover:text-ink">
-              {t("env.map.retry")}
+          {/* The moment. The layer answers for this instant and nothing else. */}
+          <label className="block mt-2 text-ink3" htmlFor="env-time">
+            {t("env.map.timeLocal", { zone: localZoneLabel(new Date(requested)) })}
+          </label>
+          <div className="flex items-center gap-1 mt-0.5">
+            <input
+              id="env-time"
+              type="text"
+              inputMode="numeric"
+              autoComplete="off"
+              spellCheck={false}
+              data-testid="env-time"
+              value={timeText}
+              placeholder={t("env.map.timeFormat")}
+              aria-invalid={timeBad || undefined}
+              onChange={(e) => {
+                setTimeText(e.currentTarget.value);
+                if (timeBad) setTimeBad(false);
+              }}
+              onBlur={commitTime}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  commitTime();
+                }
+              }}
+              className={`flex-1 h-6 bg-surface2 border rounded px-1 text-2xs text-ink font-mono focus:outline-none ${
+                timeBad ? "border-bad" : "border-line focus:border-ink3"
+              }`}
+            />
+            <button
+              onClick={() => setTime(null)}
+              className="h-6 px-1.5 rounded border border-line bg-surface2 text-2xs text-ink2 hover:text-ink"
+            >
+              {t("env.map.now")}
             </button>
           </div>
-        )}
-
-        {/* The field drawn as cells. Source and variable together — MUR and
-            CoralTemp are separate entries because they are separate claims. */}
-        <label className="block mt-2 text-ink3" htmlFor="env-field">{t("env.map.field")}</label>
-        <select
-          id="env-field"
-          data-testid="env-field"
-          value={chosen ? layerKey(chosen.source, chosen.var) : ""}
-          onChange={(e) => setField(e.target.value || null)}
-          disabled={!fields.length}
-          className="w-full h-6 mt-0.5 bg-surface2 border border-line rounded px-1 text-2xs text-ink focus:outline-none focus:border-ink3"
-        >
-          {!fields.length && <option value="">{t("env.map.noField")}</option>}
-          {fields.map((l) => (
-            <option key={layerKey(l.source, l.var)} value={layerKey(l.source, l.var)}>
-              {t(varKeyFor(l.var))} · {t(sourceKeyFor(l.source))}
-            </option>
-          ))}
-        </select>
-
-        {chosen ? (
-          <div className="mt-2 border-t border-line pt-2 leading-tight" data-testid="env-readout">
-            <div className="text-ink">{t(varKeyFor(chosen.var))}</div>
-            <div className="text-ink2">
-              {t("env.source")}: {t(sourceKeyFor(chosen.source))}
+          {timeBad && (
+            <div className="mt-0.5 text-bad leading-tight" data-testid="env-time-error">
+              {t("env.map.timeBad", { format: t("env.map.timeFormat") })}
             </div>
-            <div className="text-ink3 font-mono">{chosen.dataset}</div>
-            <div className="text-ink2">
-              {t("env.slice", { time: formatSliceTime(chosen.measured_at) })}
-              {" · "}
-              <span className={chosen.gap_hours > 24 ? "text-bad" : "text-ink3"}>
-                {t("env.ageHours", { n: Math.round(chosen.gap_hours) })}
-              </span>
-            </div>
-            <div className="text-ink3">
-              {t("env.cellSize")}: {chosen.resolution} · {chosen.count}{" "}
-              {tp(chosen.count, "env.map.cellsUnit")}
-            </div>
-            {chosen.spacing_deg != null && (
-              <div className="text-ink3">{t("env.spacing", { deg: chosen.spacing_deg })}</div>
+          )}
+          <div className="flex items-center gap-1 mt-1 flex-wrap">
+            <StepBtn onClick={() => shift(-24 * HOUR)} label={t("env.map.backDay")} />
+            <StepBtn onClick={() => shift(-6 * HOUR)} label={t("env.map.backHours")} />
+            <StepBtn onClick={() => shift(6 * HOUR)} label={t("env.map.fwdHours")} />
+            <StepBtn onClick={() => shift(24 * HOUR)} label={t("env.map.fwdDay")} />
+            {selectedCapturedAt && (
+              <StepBtn
+                onClick={() =>
+                  setTime(new Date(selectedCapturedAt).toISOString().replace(/\.\d{3}Z$/, "Z"))
+                }
+                label={t("env.map.toSurvey")}
+              />
             )}
-            <div className="text-ink3">
-              {t("env.latency")}: {t(latencyKeyFor(chosen.source))}
-            </div>
-            <div className="text-ink3 mt-1">
-              {cellsTooSmall && zLegible != null
-                ? t("env.map.tooSmall", { z: zLegible.toFixed(1) })
-                : t("env.map.trueSize")}
-            </div>
-            {cellsTooSmall && zLegible != null && (
-              <button
-                onClick={zoomToCells}
-                className="mt-1 h-5 px-1.5 rounded border border-line bg-surface2 text-2xs text-ink2 hover:text-ink"
-              >
-                {t("env.map.zoomTo", { z: zLegible.toFixed(1) })}
+          </div>
+
+          {error && (
+            <div className="mt-2 text-bad leading-tight">
+              {t("env.map.failed", { msg: error })}{" "}
+              <button onClick={() => void load()} className="underline hover:text-ink">
+                {t("env.map.retry")}
               </button>
-            )}
+            </div>
+          )}
 
-            {/* The legend. A colour that cannot be read back as a number is
-                decoration, so the stops are printed with their values. */}
-            <div className="mt-2 text-ink3">{t("env.map.legend")}</div>
-            {isIce ? (
-              <div className="mt-0.5 space-y-0.5">
-                {/* Sea and sea ice only. The chart classifies land as well,
-                    and the point probe still reports it — but the basin layer
-                    no longer draws land cells, so listing them here would
-                    describe a colour that is not on the map. */}
-                {[3, 1].map((c) => (
-                  <div key={c} className="flex items-center gap-1.5">
-                    <span
-                      className="inline-block w-3 h-3 rounded-[2px]"
-                      style={{
-                        background: ICE_CLASS_COLOURS[c],
-                        boxShadow:
-                          c === 3 ? "0 0 0 1px #eaf7ff" : "0 0 0 1px rgba(255,255,255,0.12)",
-                      }}
-                    />
-                    <span className={c === 3 ? "text-ink" : "text-ink2"}>
-                      {t(iceClassKeyFor(c))}
-                      {c === 3 ? ` · ${t("env.map.iceEdge")}` : ""}
+          {/* The field drawn as cells. Source and variable together — MUR and
+              CoralTemp are separate entries because they are separate claims. */}
+          <label className="block mt-2 text-ink3" htmlFor="env-field">{t("env.map.field")}</label>
+          <select
+            id="env-field"
+            data-testid="env-field"
+            value={chosen ? layerKey(chosen.source, chosen.var) : ""}
+            onChange={(e) => setField(e.target.value || null)}
+            disabled={!fields.length}
+            className="w-full h-6 mt-0.5 bg-surface2 border border-line rounded px-1 text-2xs text-ink focus:outline-none focus:border-ink3"
+          >
+            {!fields.length && <option value="">{t("env.map.noField")}</option>}
+            {fields.map((l) => (
+              <option key={layerKey(l.source, l.var)} value={layerKey(l.source, l.var)}>
+                {t(varKeyFor(l.var))} · {t(sourceKeyFor(l.source))}
+              </option>
+            ))}
+          </select>
+
+          {chosen ? (
+            <div className="mt-2 border-t border-line pt-2 leading-tight" data-testid="env-readout">
+              <div className="text-ink">{t(varKeyFor(chosen.var))}</div>
+              <div className="text-ink2">
+                {t("env.source")}: {t(sourceKeyFor(chosen.source))}
+              </div>
+              <div className="text-ink3 font-mono">{chosen.dataset}</div>
+              <div className="text-ink2">
+                {t("env.slice", { time: formatSliceTime(chosen.measured_at) })}
+                {" · "}
+                <span className={chosen.gap_hours > 24 ? "text-bad" : "text-ink3"}>
+                  {t("env.ageHours", { n: Math.round(chosen.gap_hours) })}
+                </span>
+              </div>
+              <div className="text-ink3">
+                {t("env.cellSize")}: {chosen.resolution} · {chosen.count}{" "}
+                {tp(chosen.count, "env.map.cellsUnit")}
+              </div>
+              {chosen.spacing_deg != null && (
+                <div className="text-ink3">{t("env.spacing", { deg: chosen.spacing_deg })}</div>
+              )}
+              <div className="text-ink3">
+                {t("env.latency")}: {t(latencyKeyFor(chosen.source))}
+              </div>
+              <div className="text-ink3 mt-1">
+                {cellsTooSmall && zLegible != null
+                  ? t("env.map.tooSmall", { z: zLegible.toFixed(1) })
+                  : t("env.map.trueSize")}
+              </div>
+              {cellsTooSmall && zLegible != null && (
+                <button
+                  onClick={zoomToCells}
+                  className="mt-1 h-5 px-1.5 rounded border border-line bg-surface2 text-2xs text-ink2 hover:text-ink"
+                >
+                  {t("env.map.zoomTo", { z: zLegible.toFixed(1) })}
+                </button>
+              )}
+
+              {/* The legend. A colour that cannot be read back as a number is
+                  decoration, so the stops are printed with their values. */}
+              <div className="mt-2 text-ink3">{t("env.map.legend")}</div>
+              {isIce ? (
+                <div className="mt-0.5 space-y-0.5">
+                  {/* Sea and sea ice only. The chart classifies land as well,
+                      and the point probe still reports it — but the basin layer
+                      no longer draws land cells, so listing them here would
+                      describe a colour that is not on the map. */}
+                  {[3, 1].map((c) => (
+                    <div key={c} className="flex items-center gap-1.5">
+                      <span
+                        className="inline-block w-3 h-3 rounded-[2px]"
+                        style={{
+                          background: ICE_CLASS_COLOURS[c],
+                          boxShadow:
+                            c === 3 ? "0 0 0 1px #eaf7ff" : "0 0 0 1px rgba(255,255,255,0.12)",
+                        }}
+                      />
+                      <span className={c === 3 ? "text-ink" : "text-ink2"}>
+                        {t(iceClassKeyFor(c))}
+                        {c === 3 ? ` · ${t("env.map.iceEdge")}` : ""}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : scale ? (
+                <div className="mt-0.5">
+                  <div className="flex">
+                    {scale.ramp.stops.map(([v, c], i) => (
+                      <span
+                        key={i}
+                        className="flex-1 h-2.5"
+                        style={{ background: c }}
+                        title={`${formatValue(chosen.var, v)} ${unitOf(chosen.var)}`}
+                      />
+                    ))}
+                  </div>
+                  <div className="flex justify-between text-ink3 font-mono mt-0.5">
+                    <span>{formatValue(chosen.var, scale.ramp.stops[0][0])}</span>
+                    <span>
+                      {formatValue(chosen.var, scale.ramp.stops[scale.ramp.stops.length - 1][0])}{" "}
+                      {unitOf(chosen.var)}
                     </span>
                   </div>
-                ))}
-              </div>
-            ) : scale ? (
-              <div className="mt-0.5">
-                <div className="flex">
-                  {scale.ramp.stops.map(([v, c], i) => (
-                    <span
-                      key={i}
-                      className="flex-1 h-2.5"
-                      style={{ background: c }}
-                      title={`${formatValue(chosen.var, v)} ${unitOf(chosen.var)}`}
-                    />
-                  ))}
+                  {scale.ownRange && <div className="text-ink3">{t("env.map.scaleSlice")}</div>}
                 </div>
-                <div className="flex justify-between text-ink3 font-mono mt-0.5">
-                  <span>{formatValue(chosen.var, scale.ramp.stops[0][0])}</span>
-                  <span>
-                    {formatValue(chosen.var, scale.ramp.stops[scale.ramp.stops.length - 1][0])}{" "}
-                    {unitOf(chosen.var)}
-                  </span>
-                </div>
-                {scale.ownRange && <div className="text-ink3">{t("env.map.scaleSlice")}</div>}
-              </div>
-            ) : null}
-            <div className="text-ink3 mt-1">{t("env.map.probeHint")}</div>
-          </div>
-        ) : (
-          <div className="mt-2 border-t border-line pt-2 text-ink3" data-testid="env-readout">
-            {t("env.map.noLayer")}
-          </div>
-        )}
-
-        {/* Wind, its own source and its own slice — not the field's. */}
-        <div className="mt-2 border-t border-line pt-2">
-          <label className="flex items-center gap-1.5 text-ink2">
-            <input
-              type="checkbox"
-              data-testid="env-wind"
-              checked={wind}
-              onChange={(e) => setWind(e.target.checked)}
-            />
-            {t("env.map.wind")}
-          </label>
-          {wind &&
-            (windField ? (
-              <div className="mt-1 leading-tight">
-                <div className="text-ink2">{t(sourceKeyFor(windField.layer.source))}</div>
-                <div className="text-ink2">
-                  {t("env.slice", { time: formatSliceTime(windField.layer.measured_at) })}
-                  {" · "}
-                  <span className={windField.layer.gap_hours > 24 ? "text-bad" : "text-ink3"}>
-                    {t("env.ageHours", { n: Math.round(windField.layer.gap_hours) })}
-                  </span>
-                </div>
-                <div className="text-ink3">
-                  {t("env.cellSize")}: {windField.layer.resolution} · {arrows.length}{" "}
-                  {tp(arrows.length, "env.map.arrowsUnit")}
-                </div>
-                <div className="text-ink3">{t("env.map.windHow")}</div>
-                <div className="flex items-end gap-3 mt-1">
-                  {[5, 10].map((ms) => (
-                    <div key={ms} className="flex items-center gap-1">
-                      <svg width={arrowLen(ms) + 8} height={14} style={{ overflow: "visible" }}>
-                        <ArrowShape x={arrowLen(ms) / 2 + 4} y={7} ms={ms} dir={270} />
-                      </svg>
-                      <span className="text-ink3">{t("env.map.windRef", { n: ms })}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <div className="mt-1 text-ink3">{t("env.map.noLayer")}</div>
-            ))}
-        </div>
-
-        {/* Whole-sea figures. Never drawn as a cell: sea level is one number
-            for the entire Caspian, not a measurement of the altimetry crossing
-            it happens to be stored at. */}
-        {basinLayers.length > 0 && (
-          <div className="mt-2 border-t border-line pt-2 leading-tight">
-            <div className="text-ink3">{t("env.map.basin")}</div>
-            {basinLayers.map((l) => (
-              <div key={layerKey(l.source, l.var)} className="mt-0.5">
-                <span className="text-ink">
-                  {t(varKeyFor(l.var))}: {readValue(l.var, l.cells[0].value)}
-                </span>
-                <div className="text-ink3">
-                  {t(sourceKeyFor(l.source))} ·{" "}
-                  {t("env.slice", { time: formatSliceTime(l.measured_at) })} ·{" "}
-                  {t("env.ageHours", { n: Math.round(l.gap_hours) })}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* What was not measured, said out loud. A gap is never a zero and
-            never an omitted row. */}
-        {!!grid?.missing?.length && (
-          <div className="mt-2 border-t border-line pt-2 leading-tight" data-testid="env-missing">
-            <div className="text-ink3">{t("env.missing")}</div>
-            {grid.missing.map((m, i) => (
-              <div key={i} className="mt-0.5">
-                <span className="text-ink2">{missingLabel(m, t)}</span>
-                <div className="text-ink3">{reasonText(m.reason, t)}</div>
-              </div>
-            ))}
-            <div className="text-ink3 mt-1">{t("env.missing.note")}</div>
-          </div>
-        )}
-
-        {/* Every source at one point — the place where MUR and CoralTemp are
-            allowed to disagree in public. */}
-        {(probe || probeLoading || probeError) && (
-          <div className="mt-2 border-t border-line pt-2 leading-tight" data-testid="env-probe">
-            <div className="flex items-center justify-between">
-              <span className="text-ink">{t("env.map.probe")}</span>
-              <button onClick={clearProbe} className="text-ink3 hover:text-ink">
-                {t("env.map.probeClose")}
-              </button>
+              ) : null}
+              <div className="text-ink3 mt-1">{t("env.map.probeHint")}</div>
             </div>
-            {probeLoading && <div className="text-ink3">{t("env.map.loading")}</div>}
-            {probeError && (
-              <div className="text-bad">{t("env.map.failed", { msg: probeError })}</div>
-            )}
-            {probe && (
-              <>
-                <div className="text-ink3 font-mono">
-                  {probe.point.lat.toFixed(3)}, {probe.point.lng.toFixed(3)}
-                </div>
-                {probe.samples.map((s) => (
-                  <div key={s.source} className="mt-1">
-                    <div className="text-ink2">{t(sourceKeyFor(s.source))}</div>
-                    {Object.entries(s.values).map(([v, n]) => (
-                      <div key={v} className="text-ink">
-                        {t(varKeyFor(v))}: {readValue(v, n)}
+          ) : (
+            <div className="mt-2 border-t border-line pt-2 text-ink3" data-testid="env-readout">
+              {t("env.map.noLayer")}
+            </div>
+          )}
+
+          {/* Wind, its own source and its own slice — not the field's. */}
+          <div className="mt-2 border-t border-line pt-2">
+            <label className="flex items-center gap-1.5 text-ink2">
+              <input
+                type="checkbox"
+                data-testid="env-wind"
+                checked={wind}
+                onChange={(e) => setWind(e.target.checked)}
+              />
+              {t("env.map.wind")}
+            </label>
+            {wind &&
+              (windField ? (
+                <div className="mt-1 leading-tight">
+                  <div className="text-ink2">{t(sourceKeyFor(windField.layer.source))}</div>
+                  <div className="text-ink2">
+                    {t("env.slice", { time: formatSliceTime(windField.layer.measured_at) })}
+                    {" · "}
+                    <span className={windField.layer.gap_hours > 24 ? "text-bad" : "text-ink3"}>
+                      {t("env.ageHours", { n: Math.round(windField.layer.gap_hours) })}
+                    </span>
+                  </div>
+                  <div className="text-ink3">
+                    {t("env.cellSize")}: {windField.layer.resolution} · {arrows.length}{" "}
+                    {tp(arrows.length, "env.map.arrowsUnit")}
+                  </div>
+                  <div className="text-ink3">{t("env.map.windHow")}</div>
+                  <div className="flex items-end gap-3 mt-1">
+                    {[5, 10].map((ms) => (
+                      <div key={ms} className="flex items-center gap-1">
+                        <svg width={arrowLen(ms) + 8} height={14} style={{ overflow: "visible" }}>
+                          <ArrowShape x={arrowLen(ms) / 2 + 4} y={7} ms={ms} dir={270} />
+                        </svg>
+                        <span className="text-ink3">{t("env.map.windRef", { n: ms })}</span>
                       </div>
                     ))}
-                    <div className="text-ink3">
-                      {t("env.slice", { time: formatSliceTime(s.measured_at) })} ·{" "}
-                      {t("env.ageHours", { n: Math.round(s.gap_hours) })} ·{" "}
-                      {s.scope === "basin"
-                        ? t("env.scope.basin")
-                        : t("env.distanceKm", { km: s.distance_km })}
-                    </div>
                   </div>
-                ))}
-                {probe.missing.map((m, i) => (
-                  <div key={`m${i}`} className="mt-1">
-                    <div className="text-ink3">
-                      {missingLabel(m, t)} — {t("env.missing")}
-                    </div>
-                    <div className="text-ink3">{reasonText(m.reason, t)}</div>
-                  </div>
-                ))}
-              </>
-            )}
+                </div>
+              ) : (
+                <div className="mt-1 text-ink3">{t("env.map.noLayer")}</div>
+              ))}
           </div>
-        )}
-      </div>
+
+          {/* Whole-sea figures. Never drawn as a cell: sea level is one number
+              for the entire Caspian, not a measurement of the altimetry crossing
+              it happens to be stored at. */}
+          {basinLayers.length > 0 && (
+            <div className="mt-2 border-t border-line pt-2 leading-tight">
+              <div className="text-ink3">{t("env.map.basin")}</div>
+              {basinLayers.map((l) => (
+                <div key={layerKey(l.source, l.var)} className="mt-0.5">
+                  <span className="text-ink">
+                    {t(varKeyFor(l.var))}: {readValue(l.var, l.cells[0].value)}
+                  </span>
+                  <div className="text-ink3">
+                    {t(sourceKeyFor(l.source))} ·{" "}
+                    {t("env.slice", { time: formatSliceTime(l.measured_at) })} ·{" "}
+                    {t("env.ageHours", { n: Math.round(l.gap_hours) })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* What was not measured, said out loud. A gap is never a zero and
+              never an omitted row. */}
+          {!!grid?.missing?.length && (
+            <div className="mt-2 border-t border-line pt-2 leading-tight" data-testid="env-missing">
+              <div className="text-ink3">{t("env.missing")}</div>
+              {grid.missing.map((m, i) => (
+                <div key={i} className="mt-0.5">
+                  <span className="text-ink2">{missingLabel(m, t)}</span>
+                  <div className="text-ink3">{reasonText(m.reason, t)}</div>
+                </div>
+              ))}
+              <div className="text-ink3 mt-1">{t("env.missing.note")}</div>
+            </div>
+          )}
+
+          {/* Every source at one point — the place where MUR and CoralTemp are
+              allowed to disagree in public. */}
+          {(probe || probeLoading || probeError) && (
+            <div className="mt-2 border-t border-line pt-2 leading-tight" data-testid="env-probe">
+              <div className="flex items-center justify-between">
+                <span className="text-ink">{t("env.map.probe")}</span>
+                <button onClick={clearProbe} className="text-ink3 hover:text-ink">
+                  {t("env.map.probeClose")}
+                </button>
+              </div>
+              {probeLoading && <div className="text-ink3">{t("env.map.loading")}</div>}
+              {probeError && (
+                <div className="text-bad">{t("env.map.failed", { msg: probeError })}</div>
+              )}
+              {probe && (
+                <>
+                  <div className="text-ink3 font-mono">
+                    {probe.point.lat.toFixed(3)}, {probe.point.lng.toFixed(3)}
+                  </div>
+                  {probe.samples.map((s) => (
+                    <div key={s.source} className="mt-1">
+                      <div className="text-ink2">{t(sourceKeyFor(s.source))}</div>
+                      {Object.entries(s.values).map(([v, n]) => (
+                        <div key={v} className="text-ink">
+                          {t(varKeyFor(v))}: {readValue(v, n)}
+                        </div>
+                      ))}
+                      <div className="text-ink3">
+                        {t("env.slice", { time: formatSliceTime(s.measured_at) })} ·{" "}
+                        {t("env.ageHours", { n: Math.round(s.gap_hours) })} ·{" "}
+                        {s.scope === "basin"
+                          ? t("env.scope.basin")
+                          : t("env.distanceKm", { km: s.distance_km })}
+                      </div>
+                    </div>
+                  ))}
+                  {probe.missing.map((m, i) => (
+                    <div key={`m${i}`} className="mt-1">
+                      <div className="text-ink3">
+                        {missingLabel(m, t)} — {t("env.missing")}
+                      </div>
+                      <div className="text-ink3">{reasonText(m.reason, t)}</div>
+                    </div>
+                  ))}
+                </>
+              )}
+            </div>
+          )}
+        </div>,
+        slot,
+      )}
 
       {/* Hover: the one cell under the cursor, with its own value and, on the
           ice layer, the thickness reading if VIIRS has one for that moment. */}
