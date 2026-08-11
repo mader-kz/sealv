@@ -95,7 +95,7 @@ export default function Rail() {
      of text it has always been. */
   const row = (active?: boolean) =>
     `relative flex shrink-0 items-center transition-colors ` +
-    `min-w-0 flex-1 flex-col justify-center gap-0.5 py-1.5 ` +
+    `min-w-0 flex-1 flex-col justify-center gap-1 px-0.5 py-1 ` +
     `sm:h-8 sm:flex-none sm:flex-row sm:gap-0 sm:py-0 ${
       open ? "sm:px-5 sm:gap-2.5 sm:justify-start" : "sm:w-8 sm:mx-auto sm:justify-center"
     } ${active ? "text-ink" : "text-ink3 hover:text-ink2"}`;
@@ -106,7 +106,7 @@ export default function Rail() {
        for the home indicator on a notched device. */
     <nav
       aria-label={t("rail.nav")}
-      className={`fixed inset-x-0 bottom-0 z-30 flex h-14 flex-row items-stretch border-t border-hair bg-bg pb-[env(safe-area-inset-bottom)] overflow-hidden
+      className={`fixed inset-x-0 bottom-0 z-30 flex h-[52px] flex-row items-stretch border-t border-line bg-bg pb-[env(safe-area-inset-bottom)] overflow-hidden
         sm:static sm:h-auto sm:flex-col sm:items-stretch sm:border-t-0 sm:border-r sm:pb-0 sm:py-3 sm:shrink-0 sm:transition-[width] sm:duration-150
         ${open ? "sm:w-44" : "sm:w-12"}`}
     >
@@ -123,9 +123,22 @@ export default function Rail() {
             aria-label={badge ? `${label} · ${badge.title}` : label}
             className={row(active)}
           >
-            {active && <span className="absolute left-0 top-1 bottom-1 w-0.5 bg-ink" />}
-            <Icon name={MODE_ICON[m]} size={15} className={`shrink-0 ${active ? "" : "opacity-50"}`} />
-            <span className="max-w-full truncate px-1 text-[10px] leading-none sm:hidden">{label}</span>
+            {/* The active mark follows the bar's own axis. A 2px rule on the
+                LEFT edge is what a vertical rail wants; in a horizontal bottom
+                bar the same rule reads as a stray white stick beside the label,
+                so on a phone it lies along the top edge of the item instead. */}
+            {active && (
+              <span
+                aria-hidden="true"
+                className="absolute inset-x-3 top-0 h-0.5 bg-ink sm:inset-x-auto sm:left-0 sm:top-1 sm:bottom-1 sm:h-auto sm:w-0.5"
+              />
+            )}
+            <Icon
+              name={MODE_ICON[m]}
+              size={18}
+              className={`shrink-0 sm:!h-[15px] sm:!w-[15px] ${active ? "" : "opacity-60 sm:opacity-50"}`}
+            />
+            <span className="w-full truncate text-center text-[10px] leading-none tracking-tight sm:hidden">{label}</span>
             {open && <span className="hidden text-base truncate sm:inline">{label}</span>}
             {open && badge && (
               /* Running work takes the signal colour; work waiting on a person
@@ -140,7 +153,10 @@ export default function Rail() {
                 shoulder. The count itself stays in the title. */}
             {!open && badge && (
               <span
-                className={`absolute top-0.5 right-0.5 w-1 h-1 rounded-full ${badge.attention ? "bg-ink" : "bg-accent"}`}
+                /* On the icon's shoulder. Pinned to the button's corner it
+                   floated above the row on the bottom bar, reading as a stray
+                   dot rather than as this item's badge. */
+                className={`absolute right-[22%] top-1.5 h-1 w-1 rounded-full sm:right-0.5 sm:top-0.5 ${badge.attention ? "bg-ink" : "bg-accent"}`}
                 aria-hidden="true"
               />
             )}
