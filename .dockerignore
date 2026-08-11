@@ -92,6 +92,15 @@ start.sh
 *.m4v
 *.webm
 *.mkv
+
+# The ONE exception: the clip the ingest screen offers as "try it without a
+# drone file". It is a product asset, not somebody's footage lying around - the
+# Dropzone fetches /samples/FIELD_0001.MP4 - and being caught by the rule above
+# meant it never reached git, never reached the image, and the button 404'd on
+# every deployment while working perfectly on the machine of whoever added it.
+# 11 MB, well under the 50 MB blob guard in CI.
+!frontend/public/samples/FIELD_0001.MP4
+
 *.avi
 *.srt
 
