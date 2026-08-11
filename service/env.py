@@ -386,6 +386,8 @@ def fetch(
         _HOST_FAILS.pop(host, None)
     last: Optional[Exception] = None
     for attempt in range(1, max(1, attempts) + 1):
+        if _STOPPING.is_set():
+            raise SourceError(f"{url.split('?')[0]}: shutting down before attempt {attempt}")
         _space_out(host)
         req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
         try:
@@ -415,7 +417,9 @@ def fetch(
                 _HOST_DOWN[host] = time.monotonic()
                 break  # further attempts would each cost another full timeout
         if attempt < attempts:
-            time.sleep(min(20.0, 2.0 ** attempt))
+            # Interruptible: a backoff nap must not outlive the shutdown budget.
+            if _STOPPING.wait(min(20.0, 2.0 ** attempt)):
+                break
     raise SourceError(f"{url.split('?')[0]}: {type(last).__name__}: {last}")
 
 
@@ -567,7 +571,7 @@ OPENMETEO_BATCH = 60
 
 def _openmeteo_grid(
     source: str, base: str, model: str, pairs: tuple, when: datetime,
-    step_deg: float, *, marine: bool = False,
+    step_deg: float, *, marine: bool = False, should_stop: StopCheck = None,
 ) -> list[dict]:
     """The same weather these sources give at a point, over the water grid.
 
@@ -595,6 +599,10 @@ def _openmeteo_grid(
         params["cell_selection"] = "sea"
     out: list[dict] = []
     for start in range(0, len(coords), OPENMETEO_BATCH):
+        # Each batch is one HTTP round trip of up to 60 locations; stopping
+        # between them is what keeps a shutdown inside its ten-second budget.
+        if _stopping(should_stop):
+            break
         chunk = coords[start:start + OPENMETEO_BATCH]
         batch = dict(params)
         batch["latitude"] = ",".join(f"{lat:.4f}" for lat, _ in chunk)
@@ -1559,8 +1567,46 @@ _CLIENTS: dict[str, Callable[..., Optional[dict]]] = {
 }
 
 
+#: A caller's "have I been asked to stop?". Collection is minutes of network
+#: I/O, so a process that only checks between CYCLES cannot answer SIGTERM in
+#: the ten seconds a redeploy allows and gets SIGKILLed instead - which is what
+#: the container log used to show on every deploy. Threading this through the
+#: long loops is what turns a forced kill into a clean stop.
+#: Process-wide "we are shutting down". Set once by the worker's signal
+#: handler; every retry loop consults it. The per-call `should_stop` above
+#: guards the loops BETWEEN requests, which still leaves the request already in
+#: flight - and with three attempts against a dead host that is three timeouts,
+#: up to three minutes past the ten seconds a redeploy allows. This bounds the
+#: worst case at the one request already open.
+_STOPPING = threading.Event()
+
+
+def request_stop() -> None:
+    """Ask every collection loop in this process to wind up."""
+    _STOPPING.set()
+
+
+def stop_requested() -> bool:
+    return _STOPPING.is_set()
+
+
+StopCheck = Optional[Callable[[], bool]]
+
+
+def _stopping(should_stop: StopCheck) -> bool:
+    if _STOPPING.is_set():
+        return True
+    if should_stop is None:
+        return False
+    try:
+        return bool(should_stop())
+    except Exception:  # noqa: BLE001 - a broken predicate must not stop collection
+        return False
+
+
 def collect_point(
-    lat: float, lng: float, when: Any, sources: Optional[Iterable[str]] = None
+    lat: float, lng: float, when: Any, sources: Optional[Iterable[str]] = None,
+    should_stop: StopCheck = None,
 ) -> tuple[list[dict], list[dict]]:
     """Every source for one point and time.
 
@@ -1569,11 +1615,18 @@ def collect_point(
     caller stores what it got and can see, per source, why the rest is missing.
     A missing value must be visible as missing, and an invisible failure is the
     fastest way to a chart that quietly stops updating.
+
+    `should_stop` is checked between sources. Whatever was already collected is
+    still returned: a partial stack is real data, and the next cycle fills the
+    rest in.
     """
     when = _as_utc(when)
     samples: list[dict] = []
     problems: list[dict] = []
     for name in (sources or POINT_SOURCES):
+        if _stopping(should_stop):
+            problems.append({"source": name, "error": "stopped before this source was asked"})
+            break
         try:
             if name == "gwm_sea_level":
                 sample = gwm_sea_level(when)
@@ -1680,7 +1733,8 @@ def _erddap_grid(
 
 
 def collect_grid(
-    when: Any, *, step_deg: float = 0.5, sources: Optional[Iterable[str]] = None
+    when: Any, *, step_deg: float = 0.5, sources: Optional[Iterable[str]] = None,
+    should_stop: StopCheck = None,
 ) -> tuple[list[dict], list[dict]]:
     """The coarse basin grid: sea-surface temperature and ice.
 
@@ -1688,13 +1742,25 @@ def collect_grid(
     default cycle - it is a 9 km product, and drawing it beside a 1 km SST is
     exactly the mixing the honesty rules forbid unless each is drawn at its own
     cell size. The layer that wants it asks for it explicitly.
+
+    `should_stop` is checked before each source and inside the two long loops.
+    This is the call that makes a cycle take minutes, so it is also the call
+    that decides whether the process can answer SIGTERM in time. Everything
+    gathered before the stop is returned and stored: a half-collected grid is
+    real measurement, and the next cycle completes it.
     """
     when = _as_utc(when)
     wanted = tuple(sources or ("mur", "ims"))
     samples: list[dict] = []
     problems: list[dict] = []
 
-    if "mur" in wanted:
+    def halt(source: str) -> bool:
+        if not _stopping(should_stop):
+            return False
+        problems.append({"source": source, "error": "stopped before this source was collected"})
+        return True
+
+    if "mur" in wanted and not halt("mur"):
         ok = False
         errs = []
         for host in ERDDAP_HOSTS["mur"]:
@@ -1708,7 +1774,7 @@ def collect_grid(
         if not ok:
             problems.append({"source": "mur", "error": "; ".join(errs)})
 
-    if "coraltemp" in wanted:
+    if "coraltemp" in wanted and not halt("coraltemp"):
         ok = False
         errs = []
         for host, dataset, sst_var, anom_var in ERDDAP_HOSTS["coraltemp"]:
@@ -1746,27 +1812,27 @@ def collect_grid(
     # that is a source correctly standing aside, not a failure. Listing BOTH
     # (as the default cycle does) always collects the right one.
     weather_id = weather_source_for(when)
-    if weather_id in wanted:
+    if weather_id in wanted and not halt(weather_id):
         try:
             samples += _openmeteo_grid(
                 weather_id,
                 OPENMETEO_FORECAST if weather_id == "openmeteo_icon_eu" else OPENMETEO_ARCHIVE,
                 "icon_eu" if weather_id == "openmeteo_icon_eu" else "era5",
-                _ATMO_VARS, when, step_deg,
+                _ATMO_VARS, when, step_deg, should_stop=should_stop,
             )
         except SourceError as exc:
             problems.append({"source": weather_id, "error": str(exc)})
 
-    if "openmeteo_mfwam" in wanted:
+    if "openmeteo_mfwam" in wanted and not halt("openmeteo_mfwam"):
         try:
             samples += _openmeteo_grid(
                 "openmeteo_mfwam", OPENMETEO_MARINE, "meteofrance_wave",
-                _WAVE_VARS, when, step_deg, marine=True,
+                _WAVE_VARS, when, step_deg, marine=True, should_stop=should_stop,
             )
         except SourceError as exc:
             problems.append({"source": "openmeteo_mfwam", "error": str(exc)})
 
-    if "viirs_chl" in wanted:
+    if "viirs_chl" in wanted and not halt("viirs_chl"):
         try:
             samples += _erddap_grid("viirs_chl", ERDDAP_HOSTS["viirs"][0],
                                     "noaacwNPPN20VIIRSDINEOFDaily", "chlor_a",
@@ -1774,12 +1840,17 @@ def collect_grid(
         except SourceError as exc:
             problems.append({"source": "viirs_chl", "error": str(exc)})
 
-    if "ims" in wanted:
+    if "ims" in wanted and not halt("ims"):
         # One download, then every cell is a byte lookup - the opposite of the
         # ERDDAP path, and the reason IMS is cheap to collect densely.
         try:
             hit = False
             for cell_lat, cell_lng in caspian_grid(step_deg, when):
+                # Cheap per cell (a byte lookup into the cached patch), but the
+                # loop is ~180 of them and the check costs nothing.
+                if _stopping(should_stop):
+                    problems.append({"source": "ims", "error": "stopped part-way through the grid"})
+                    break
                 sample = ims_ice(cell_lat, cell_lng, when)
                 if sample is None:
                     continue

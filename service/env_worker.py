@@ -116,7 +116,11 @@ def _install_signals() -> None:
             log("second signal - exiting now")
             os._exit(130)
         STOP.set()
-        log(f"signal {signum} - finishing this cycle, then stopping")
+        # Tell the collection loops too: STOP alone is only read between
+        # sources, and `env.request_stop()` is what reaches the retry loop
+        # inside a request that is already open.
+        env.request_stop()
+        log(f"signal {signum} - winding up this cycle, then stopping")
 
     signal.signal(signal.SIGINT, handler)
     signal.signal(signal.SIGTERM, handler)
@@ -213,7 +217,9 @@ def collect_once(
         if STOP.is_set():
             break
         try:
-            samples, problems = env.collect_point(place["lat"], place["lng"], when)
+            samples, problems = env.collect_point(
+                place["lat"], place["lng"], when, should_stop=STOP.is_set
+            )
         except Exception as exc:  # noqa: BLE001 - one place must not end the cycle
             receipt["problems"].append(
                 {"where": place["id"], "source": "*", "error": f"{type(exc).__name__}: {exc}"}
@@ -232,7 +238,8 @@ def collect_once(
     if not skip_grid and not STOP.is_set():
         try:
             cells, problems = env.collect_grid(
-                when, step_deg=grid_step, sources=grid_sources
+                when, step_deg=grid_step, sources=grid_sources,
+                should_stop=STOP.is_set,
             )
         except Exception as exc:  # noqa: BLE001
             cells, problems = [], [{"source": "grid", "error": f"{type(exc).__name__}: {exc}"}]
