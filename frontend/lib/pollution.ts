@@ -217,3 +217,53 @@ export function pollutionUncertainty(collection: PollutionDisplayFC): PollutionD
     }),
   };
 }
+
+/* ------------------------------------------------------------ vocabulary */
+
+/* Three fields arrive from the collector as its own words, and all three
+   reached the screen untranslated in a trilingual product: the incident kind,
+   the location precision, and a root cause that is a fixed ENGLISH SENTENCE
+   when there is none. They live here rather than in the map component because
+   the card and the hover tip each had their own copy and the copies drifted -
+   the card already fell back to a translated "cause unknown" while the tip
+   printed the English placeholder, and the tip printed a raw `slick` where the
+   card said "Плёнка".
+
+   These return i18n KEYS, not text: the dictionary owns the words, this module
+   owns the mapping. */
+
+/** Does this root cause say anything, or is it the collector's placeholder?
+ *
+ *  Matched loosely - case, trailing full stop - because it is prose emitted by
+ *  another process rather than an enum this UI controls. 37 of the 121
+ *  incidents on production carry it today. */
+export function hasRootCause(raw?: string | null): boolean {
+  const text = (raw ?? "").trim();
+  if (!text) return false;
+  return !/^cause\s+not\s+yet\s+determined\.?$/i.test(text);
+}
+
+/** i18n key for `location_precision`. The three values the collector emits are
+ *  `exact`, `approximate` and `field`; anything else returns null so the caller
+ *  can show the raw value rather than swallow a word somebody stored. */
+export function precisionKey(value?: string | null): string | null {
+  switch ((value ?? "").trim().toLowerCase()) {
+    case "exact": return "pollution.precisionExact";
+    case "approximate": return "pollution.precisionApproximate";
+    case "field": return "pollution.precisionField";
+    case "": return "pollution.precisionUnknown";
+    default: return null;
+  }
+}
+
+/** i18n key for `kind`. Unknown kinds fall to the catch-all, which is honest:
+ *  the incident is real, its category is one this UI has no word for. */
+export function kindKey(value?: string | null): string {
+  switch ((value ?? "").trim().toLowerCase()) {
+    case "flare": return "pollution.kindFlare";
+    case "slick": return "pollution.kindSlick";
+    case "spill": return "pollution.kindSpill";
+    case "discharge": return "pollution.kindDischarge";
+    default: return "pollution.kindOther";
+  }
+}
