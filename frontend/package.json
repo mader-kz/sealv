@@ -1,6 +1,6 @@
 {
   "name": "sealv-platform",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "private": true,
   "scripts": {
     "predev": "node tools/copy-maplibre-worker.mjs",
