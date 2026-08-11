@@ -1963,7 +1963,12 @@ export default function CaspianMap({
           through the gaps. */}
       <div
         data-map-left-stack
-        className="pointer-events-none absolute top-3 left-3 z-10 flex max-h-[calc(100%-5rem)] w-[calc(100%-5.75rem)] max-w-[340px] flex-col items-start gap-2 overflow-y-auto overflow-x-hidden sm:max-h-[calc(100%-1.5rem)] sm:w-auto sm:max-w-[min(520px,calc(100%-1.5rem))]"
+        /* The width always leaves the top-right trigger its corner - at EVERY
+             width, not just below `sm:`. Reserving it only on mobile is how the
+             column and the history button ended up 3420px² on top of each other
+             at exactly 640px, where the trigger regains its label (57px -> 183px)
+             and the column stopped shrinking to fit. */
+          className="pointer-events-none absolute top-3 left-3 z-10 flex max-h-[calc(100%-5rem)] w-[calc(100%-5.75rem)] max-w-[340px] flex-col items-start gap-2 overflow-y-auto overflow-x-hidden sm:max-h-[calc(100%-1.5rem)] sm:w-[calc(100%-13rem)] sm:max-w-[520px]"
       >
       <div className="pointer-events-auto flex flex-wrap items-center gap-2">
         {/* The flat dark plate the map's own controls now wear — one border,
