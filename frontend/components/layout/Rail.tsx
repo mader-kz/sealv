@@ -89,13 +89,27 @@ export default function Rail() {
      strength, and a 2px rule on the rail's edge — and none of them is the
      signal colour: green here is the standing estimate, not "you clicked
      this". No hover fill either; the colour step is the hover. */
+  /* Two shapes, one row. On a phone the rail is a bottom bar, so a row is a
+     full-height column of icon-over-label that fills its share of the width -
+     a 56px target a thumb can hit without aiming. From `sm:` up it is the line
+     of text it has always been. */
   const row = (active?: boolean) =>
-    `relative h-8 flex items-center transition-colors shrink-0 ${
-      open ? "px-5 gap-2.5 justify-start" : "w-8 mx-auto justify-center"
+    `relative flex shrink-0 items-center transition-colors ` +
+    `min-w-0 flex-1 flex-col justify-center gap-0.5 py-1.5 ` +
+    `sm:h-8 sm:flex-none sm:flex-row sm:gap-0 sm:py-0 ${
+      open ? "sm:px-5 sm:gap-2.5 sm:justify-start" : "sm:w-8 sm:mx-auto sm:justify-center"
     } ${active ? "text-ink" : "text-ink3 hover:text-ink2"}`;
 
   return (
-    <div className={`${open ? "w-44" : "w-12"} shrink-0 bg-bg border-r border-hair flex flex-col py-3 overflow-hidden transition-[width] duration-150`}>
+    /* Bottom bar on a phone, side rail from `sm:` up. Fixed rather than in
+       flow at the bottom so the map keeps the full height under it, and padded
+       for the home indicator on a notched device. */
+    <nav
+      aria-label={t("rail.nav")}
+      className={`fixed inset-x-0 bottom-0 z-30 flex h-14 flex-row items-stretch border-t border-hair bg-bg pb-[env(safe-area-inset-bottom)] overflow-hidden
+        sm:static sm:h-auto sm:flex-col sm:items-stretch sm:border-t-0 sm:border-r sm:pb-0 sm:py-3 sm:shrink-0 sm:transition-[width] sm:duration-150
+        ${open ? "sm:w-44" : "sm:w-12"}`}
+    >
       {MODE_ORDER.map(m => {
         const active = mode === m;
         const label = t(MODE_LABEL_KEY[m]);
@@ -111,7 +125,8 @@ export default function Rail() {
           >
             {active && <span className="absolute left-0 top-1 bottom-1 w-0.5 bg-ink" />}
             <Icon name={MODE_ICON[m]} size={15} className={`shrink-0 ${active ? "" : "opacity-50"}`} />
-            {open && <span className="text-base truncate">{label}</span>}
+            <span className="max-w-full truncate px-1 text-[10px] leading-none sm:hidden">{label}</span>
+            {open && <span className="hidden text-base truncate sm:inline">{label}</span>}
             {open && badge && (
               /* Running work takes the signal colour; work waiting on a person
                  is plain ink in italic — the same two states every queue in
@@ -133,14 +148,15 @@ export default function Rail() {
         );
       })}
 
-      <div className="flex-1" />
+      <div className="hidden flex-1 sm:block" />
 
       <button
         onClick={toggle}
         title={open ? t("rail.collapse") : t("rail.expand")}
         aria-label={open ? t("rail.collapse") : t("rail.expand")}
         aria-expanded={open}
-        className={row(false)}
+        /* Collapsing is a desktop affordance: the bottom bar has one shape. */
+        className={`hidden sm:flex ${row(false)}`}
       >
         <Icon name={open ? "chevronLeft" : "chevronRight"} size={15} className="shrink-0 opacity-50" />
         {open && <span className="text-base truncate">{t("rail.collapse")}</span>}
@@ -150,7 +166,7 @@ export default function Rail() {
       {/* nowrap: collapsed, the rule is 40px wide and "v0.3.0" is ~34 — one
           more digit in the version and it would break across two lines inside
           an `overflow-hidden` rail, i.e. disappear. */}
-      <span className={`text-2xs text-ink3 tnum whitespace-nowrap mt-3 pt-2.5 shrink-0 border-t border-hair ${open ? "mx-5" : "mx-1 text-center"}`}>v{pkg.version}</span>
-    </div>
+      <span className={`hidden sm:block text-2xs text-ink3 tnum whitespace-nowrap mt-3 pt-2.5 shrink-0 border-t border-hair ${open ? "mx-5" : "mx-1 text-center"}`}>v{pkg.version}</span>
+    </nav>
   );
 }

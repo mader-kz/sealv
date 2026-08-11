@@ -37,7 +37,8 @@ export default function TopBar(){
             key={l}
             onClick={()=> setLang(l)}
             aria-pressed={lang===l}
-            className={`text-2xs pb-0.5 border-b transition-colors ${
+            /* The hit area grows on a phone; the type does not. */
+            className={`px-1.5 py-2 text-2xs leading-none border-b transition-colors sm:px-0 sm:py-0 sm:pb-0.5 ${
               lang===l ? "text-ink border-ink" : "text-ink3 border-transparent hover:text-ink2"
             }`}
           >

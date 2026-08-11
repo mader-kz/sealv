@@ -250,8 +250,8 @@ export default function ArchiveMode(){
           <p className="text-xs text-ink3 min-w-0 leading-relaxed">{t("arch.lead")}</p>
         </div>
 
-        <div className="flex items-baseline gap-4 mt-4">
-          <div className="flex-1 min-w-0 max-w-[520px] flex">
+        <div className="mt-4 flex flex-wrap items-baseline gap-x-4 gap-y-2">
+          <div className="flex w-full min-w-0 flex-1 sm:w-auto sm:max-w-[520px]">
             <Field value={q} onChange={setQ} placeholder={t("arch.search")} icon="search" />
           </div>
           {footages.length>0 && (
@@ -259,8 +259,8 @@ export default function ArchiveMode(){
               {t("est.showingOf", { n: filtered.length, m: listed.length })}
             </span>
           )}
-          <span className="flex-1" />
-          <div className="flex items-center gap-2 shrink-0">
+          <span className="hidden flex-1 sm:block" />
+          <div className="flex flex-wrap items-center gap-2">
             <Button icon="download" onClick={exportCSV} title={t("left.exportCsvTitle")} />
             {/* A count a person made is a survey too, and for most of this
                 coastline it is the only way a count has ever been made. */}
@@ -273,7 +273,7 @@ export default function ArchiveMode(){
                   aria-expanded={menuOpen}
                   aria-controls="arch-more"
                   title={t("left.more")}
-                  className={`w-7 h-7 grid place-items-center border transition-colors ${
+                  className={`h-9 w-9 sm:h-7 sm:w-7 grid place-items-center border transition-colors ${
                     menuOpen ? "border-ink4 text-ink bg-surface2" : "border-line text-ink2 hover:text-ink hover:border-ink4 hover:bg-surface2"
                   }`}
                 >
@@ -463,7 +463,7 @@ export default function ArchiveMode(){
                     <button
                       onClick={(e)=>{ e.stopPropagation(); select(f.id); flyTo(f.center.lat, f.center.lng); }}
                       onKeyDown={(e)=> e.stopPropagation()}
-                      className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 text-ink3 hover:text-ink transition-opacity"
+                      className="grid h-8 w-8 place-items-center opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 sm:h-auto sm:w-auto text-ink3 hover:text-ink transition-opacity"
                       aria-label={t("arch.showOnMap")}
                       title={t("arch.showOnMap")}
                     >
@@ -478,7 +478,7 @@ export default function ArchiveMode(){
                     <button
                       onClick={(e)=>{e.stopPropagation(); setPendingRetire(f.id); setRetireReason(""); setRetireError(null);}}
                       onKeyDown={(e)=> e.stopPropagation()}
-                      className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 text-ink3 hover:text-bad transition-opacity"
+                      className="grid h-8 w-8 place-items-center opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 sm:h-auto sm:w-auto text-ink3 hover:text-bad transition-opacity"
                       aria-label={t("rec.retire.action")}
                       title={t("rec.retire.action")}
                     >

@@ -397,7 +397,7 @@ export default function SiteCard({
     /* Over the map, against its right edge — the map is the thing this card is
        about, and covering the whole screen with it would break the connection
        between the chip and the panel it opened. */
-    <aside className="absolute top-0 right-0 bottom-0 z-20 w-[360px] max-w-[86%] bg-bg border-l border-line flex flex-col">
+    <aside className="absolute inset-x-0 bottom-0 top-0 z-20 flex w-full flex-col border-line bg-bg sm:inset-x-auto sm:right-0 sm:w-[360px] sm:max-w-[86%] sm:border-l">
       <div className="shrink-0 px-4 pt-3.5 pb-3 border-b border-line relative">
         {editing ? (
           <input

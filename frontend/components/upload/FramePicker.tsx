@@ -308,7 +308,7 @@ export default function FramePicker({ item }: { item: IngestItem }) {
                   disabled={busy}
                   title={t("frames.quickAt", { s: f.atSeconds })}
                   aria-label={t("frames.quickAt", { s: f.atSeconds })}
-                  className="absolute top-0 right-0 w-5 h-5 grid place-items-center bg-black/70 text-ink3 opacity-0 group-hover:opacity-100 focus:opacity-100 hover:text-ink transition-opacity disabled:pointer-events-none"
+                  className="absolute top-0 right-0 grid h-7 w-7 place-items-center bg-black/70 text-ink3 opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100 hover:text-ink disabled:pointer-events-none [@media(hover:none)]:opacity-100 sm:h-5 sm:w-5"
                 >
                   <Icon name="check" size={11} />
                 </button>

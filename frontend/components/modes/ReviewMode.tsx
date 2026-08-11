@@ -119,14 +119,18 @@ export default function ReviewMode() {
     <>
       {/* The mode's own header. One line: what this is, which sortie, how far
           in, and the two shapes the screen can take. */}
-      <div className="h-9 shrink-0 border-b border-line flex items-center gap-3 px-4">
+      {/* Wraps on a phone. In one line this row is 590px wide - a file picker,
+          a tally and two view buttons - and a row wider than the screen widens
+          the LAYOUT viewport, which drags every fixed element (the bottom bar
+          among them) out with it. */}
+      <div className="shrink-0 border-b border-line flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-1.5 sm:h-9 sm:flex-nowrap sm:gap-3 sm:px-4 sm:py-0">
         <span className="hd">{t("nav.review")}</span>
         {view === "frame" && footages.length > 0 && (
           <select
             aria-label={t("wb.scope")}
             value={f?.id ?? ""}
             onChange={(e) => setRunScope(e.target.value || null)}
-            className="h-7 max-w-[300px] bg-transparent border-0 border-b border-line px-0 text-xs text-ink2 hover:border-ink4 focus:border-ink2 transition-colors"
+            className="h-7 min-w-0 max-w-full flex-1 bg-transparent border-0 border-b border-line px-0 text-xs text-ink2 hover:border-ink4 focus:border-ink2 transition-colors sm:max-w-[300px] sm:flex-none"
           >
             {footages.map((x) => {
               const s = reviewStats(x);
@@ -140,7 +144,7 @@ export default function ReviewMode() {
           </select>
         )}
         {view === "frame" && f && <span className="text-xs text-ink3 tnum">{progressText}</span>}
-        <div className="flex-1" />
+        <div className="hidden flex-1 sm:block" />
         <span className="text-2xs text-ink3 hidden xl:block">{t("rev.keysMode")}</span>
         <div className="flex items-center">
           <Tab active={view === "frame"} onClick={() => setView("frame")} title={t("rev.viewFrameWhy")}>
@@ -178,7 +182,7 @@ function Tab({
       onClick={onClick}
       title={title}
       aria-pressed={active}
-      className={`h-7 px-2.5 text-xs border-b transition-colors ${
+      className={`h-9 sm:h-7 px-2.5 text-xs border-b transition-colors ${
         active ? "border-ink text-ink" : "border-transparent text-ink3 hover:text-ink"
       }`}
     >
@@ -306,9 +310,11 @@ function FrameWorkspace({ f }: { f: Footage }) {
   const queue = order.slice(queueStart, queueStart + QUEUE_ROWS);
 
   return (
-    <div className="flex-1 min-h-0 flex">
+    /* Side by side on a desktop; stacked on a phone, where 300px of panel
+       beside 375px of screen left the frame a 75px slit nobody can rule on. */
+    <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
       {/* --------------------------------------------------------- the frame */}
-      <div className="flex-1 min-w-0 relative flex flex-col">
+      <div className="relative flex min-h-[42vh] min-w-0 flex-1 flex-col sm:min-h-0">
         {frame && f.mediaId ? (
           <>
             <EvidenceCanvas
@@ -335,19 +341,19 @@ function FrameWorkspace({ f }: { f: Footage }) {
                 onClick={() => canvas.current?.zoomBy(1.35)}
                 title={t("rev.zoomIn")}
                 aria-label={t("rev.zoomIn")}
-                className="w-7 h-7 grid place-items-center text-ink3 hover:text-ink transition-colors"
+                className="h-9 w-9 sm:h-7 sm:w-7 grid place-items-center text-ink3 hover:text-ink transition-colors"
               >+</button>
               <button
                 onClick={() => canvas.current?.zoomBy(1 / 1.35)}
                 title={t("rev.zoomOut")}
                 aria-label={t("rev.zoomOut")}
-                className="w-7 h-7 grid place-items-center text-ink3 hover:text-ink transition-colors"
+                className="h-9 w-9 sm:h-7 sm:w-7 grid place-items-center text-ink3 hover:text-ink transition-colors"
               >−</button>
               <button
                 onClick={() => canvas.current?.reset()}
                 title={t("rev.zoomFit")}
                 aria-label={t("rev.zoomFit")}
-                className="w-7 h-7 grid place-items-center text-2xs text-ink3 hover:text-ink transition-colors"
+                className="h-9 w-9 sm:h-7 sm:w-7 grid place-items-center text-2xs text-ink3 hover:text-ink transition-colors"
               >1:1</button>
             </div>
           </>
@@ -372,7 +378,7 @@ function FrameWorkspace({ f }: { f: Footage }) {
       </div>
 
       {/* ---------------------------------------------------------- the rail */}
-      <aside className="w-[300px] shrink-0 border-l border-line flex flex-col min-h-0 overflow-y-auto">
+      <aside className="flex min-h-0 w-full shrink-0 flex-col overflow-y-auto border-t border-line sm:w-[300px] sm:border-l sm:border-t-0">
         {/* What this sortie is claiming. The engine's own figure and its range
             stay next to it: the standing number is the engine's minus what a
             person threw out, and hiding either half would make the difference
@@ -471,7 +477,7 @@ function FrameWorkspace({ f }: { f: Footage }) {
                     <button
                       key={p.id}
                       onClick={() => goTo(at, true)}
-                      className={`w-full flex items-center gap-2 px-1 py-1 text-2xs border-b border-hair last:border-0 transition-colors ${
+                      className={`w-full flex min-h-9 sm:min-h-0 items-center gap-2 px-1 py-1 text-2xs border-b border-hair last:border-0 transition-colors ${
                         at === idx ? "bg-hover text-ink" : "text-ink3 hover:bg-hover hover:text-ink"
                       }`}
                     >
