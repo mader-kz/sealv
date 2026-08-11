@@ -62,7 +62,23 @@ export type TrackingOptions = {
 };
 
 export const DEFAULT_TRACKING_OPTIONS: TrackingOptions = {
-  groupRadiusM: 5,
+  /*
+   * Fifteen metres, not five. Five split a haul-out into pairs: measured on a
+   * real sortie of 575 animals lying in a 293 x 289 m patch, single linkage
+   * gave 65 "groups" at 5 m, 112 at 7 m, and one blob of 497 at 10 m - a
+   * partition that doubles when the threshold moves two metres is a property
+   * of the threshold, not of the seals. It also could never recur: animals
+   * rearrange between sorties, so every pair became its own Group N with one
+   * observation, forever. The map drew 72 of them on top of each other.
+   *
+   * At 15 m that same sortie reads as 2 groups, which is what it is - one
+   * dense aggregation and a straggler. This is a threshold, though, not a
+   * discovery: on a continuous haul-out ANY radius is somewhat arbitrary, and
+   * the honest long-term fix is to test whether a partition survives a change
+   * of scale before publishing it, and to say "one continuous haul-out" when
+   * it does not.
+   */
+  groupRadiusM: 15,
   minGroupSize: 2,
   sizeTolerancePct: 40,
   maxSpeedKmPerDay: 60,
