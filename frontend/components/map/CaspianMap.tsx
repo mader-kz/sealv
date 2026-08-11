@@ -17,15 +17,7 @@ import { localeFor, useT } from "@/lib/i18n";
 import { parseLatLng } from "@/lib/parsers/latlng";
 import { Button } from "@/components/ui/primitives";
 import { setMode } from "@/lib/modes";
-import {
-  fetchPollution,
-  fetchPollutionChanges,
-  fetchPollutionStatus,
-  mergePollution,
-  pollutionAgeBucket,
-  pollutionDisplay,
-  pollutionUncertainty,
-} from "@/lib/pollution";
+import { fetchPollution, fetchPollutionChanges, fetchPollutionStatus, mergePollution, pollutionAgeBucket, pollutionDisplay, pollutionUncertainty, hasRootCause, precisionKey, kindKey } from "@/lib/pollution";
 import type { PollutionFC, PollutionFeature } from "@/lib/pollution";
 
 // Caspian bounds
@@ -1069,11 +1061,25 @@ export default function CaspianMap({
     const move = (event:any)=>{
       if(pinMode) return;
       const properties = event.features?.[0]?.properties ?? {};
+      /* Same two translations the card does. The tip used to print whatever the
+         collector stored: an English placeholder sentence, or a raw `kind`
+         like "slick" when there was no cause at all. */
+      const kindLabel = t(kindKey(properties.kind) as any);
+      const headline = hasRootCause(properties.root_cause)
+        ? String(properties.root_cause).trim()
+        : kindLabel;
       tip.style.display="block";
-      tip.style.left=`${event.point.x+12}px`;
-      tip.style.top=`${event.point.y-12}px`;
-      tip.textContent=[properties.root_cause || properties.kind, properties.source_name || properties.source_id]
+      tip.textContent=[headline, properties.source_name || properties.source_id]
         .filter(Boolean).join(" · ");
+      /* Placed after the text is in, so the measured width is the real one, and
+         clamped to the map: pinned at `x+12` a tip near the right edge ran off
+         the canvas, and near the top it ran under the layer column. */
+      const box = tip.getBoundingClientRect();
+      const canvas = map.getCanvas().getBoundingClientRect();
+      const left = Math.min(Math.max(8, event.point.x + 12), Math.max(8, canvas.width - box.width - 8));
+      const top = Math.min(Math.max(8, event.point.y - 12), Math.max(8, canvas.height - box.height - 8));
+      tip.style.left=`${left}px`;
+      tip.style.top=`${top}px`;
       map.getCanvas().style.cursor="pointer";
     };
     const leave = ()=>{
@@ -1105,7 +1111,7 @@ export default function CaspianMap({
         }catch{}
       }
     };
-  },[mapLoaded,pinMode,onPollutionFocus,select,selectPopulation]);
+  },[mapLoaded,pinMode,onPollutionFocus,select,selectPopulation,t]);
 
   useEffect(()=>{
     const map:any=mapRef.current;
@@ -1763,7 +1769,7 @@ export default function CaspianMap({
   return (
     <div className="relative w-full h-full overflow-hidden bg-bg">
       <div ref={containerRef} className="absolute inset-0" />
-      <div ref={tipRef} className="maptip" style={{ position:"absolute", display:"none", background:"rgba(15,17,21,0.94)", color:"#fff", fontSize:"11px", lineHeight:1.4, padding:"6px 8px", border:"1px solid rgba(255,255,255,0.15)", pointerEvents:"none", zIndex:12, maxWidth:"260px", whiteSpace:"nowrap" }} />
+      <div ref={tipRef} className="maptip" style={{ position:"absolute", display:"none", background:"rgba(15,17,21,0.94)", color:"#fff", fontSize:"11px", lineHeight:1.4, padding:"6px 8px", border:"1px solid rgba(255,255,255,0.15)", pointerEvents:"none", zIndex:12, maxWidth:"260px", whiteSpace:"normal", overflowWrap:"anywhere" }} />
 
       {/* DOM labels avoid a remote glyph dependency and stay localized even
           when the base map cannot supply Cyrillic/Kazakh font ranges. */}
@@ -2120,12 +2126,17 @@ function PollutionEvidenceCard({
     older:t("pollution.ageOlder"),
     unknown:t("pollution.ageUnknown"),
   }[age];
-  const kind = {
-    flare:t("pollution.kindFlare"),
-    slick:t("pollution.kindSlick"),
-    spill:t("pollution.kindSpill"),
-    discharge:t("pollution.kindDischarge"),
-  }[p.kind] ?? t("pollution.kindOther");
+  const kind = t(kindKey(p.kind) as any);
+  /* The collector writes this exact English sentence when it has no cause,
+     instead of leaving the field empty - so `p.root_cause || fallback` never
+     fired and 37 of 121 incidents showed an untranslated placeholder. Treat the
+     sentence as the absence it stands for. */
+  const cause = hasRootCause(p.root_cause) ? p.root_cause!.trim() : t("pollution.causeUnknown");
+  /* `exact` / `approximate` / `field` are the three the collector emits; an
+     unknown fourth is shown as itself rather than swallowed, because a value
+     nobody translated is still a value somebody stored. */
+  const precisionLabel = precisionKey(p.location_precision);
+  const precision = precisionLabel ? t(precisionLabel as any) : String(p.location_precision);
   const confidence = typeof p.confidence === "number" && Number.isFinite(p.confidence)
     ? `${Math.round((p.confidence <= 1 ? p.confidence * 100 : p.confidence))}%`
     : null;
@@ -2160,7 +2171,7 @@ function PollutionEvidenceCard({
         <section className="px-4 py-4">
           <span className="hd">{t("pollution.rootCause")}</span>
           <p className="mt-2 text-base font-semibold leading-snug text-ink">
-            {p.root_cause || t("pollution.causeUnknown")}
+            {cause}
           </p>
           {evidenceTitle && (
             <p className="mt-3 border-l border-hair pl-2.5 text-xs leading-relaxed text-ink2">{evidenceTitle}</p>
@@ -2171,8 +2182,8 @@ function PollutionEvidenceCard({
           <PollutionFact label={t("pollution.reported")} value={reported} />
           <PollutionFact label={t("pollution.source")} value={p.source_name || p.source_id} />
           <PollutionFact label={t("row.location")} value={`${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}`} mono />
-          <PollutionFact label={t("pollution.precision")} value={p.location_precision || "—"} />
-          <PollutionFact label={t("pollution.uncertainty")} value={`${Math.round(p.radius_m || 0).toLocaleString(locale)} m`} mono />
+          <PollutionFact label={t("pollution.precision")} value={precision} />
+          <PollutionFact label={t("pollution.uncertainty")} value={`${Math.round(p.radius_m || 0).toLocaleString(locale)}\u00a0${t("unit.m")}`} mono />
           {confidence && <PollutionFact label={t("pollution.confidence")} value={confidence} mono />}
         </dl>
 

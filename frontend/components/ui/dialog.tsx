@@ -5,6 +5,7 @@ import * as DialogPrimitive from "@radix-ui/react-dialog"
 import { X } from "lucide-react"
 
 import { cn } from "@/lib/utils"
+import { useT } from "@/lib/i18n"
 
 const Dialog = DialogPrimitive.Root
 
@@ -44,13 +45,23 @@ const DialogContent = React.forwardRef<
       {...props}
     >
       {children}
-      <DialogPrimitive.Close className="absolute right-4 top-4 text-ink3 transition-colors hover:text-ink disabled:pointer-events-none">
-        <X className="h-4 w-4" />
-        <span className="sr-only">Close</span>
-      </DialogPrimitive.Close>
+      <DialogCloseButton />
     </DialogPrimitive.Content>
   </DialogPortal>
 ))
+/* Its own component so the hook is legal here: `DialogContent` is a
+   forwardRef render function shared by every dialog, and the label a screen
+   reader reads was the one English word left in a trilingual interface. */
+function DialogCloseButton() {
+  const { t } = useT()
+  return (
+    <DialogPrimitive.Close className="absolute right-4 top-4 text-ink3 transition-colors hover:text-ink disabled:pointer-events-none">
+      <X className="h-4 w-4" />
+      <span className="sr-only">{t("btn.close")}</span>
+    </DialogPrimitive.Close>
+  )
+}
+
 DialogContent.displayName = DialogPrimitive.Content.displayName
 
 const DialogHeader = ({
